@@ -40,6 +40,5 @@ pnpm-debug.log*
 # Temporary files
 tmp/
 
-# Playwright artifacts
-playwright-report/
-test-results/
+# E2E artifacts
+artifacts/
