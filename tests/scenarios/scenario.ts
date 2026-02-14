@@ -109,28 +109,56 @@ export async function basicUiScenario(ctx: ScenarioContext) {
   await step("Select rectangle tool and draw", async () => {
     await actor.click('[data-testid="draw-tool-rectangle"]');
     await actor.draw('[data-testid="draw-canvas"]', [
-      { x: 0.1, y: 0.15 },
-      { x: 0.45, y: 0.55 },
+      // Square
+      { x: 0.35, y: 0.2 },
+      { x: 0.75, y: 0.6 },
     ]);
   });
 
-  await step("Draw a freehand stroke", async () => {
+  await step("Draw a star inside the square", async () => {
     await actor.click('[data-testid="draw-tool-freehand"]');
-    const wavePoints: Array<{ x: number; y: number }> = [];
-    for (let i = 0; i <= 20; i++) {
-      wavePoints.push({
-        x: 0.5 + (i / 20) * 0.4,
-        y: 0.4 + Math.sin((i / 20) * Math.PI * 2) * 0.15,
+    const cx = 0.55;
+    const cy = 0.4;
+    const rOuter = 0.14;
+    const rInner = 0.06;
+    const starPoints: Array<{ x: number; y: number }> = [];
+    // 5-point star (10 segments). Close the shape by repeating the first point.
+    for (let k = 0; k <= 10; k++) {
+      const angle = (-Math.PI / 2) + (k * Math.PI) / 5;
+      const r = k % 2 === 0 ? rOuter : rInner;
+      starPoints.push({
+        x: cx + r * Math.cos(angle),
+        y: cy + r * Math.sin(angle),
       });
     }
-    await actor.draw('[data-testid="draw-canvas"]', wavePoints);
+    await actor.draw('[data-testid="draw-canvas"]', starPoints);
   });
 
-  await step("Draw a circle", async () => {
+  await step("Draw a stickman on the left", async () => {
     await actor.click('[data-testid="draw-tool-circle"]');
     await actor.draw('[data-testid="draw-canvas"]', [
-      { x: 0.55, y: 0.1 },
-      { x: 0.85, y: 0.45 },
+      // Head
+      { x: 0.12, y: 0.22 },
+      { x: 0.24, y: 0.36 },
+    ]);
+
+    await actor.click('[data-testid="draw-tool-freehand"]');
+    await actor.draw('[data-testid="draw-canvas"]', [
+      // Start near neck
+      { x: 0.18, y: 0.36 },
+      // Left arm
+      { x: 0.1, y: 0.44 },
+      { x: 0.18, y: 0.4 },
+      // Right arm
+      { x: 0.26, y: 0.44 },
+      { x: 0.18, y: 0.4 },
+      // Body down
+      { x: 0.18, y: 0.58 },
+      // Left leg
+      { x: 0.1, y: 0.72 },
+      { x: 0.18, y: 0.58 },
+      // Right leg
+      { x: 0.26, y: 0.72 },
     ]);
   });
 }
