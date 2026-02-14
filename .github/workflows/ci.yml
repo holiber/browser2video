@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [basic-ui, collab, github]
+        scenario: [basic-ui, collab, github, kanban]
         mode: [human, fast]
     steps:
       - name: Checkout

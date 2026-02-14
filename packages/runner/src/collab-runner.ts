@@ -23,6 +23,12 @@ import {
   type RunResult,
 } from "./runner.js";
 import { tryTileHorizontally } from "./window-layout.js";
+import {
+  type NarrationOptions,
+  type AudioDirectorAPI,
+  createAudioDirector,
+  mixAudioIntoVideo,
+} from "./narrator.js";
 
 const require = createRequire(import.meta.url);
 
@@ -57,6 +63,8 @@ export interface CollabScenarioContext {
   setOverlaySeq: (actorId: ActorId, seq: number, title: string) => Promise<void>;
   setOverlayApplied: (actorId: ActorId, seq: number, title: string) => Promise<void>;
   reviewerCmd: (cmd: string) => Promise<void>;
+  /** Audio director for narration and sound effects (no-op when narration is disabled) */
+  audio: AudioDirectorAPI;
 }
 
 export interface CollabRunnerOptions {
@@ -108,6 +116,8 @@ export interface CollabRunnerOptions {
   captureSelector?: string;
   /** Extra pixels around the captured element (default 16). */
   capturePadding?: number;
+  /** Narration options (TTS voice-over + sound effects) */
+  narration?: NarrationOptions;
 }
 
 /** Crop rectangle (in pixels, even-aligned for codec compatibility). */
@@ -1229,6 +1239,13 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
   const steps: (StepRecord & { role: StepRole })[] = [];
   let stepIndex = 0;
 
+  // Create audio director (real or no-op depending on narration config)
+  const audioDirector = createAudioDirector({
+    narration: opts.narration,
+    videoStartTime,
+    ffmpegPath: resolvedFfmpeg,
+  });
+
   // Capture console errors from both pages
   for (const [label, pg] of [[a0.name, a0Page], [a1.name, a1Page]] as const) {
     pg.on("console", (msg) => {
@@ -1269,6 +1286,7 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
       setOverlaySeq: (actorId: ActorId, seq: number, title: string) => setOverlaySeq(pages[actorId], seq, title),
       setOverlayApplied: (actorId: ActorId, seq: number, title: string) => setOverlayApplied(pages[actorId], seq, title),
       reviewerCmd,
+      audio: audioDirector,
     });
   } catch (err) {
     console.error("\n  Scenario failed:", (err as Error).message);
@@ -1397,6 +1415,16 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
       console.warn("  Video timing check failed:", (err as Error).message);
     }
 
+    // Mix narration audio into video (if any audio events were recorded)
+    const audioEvents = audioDirector.getEvents?.() ?? [];
+    if (audioEvents.length > 0 && videoPath && fs.existsSync(videoPath)) {
+      mixAudioIntoVideo({
+        videoPath,
+        events: audioEvents,
+        ffmpegPath: resolvedFfmpeg,
+      });
+    }
+
     // Generate subtitles (combined + per-role)
     t0 = Date.now();
     const vtt = generateWebVTT(steps);
@@ -1464,6 +1492,12 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
       videoPath,
       subtitlesPath,
       recordMode,
+      audioEvents: audioEvents.length > 0 ? audioEvents.map((e) => ({
+        type: e.type,
+        startMs: e.startMs,
+        durationMs: e.durationMs,
+        label: e.label,
+      })) : undefined,
       timestamp: new Date().toISOString(),
     };
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
@@ -1478,6 +1512,7 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
       metadataPath,
       steps,
       durationMs,
+      audioEvents: audioEvents.length > 0 ? audioEvents : undefined,
     };
   }
 }

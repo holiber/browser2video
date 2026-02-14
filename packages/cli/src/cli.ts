@@ -6,15 +6,16 @@ import { Command } from "commander";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createServer, type ViteDevServer } from "vite";
-import { run, runCollab, type Mode } from "@browser2video/runner";
-import { basicUiScenario, collabScenario, githubScenario } from "@browser2video/scenarios";
+import { run, runCollab, type Mode, type NarrationOptions } from "@browser2video/runner";
+import { basicUiScenario, collabScenario, githubScenario, kanbanScenario } from "@browser2video/scenarios";
 
-type ScenarioName = "basic-ui" | "collab" | "github";
+type ScenarioName = "basic-ui" | "collab" | "github" | "kanban";
 type RecordMode = "none" | "screencast" | "screen";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const demoRoot = path.join(repoRoot, "apps", "demo");
+const kanbanDemoRoot = path.join(repoRoot, "apps", "kanban-demo");
 
 function isoStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -30,11 +31,11 @@ async function getFfmpegPath(): Promise<string | undefined> {
 }
 
 async function withViteIfNeeded(
-  needsDemoServer: boolean,
+  viteRoot: string | null,
   baseUrlFromArgs: string | undefined,
   fn: (baseURL: string | undefined) => Promise<void>,
 ) {
-  if (!needsDemoServer) {
+  if (!viteRoot) {
     await fn(baseUrlFromArgs);
     return;
   }
@@ -46,7 +47,7 @@ async function withViteIfNeeded(
   let server: ViteDevServer | undefined;
   try {
     server = await createServer({
-      root: demoRoot,
+      root: viteRoot,
       server: { port: 0, strictPort: false },
       logLevel: "error",
     });
@@ -93,6 +94,7 @@ Examples:
   b2v run --scenario basic-ui --mode human --record screencast --headed
   b2v run --scenario collab --mode human --record screen --headed --display-size 2560x720
   b2v run --scenario basic-ui --mode fast --record none
+  b2v run --scenario kanban --mode human --record screencast --headed --narrate --voice nova
 `,
   );
 
@@ -100,7 +102,7 @@ program
   .command("list-scenarios")
   .description("List built-in scenarios.")
   .action(() => {
-    console.log(["basic-ui", "collab", "github"].join("\n"));
+    console.log(["basic-ui", "collab", "github", "kanban"].join("\n"));
   });
 
 program
@@ -138,6 +140,9 @@ program
   .option("--display <DISPLAY>", "Linux DISPLAY, e.g. :99")
   .option("--screen-index <n>", "macOS screen index for avfoundation capture")
   .option("--debug-overlay", "Show sync debug overlay in collab scenario", false)
+  .option("--narrate", "Enable TTS narration (requires OPENAI_API_KEY)")
+  .option("--voice <voice>", "OpenAI TTS voice: alloy | echo | fable | onyx | nova | shimmer", "nova")
+  .option("--narrate-speed <n>", "Narration speed 0.25-4.0", "1.0")
   .action(async (opts) => {
     const scenario = (opts.scenario as ScenarioName | undefined) ?? undefined;
     const mode = opts.mode as Mode;
@@ -159,11 +164,26 @@ program
       throw new Error('Missing scenario. Provide either "--scenario <name>" or "--scenario-file <path>".');
     }
 
-    const scenarioKind = String(opts.scenarioKind ?? "single");
-    const needsDemoServer =
-      useScenarioFile ? (scenarioKind === "single" || scenarioKind === "collab") : (scenario === "basic-ui" || scenario === "collab");
+    // Build narration config
+    const narration: NarrationOptions | undefined = opts.narrate
+      ? {
+          enabled: true,
+          voice: opts.voice,
+          speed: parseFloat(opts.narrateSpeed),
+        }
+      : undefined;
 
-    await withViteIfNeeded(needsDemoServer, opts.baseUrl, async (baseURL) => {
+    const scenarioKind = String(opts.scenarioKind ?? "single");
+    // Determine which Vite app to serve (null = no server needed)
+    const viteRoot: string | null = useScenarioFile
+      ? (scenarioKind === "single" || scenarioKind === "collab" ? demoRoot : null)
+      : scenario === "kanban"
+        ? kanbanDemoRoot
+        : (scenario === "basic-ui" || scenario === "collab")
+          ? demoRoot
+          : null;
+
+    await withViteIfNeeded(viteRoot, opts.baseUrl, async (baseURL) => {
       if (!useScenarioFile && scenario === "collab") {
         await runCollab({
           mode,
@@ -181,6 +201,7 @@ program
           captureSelector: '[data-testid="notes-page"]',
           capturePadding: 24,
           debugOverlay: Boolean(opts.debugOverlay),
+          narration,
         });
         return;
       }
@@ -204,6 +225,7 @@ program
             captureSelector: '[data-testid="notes-page"]',
             capturePadding: 24,
             debugOverlay: Boolean(opts.debugOverlay),
+            narration,
           });
           return;
         }
@@ -216,11 +238,15 @@ program
           ffmpegPath,
           headless,
           recordMode: record,
+          narration,
         });
         return;
       }
 
-      const scenarioFn = scenario === "github" ? githubScenario : basicUiScenario;
+      const scenarioFn =
+        scenario === "github" ? githubScenario :
+        scenario === "kanban" ? kanbanScenario :
+        basicUiScenario;
       await run({
         mode,
         baseURL,
@@ -229,6 +255,7 @@ program
         ffmpegPath,
         headless,
         recordMode: record,
+        narration,
       });
     });
 
