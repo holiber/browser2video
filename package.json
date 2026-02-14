@@ -14,6 +14,7 @@
     "e2e:fast": "pnpm b2v run --scenario basic-ui --mode fast --record none",
     "e2e:collab:human": "pnpm b2v run --scenario collab --mode human --record screen --headed --display-size 2560x720",
     "e2e:github:human": "pnpm b2v run --scenario github --mode human --record screencast --headed",
+    "e2e:collab:auto": "bash scripts/run-collab-auto.sh",
     "e2e:collab:docker": "bash scripts/run-collab-docker.sh"
   },
   "devDependencies": {

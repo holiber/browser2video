@@ -42,6 +42,14 @@ pnpm b2v run --scenario github   --mode human --record screencast --headed
 
 ## Docker (Linux screen recording)
 
+Native-first (Docker fallback):
+
+```bash
+pnpm e2e:collab:auto
+```
+
+Docker only:
+
 ```bash
 pnpm e2e:collab:docker
 ```
