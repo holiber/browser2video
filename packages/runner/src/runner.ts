@@ -478,7 +478,7 @@ export class Actor {
       await this.moveTo(selector);
     }
 
-    const behavior = this.mode === "human" ? "smooth" : "auto";
+    const behavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
 
     if (selector) {
       // The selector may point at a wrapper (e.g. Radix ScrollArea Root) rather than the
