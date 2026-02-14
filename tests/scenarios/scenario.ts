@@ -2,9 +2,9 @@
  * @description Demo scenario exercising form, scroll, drag, node graph, and drawing.
  * Shared by both human and fast modes — the Actor handles mode differences.
  */
-import type { ScenarioContext } from "./runner.js";
+import type { ScenarioContext } from "@browser2video/runner";
 
-export async function demoScenario(ctx: ScenarioContext) {
+export async function basicUiScenario(ctx: ScenarioContext) {
   const { step, actor, page, baseURL } = ctx;
 
   // ------------------------------------------------------------------

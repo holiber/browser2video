@@ -1,4 +1,5 @@
 /** @description Root application component with routing and sidebar layout */
+import { Suspense, useMemo } from "react";
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Menu, LayoutDashboard } from "lucide-react";
@@ -11,6 +12,9 @@ import {
 } from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import AppPage from "@/pages/app";
+import NotesPage from "@/pages/notes";
+import { RepoContext } from "@/lib/use-automerge";
+import { createRepo } from "@/lib/use-automerge";
 
 function SidebarContent() {
   return (
@@ -69,21 +73,32 @@ function AppLayout() {
 
 export default function App() {
   const location = useLocation();
+  const wsUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("ws") ?? undefined;
+  }, [location.search]);
+
+  const repo = useMemo(() => createRepo({ wsUrl }), [wsUrl]);
 
   return (
-    <AnimatePresence mode="wait">
-      <motion.div
-        key={location.pathname}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.2 }}
-      >
-        <Routes location={location}>
-          <Route path="/" element={<AppLayout />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </motion.div>
-    </AnimatePresence>
+    <RepoContext.Provider value={repo}>
+      <Suspense fallback={<div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading…</div>}>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.2 }}
+          >
+            <Routes location={location}>
+              <Route path="/" element={<AppLayout />} />
+              <Route path="/notes" element={<NotesPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </motion.div>
+        </AnimatePresence>
+      </Suspense>
+    </RepoContext.Provider>
   );
 }

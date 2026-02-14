@@ -11,6 +11,11 @@ node_modules
 dist
 build
 out
+*.tsbuildinfo
+
+# Docusaurus
+website/.docusaurus/
+website/build/
 
 # Next.js
 .next

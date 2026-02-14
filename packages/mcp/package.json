@@ -1,0 +1,27 @@
+{
+  "name": "@browser2video/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "b2v-mcp": "./dist/server.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@browser2video/runner": "workspace:*",
+    "@browser2video/scenarios": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "vite": "^6.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.7.0"
+  }
+}

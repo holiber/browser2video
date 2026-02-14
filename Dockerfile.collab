@@ -1,0 +1,40 @@
+FROM node:22-bookworm-slim
+
+WORKDIR /app
+
+# System deps for Chromium + recording + Xvfb
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  chromium \
+  ffmpeg \
+  xvfb \
+  xauth \
+  xterm \
+  fonts-liberation \
+  ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Use pnpm via corepack
+RUN corepack enable
+
+# Don't download Chromium during install; use system Chromium
+ENV PUPPETEER_SKIP_DOWNLOAD=1
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
+# Install JS deps first for caching (copy workspace manifests)
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/demo/package.json ./apps/demo/package.json
+COPY packages/runner/package.json ./packages/runner/package.json
+COPY packages/cli/package.json ./packages/cli/package.json
+COPY packages/mcp/package.json ./packages/mcp/package.json
+COPY tests/scenarios/package.json ./tests/scenarios/package.json
+RUN pnpm install --frozen-lockfile
+
+# Copy the rest of the repo
+COPY . .
+
+# Artifacts are written here; mount it from host
+ENV DISPLAY=:99
+
+# Use Xvfb directly (avoid xvfb-run readiness issues in PID1)
+CMD ["bash", "-lc", "set -euo pipefail; Xvfb :99 -screen 0 2560x720x24 -nolisten tcp & XVFB_PID=$!; pnpm b2v run --scenario collab --mode human --headed --record screen --display-size 2560x720; kill $XVFB_PID"]
+

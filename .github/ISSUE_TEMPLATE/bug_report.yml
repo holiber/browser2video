@@ -1,0 +1,26 @@
+name: Bug report
+description: Report a problem or regression.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Include exact `b2v` command(s) and any relevant logs.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: e.g. macOS arm64, Ubuntu CI, Windows
+    validations:
+      required: true
+

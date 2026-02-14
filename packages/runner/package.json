@@ -1,0 +1,32 @@
+{
+  "name": "@browser2video/runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@automerge/automerge": "^3.2.4",
+    "@automerge/automerge-repo": "^2.5.1",
+    "@automerge/automerge-repo-network-websocket": "^2.5.1",
+    "@automerge/automerge-repo-sync-server": "^0.2.8",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "puppeteer": "^24.0.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.7.0"
+  }
+}
+

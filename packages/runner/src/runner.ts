@@ -18,6 +18,67 @@ import { execFileSync } from "child_process";
 
 export type Mode = "human" | "fast";
 
+export type RecordMode = "screencast" | "screen" | "none";
+
+export type DelayRange = readonly [minMs: number, maxMs: number];
+
+export interface ActorDelays {
+  breatheMs: DelayRange;
+  afterScrollIntoViewMs: DelayRange;
+  mouseMoveStepMs: DelayRange;
+  clickEffectMs: DelayRange;
+  clickHoldMs: DelayRange;
+  afterClickMs: DelayRange;
+  beforeTypeMs: DelayRange;
+  keyDelayMs: DelayRange;
+  keyBoundaryPauseMs: DelayRange;
+  selectOpenMs: DelayRange;
+  selectOptionMs: DelayRange;
+  afterDragMs: DelayRange;
+}
+
+const DEFAULT_DELAYS: Record<Mode, ActorDelays> = {
+  human: {
+    // Deterministic "familiar user" pacing (no randomness)
+    breatheMs: [300, 300],
+    afterScrollIntoViewMs: [350, 350],
+    mouseMoveStepMs: [3, 3],
+    clickEffectMs: [25, 25],
+    clickHoldMs: [90, 90],
+    afterClickMs: [70, 70],
+    beforeTypeMs: [55, 55],
+    keyDelayMs: [35, 35],
+    keyBoundaryPauseMs: [30, 30],
+    selectOpenMs: [120, 120],
+    selectOptionMs: [70, 70],
+    afterDragMs: [120, 120],
+  },
+  fast: {
+    breatheMs: [0, 0],
+    afterScrollIntoViewMs: [0, 0],
+    mouseMoveStepMs: [0, 0],
+    clickEffectMs: [0, 0],
+    clickHoldMs: [0, 0],
+    afterClickMs: [0, 0],
+    beforeTypeMs: [0, 0],
+    keyDelayMs: [0, 0],
+    keyBoundaryPauseMs: [0, 0],
+    selectOpenMs: [0, 0],
+    selectOptionMs: [0, 0],
+    afterDragMs: [0, 0],
+  },
+};
+
+function pickMs([minMs, maxMs]: DelayRange) {
+  // Deterministic: use a constant value (midpoint if a range is provided).
+  if (maxMs <= minMs) return minMs;
+  return Math.round((minMs + maxMs) / 2);
+}
+
+function mergeDelays(mode: Mode, overrides?: Partial<ActorDelays>): ActorDelays {
+  return { ...DEFAULT_DELAYS[mode], ...(overrides ?? {}) };
+}
+
 export interface StepRecord {
   index: number;
   caption: string;
@@ -27,7 +88,8 @@ export interface StepRecord {
 
 export interface RunResult {
   mode: Mode;
-  videoPath: string;
+  recordMode: RecordMode;
+  videoPath?: string;
   subtitlesPath: string;
   metadataPath: string;
   steps: StepRecord[];
@@ -211,13 +273,13 @@ const CURSOR_OVERLAY_SCRIPT = `
       position: fixed; pointer-events: none;
       left: \${x}px; top: \${y}px;
       width: 0; height: 0;
-      border: 2px solid rgba(96, 165, 250, 0.7);
+      border: 3px solid rgba(96, 165, 250, 0.9);
       border-radius: 50%;
       transform: translate(-50%, -50%);
-      animation: __b2v_ripple 0.4s ease-out forwards;
+      animation: __b2v_ripple 0.6s ease-out forwards;
     \`;
     rippleContainer.appendChild(ring);
-    setTimeout(() => ring.remove(), 500);
+    setTimeout(() => ring.remove(), 700);
   };
 
   if (!document.getElementById('__b2v_style')) {
@@ -226,7 +288,7 @@ const CURSOR_OVERLAY_SCRIPT = `
     style.textContent = \`
       @keyframes __b2v_ripple {
         0%   { width: 0;   height: 0;   opacity: 1; }
-        100% { width: 40px; height: 40px; opacity: 0; }
+        100% { width: 80px; height: 80px; opacity: 0; }
       }
     \`;
     document.head.appendChild(style);
@@ -241,11 +303,15 @@ const CURSOR_OVERLAY_SCRIPT = `
 export class Actor {
   private cursorX = 0;
   private cursorY = 0;
+  private delays: ActorDelays;
 
   constructor(
     public page: Page,
     public mode: Mode,
-  ) {}
+    opts?: { delays?: Partial<ActorDelays> },
+  ) {
+    this.delays = mergeDelays(mode, opts?.delays);
+  }
 
   /** Inject cursor overlay into the page (human mode only) */
   async injectCursor() {
@@ -273,9 +339,9 @@ export class Actor {
       timeout: 3000,
     }))!;
     // Scroll element into view (smooth in human mode so it looks natural on video)
-    const scrollBehavior = this.mode === "human" ? "smooth" : "instant";
+    const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
     await el.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
-    await sleep(this.mode === "human" ? 400 : 30);
+    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
     const box = (await el.boundingBox())!;
     const target = {
       x: Math.round(box.x + box.width / 2),
@@ -291,7 +357,7 @@ export class Actor {
         await this.page.evaluate(
           `window.__b2v_moveCursor?.(${p.x}, ${p.y})`,
         );
-        await sleep(randBetween(2, 5));
+        await sleep(pickMs(this.delays.mouseMoveStepMs));
       }
     }
 
@@ -308,20 +374,28 @@ export class Actor {
       await this.page.evaluate(
         `window.__b2v_clickEffect?.(${x}, ${y})`,
       );
-      await sleep(randBetween(15, 35));
+      await sleep(pickMs(this.delays.clickEffectMs));
     }
 
-    await this.page.mouse.click(x, y);
+    // Use an explicit press-and-release so UI `whileTap` animations are visible
+    // in the recording (mouse.click() can be too fast).
+    if (this.mode === "human") {
+      await this.page.mouse.down();
+      await sleep(pickMs(this.delays.clickHoldMs));
+      await this.page.mouse.up();
+    } else {
+      await this.page.mouse.click(x, y);
+    }
 
     if (this.mode === "human") {
-      await sleep(randBetween(50, 100));
+      await sleep(pickMs(this.delays.afterClickMs));
     }
   }
 
   /** Type text into a focused element */
   async type(selector: string, text: string) {
     await this.click(selector);
-    await sleep(this.mode === "human" ? randBetween(40, 80) : 10);
+    await sleep(pickMs(this.delays.beforeTypeMs));
 
     if (this.mode === "fast") {
       await this.page.type(selector, text, { delay: 0 });
@@ -331,11 +405,11 @@ export class Actor {
     // Human mode: character-by-character with jitter
     for (let i = 0; i < text.length; i++) {
       await this.page.keyboard.type(text[i], {
-        delay: randBetween(25, 70),
+        delay: pickMs(this.delays.keyDelayMs),
       });
       // Micro-pause at word boundaries
       if (text[i] === " " || text[i] === "@" || text[i] === ".") {
-        await sleep(randBetween(20, 60));
+        await sleep(pickMs(this.delays.keyBoundaryPauseMs));
       }
     }
   }
@@ -343,12 +417,12 @@ export class Actor {
   /** Open a select dropdown and pick a value */
   async selectOption(triggerSelector: string, valueText: string) {
     await this.click(triggerSelector);
-    await sleep(this.mode === "human" ? randBetween(80, 180) : 50);
+    await sleep(pickMs(this.delays.selectOpenMs));
 
     // Wait for the popover/content to appear and find the option
     const optionSelector = `[role="option"]`;
     await this.page.waitForSelector(optionSelector, { visible: true, timeout: 3000 });
-    await sleep(this.mode === "human" ? randBetween(40, 100) : 20);
+    await sleep(pickMs(this.delays.selectOptionMs));
 
     // Find the option with matching text
     const options = await this.page.$$(optionSelector);
@@ -367,16 +441,16 @@ export class Actor {
           for (const p of points) {
             await this.page.mouse.move(p.x, p.y);
             await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-            await sleep(randBetween(2, 5));
+            await sleep(pickMs(this.delays.mouseMoveStepMs));
           }
           await this.page.evaluate(`window.__b2v_clickEffect?.(${target.x}, ${target.y})`);
-          await sleep(randBetween(15, 35));
+          await sleep(pickMs(this.delays.clickEffectMs));
         }
 
         this.cursorX = target.x;
         this.cursorY = target.y;
         await option.click();
-        await sleep(this.mode === "human" ? randBetween(40, 100) : 10);
+        await sleep(pickMs(this.delays.afterClickMs));
         return;
       }
     }
@@ -437,14 +511,14 @@ export class Actor {
       for (const p of movePoints) {
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(randBetween(2, 5));
+        await sleep(pickMs(this.delays.mouseMoveStepMs));
       }
     }
 
     // Press, drag, release
     await this.page.mouse.move(from.x, from.y);
     await this.page.mouse.down();
-    await sleep(this.mode === "human" ? randBetween(50, 100) : 10);
+    await sleep(pickMs(this.delays.clickHoldMs));
 
     const dragSteps = this.mode === "human" ? 25 : 5;
     const dragPoints = linearPath(from, to, dragSteps);
@@ -452,24 +526,24 @@ export class Actor {
       await this.page.mouse.move(p.x, p.y);
       if (this.mode === "human") {
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(randBetween(5, 10));
+        await sleep(pickMs(this.delays.mouseMoveStepMs));
       }
     }
 
-    await sleep(this.mode === "human" ? randBetween(30, 60) : 10);
+    await sleep(pickMs(this.delays.afterClickMs));
     await this.page.mouse.up();
 
     this.cursorX = to.x;
     this.cursorY = to.y;
-    await sleep(this.mode === "human" ? randBetween(80, 180) : 20);
+    await sleep(pickMs(this.delays.afterDragMs));
   }
 
   /** Drag an element by a pixel offset (useful for repositioning nodes) */
   async dragByOffset(selector: string, dx: number, dy: number) {
     const el = (await this.page.waitForSelector(selector, { visible: true, timeout: 3000 }))!;
-    const scrollBehavior = this.mode === "human" ? "smooth" : "instant";
+    const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
     await el.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
-    await sleep(this.mode === "human" ? 400 : 30);
+    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
     const box = (await el.boundingBox())!;
     const from = {
       x: Math.round(box.x + box.width / 2),
@@ -488,13 +562,13 @@ export class Actor {
       for (const p of movePoints) {
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(randBetween(2, 5));
+        await sleep(pickMs(this.delays.mouseMoveStepMs));
       }
     }
 
     await this.page.mouse.move(from.x, from.y);
     await this.page.mouse.down();
-    await sleep(this.mode === "human" ? randBetween(50, 100) : 10);
+    await sleep(pickMs(this.delays.clickHoldMs));
 
     const dragSteps = this.mode === "human" ? 25 : 5;
     const dragPoints = linearPath(from, to, dragSteps);
@@ -502,16 +576,16 @@ export class Actor {
       await this.page.mouse.move(p.x, p.y);
       if (this.mode === "human") {
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(randBetween(5, 10));
+        await sleep(pickMs(this.delays.mouseMoveStepMs));
       }
     }
 
-    await sleep(this.mode === "human" ? randBetween(30, 60) : 10);
+    await sleep(pickMs(this.delays.afterClickMs));
     await this.page.mouse.up();
 
     this.cursorX = to.x;
     this.cursorY = to.y;
-    await sleep(this.mode === "human" ? randBetween(80, 180) : 20);
+    await sleep(pickMs(this.delays.afterDragMs));
   }
 
   /**
@@ -546,7 +620,7 @@ export class Actor {
       for (const p of movePoints) {
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(randBetween(2, 5));
+        await sleep(pickMs(this.delays.mouseMoveStepMs));
       }
     }
 
@@ -560,7 +634,7 @@ export class Actor {
         await this.page.mouse.move(p.x, p.y);
         if (this.mode === "human") {
           await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-          await sleep(randBetween(3, 8));
+          await sleep(pickMs(this.delays.mouseMoveStepMs));
         }
       }
     }
@@ -568,14 +642,12 @@ export class Actor {
     await this.page.mouse.up();
     this.cursorX = absPoints[absPoints.length - 1].x;
     this.cursorY = absPoints[absPoints.length - 1].y;
-    await sleep(this.mode === "human" ? randBetween(80, 150) : 10);
+    await sleep(pickMs(this.delays.afterDragMs));
   }
 
   /** Add a breathing pause between major steps (human mode only) */
   async breathe() {
-    if (this.mode === "human") {
-      await sleep(randBetween(200, 500));
-    }
+    await sleep(pickMs(this.delays.breatheMs));
   }
 }
 
@@ -603,6 +675,8 @@ export interface RunnerOptions {
   scenario: (ctx: ScenarioContext) => Promise<void>;
   ffmpegPath?: string;
   headless?: boolean;
+  recordMode?: RecordMode;
+  delays?: Partial<ActorDelays>;
   /** Path to a Chrome user-data directory to reuse cookies/sessions */
   userDataDir?: string;
   /** Path to a specific Chrome/Chromium binary (e.g. system Chrome for cookie access) */
@@ -611,10 +685,15 @@ export interface RunnerOptions {
 
 export async function run(opts: RunnerOptions): Promise<RunResult> {
   const { mode, baseURL, artifactDir, scenario, ffmpegPath } = opts;
+  const recordMode: RecordMode = opts.recordMode ?? "screencast";
+  if (recordMode === "screen") {
+    throw new Error('recordMode="screen" is not supported in single-page runner. Use "screencast" or "none".');
+  }
 
   fs.mkdirSync(artifactDir, { recursive: true });
 
-  const videoPath = path.join(artifactDir, "run.webm");
+  const rawVideoPath = recordMode === "none" ? undefined : path.join(artifactDir, "run.raw.webm");
+  const videoPath = recordMode === "none" ? undefined : path.join(artifactDir, "run.mp4");
   const subtitlesPath = path.join(artifactDir, "captions.vtt");
   const metadataPath = path.join(artifactDir, "run.json");
 
@@ -623,6 +702,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
 
   console.log(`\n  Mode:      ${mode}`);
   console.log(`  Headless:  ${headless}`);
+  console.log(`  Record:    ${recordMode}`);
   console.log(`  Base URL:  ${baseURL ?? "(external)"}`);
   console.log(`  Artifacts: ${artifactDir}\n`);
 
@@ -662,7 +742,25 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
     `);
   }
 
-  const actor = new Actor(page, mode);
+  // Fast mode: reduce UI animations for determinism and speed.
+  if (mode === "fast") {
+    await page.evaluateOnNewDocument(`
+      document.addEventListener('DOMContentLoaded', () => {
+        const s = document.createElement('style');
+        s.textContent = \`
+          *, *::before, *::after {
+            animation-duration: 1ms !important;
+            animation-iteration-count: 1 !important;
+            transition-duration: 1ms !important;
+            scroll-behavior: auto !important;
+          }
+        \`;
+        document.head.appendChild(s);
+      });
+    `);
+  }
+
+  const actor = new Actor(page, mode, { delays: opts.delays });
 
   // Navigate to initial page (skip for external-site scenarios without baseURL)
   if (baseURL) {
@@ -672,18 +770,22 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
   // Start video recording (WebM first, convert to MP4 after)
   const resolvedFfmpeg = ffmpegPath ?? "ffmpeg";
   let recorder: ScreenRecorder | undefined;
-  try {
-    recorder = await page.screencast({
-      path: videoPath,
-      fps: 60,
-      speed: 1,
-      quality: 20,
-      ffmpegPath: resolvedFfmpeg,
-    } as any);
-    console.log("  Recording started (WebM @ 60fps)");
-  } catch (err) {
-    console.error("  Error: screencast failed. Ensure ffmpeg is installed.");
-    console.error("  ", (err as Error).message);
+  if (recordMode === "screencast" && videoPath) {
+    try {
+      recorder = await page.screencast({
+        path: rawVideoPath!,
+        fps: 60,
+        speed: 1,
+        quality: 20,
+        ffmpegPath: resolvedFfmpeg,
+      } as any);
+      console.log("  Recording started (WebM @ 60fps)");
+    } catch (err) {
+      console.error("  Error: screencast failed. Ensure ffmpeg is installed.");
+      console.error("  ", (err as Error).message);
+    }
+  } else {
+    console.log("  Recording disabled");
   }
 
   const videoStartTime = Date.now();
@@ -734,7 +836,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
 
     // Stop screencast capture so the overlay below is NOT recorded in the video
     try {
-      await page.mainFrame().client.send('Page.stopScreencast');
+      await (page.mainFrame() as any).client.send("Page.stopScreencast");
     } catch { /* ignore */ }
 
     // Show processing overlay so the user sees feedback instead of a frozen page
@@ -742,7 +844,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
       await page.evaluate(`(() => {
         const overlay = document.createElement('div');
         overlay.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);';
-        overlay.innerHTML = '<div style="color:#fff;font-size:1.5rem;font-family:system-ui">Saving video\\u2026</div>';
+        overlay.innerHTML = '<div style="color:#fff;font-size:1.5rem;font-family:system-ui">Finishing\\u2026</div>';
         document.body.appendChild(overlay);
       })()`);
     } catch { /* page may already be gone on error path */ }
@@ -761,31 +863,37 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
     // Because of this, ffmpeg defaults to 25fps input, making the video
     // ~2.4x slower than real-time when 60fps is requested.
     // Re-encode with correct 60fps timestamps using setpts filter.
-    if (recorder) {
-      const rawPath = videoPath.replace(".webm", ".raw.webm");
-      fs.renameSync(videoPath, rawPath);
+    if (recorder && rawVideoPath && videoPath) {
       try {
-        console.log("\n  Fixing video framerate to 60fps...");
-        execFileSync(resolvedFfmpeg, [
+        console.log("\n  Finalizing MP4 (60fps)...");
+        execFileSync(
+          resolvedFfmpeg,
+          [
           "-y",
-          "-i", rawPath,
+          "-i",
+          rawVideoPath,
           "-vf", "setpts=N/60/TB",
           "-r", "60",
-          "-c:v", "libvpx-vp9",
-          "-crf", "30",
-          "-deadline", "realtime",
-          "-cpu-used", "8",
-          "-b:v", "0",
-          "-f", "webm",
+          "-vsync",
+          "cfr",
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          "18",
+          "-pix_fmt",
+          "yuv420p",
+          "-movflags",
+          "+faststart",
           videoPath,
-        ], { stdio: "pipe" });
-        fs.unlinkSync(rawPath);
-        console.log(`  Video saved: ${videoPath} (60fps)`);
+          ],
+          { stdio: "pipe" },
+        );
+        try { fs.unlinkSync(rawVideoPath); } catch { /* ignore */ }
+        console.log(`  Video saved: ${videoPath}`);
       } catch (fixErr) {
-        console.warn("  Framerate fix failed, keeping raw file:", (fixErr as Error).message);
-        if (fs.existsSync(rawPath)) {
-          fs.renameSync(rawPath, videoPath);
-        }
+        console.warn("  MP4 finalize failed, keeping raw WebM:", (fixErr as Error).message);
       }
     }
 
@@ -802,6 +910,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
       steps,
       videoPath,
       subtitlesPath,
+      recordMode,
       timestamp: new Date().toISOString(),
     };
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
@@ -810,6 +919,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
 
     return {
       mode,
+      recordMode,
       videoPath,
       subtitlesPath,
       metadataPath,

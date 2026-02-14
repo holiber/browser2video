@@ -20,6 +20,7 @@ import {
   useEdgesState,
   addEdge,
   type Connection,
+  type Edge,
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
@@ -269,7 +270,7 @@ const INITIAL_FLOW_NODES = [
 
 function NodeGraph() {
   const [nodes, , onNodesChange] = useNodesState(INITIAL_FLOW_NODES);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
   const onConnect = useCallback(
     (connection: Connection) => {
