@@ -11,6 +11,13 @@ import puppeteer, {
 import path from "path";
 import fs from "fs";
 import { execFileSync } from "child_process";
+import {
+  type NarrationOptions,
+  type AudioDirectorAPI,
+  type AudioEvent,
+  createAudioDirector,
+  mixAudioIntoVideo,
+} from "./narrator.js";
 
 // ---------------------------------------------------------------------------
 //  Types
@@ -94,6 +101,7 @@ export interface RunResult {
   metadataPath: string;
   steps: StepRecord[];
   durationMs: number;
+  audioEvents?: AudioEvent[];
 }
 
 export interface ScenarioContext {
@@ -101,6 +109,8 @@ export interface ScenarioContext {
   actor: Actor;
   page: Page;
   baseURL: string | undefined;
+  /** Audio director for narration and sound effects (no-op when narration is disabled) */
+  audio: AudioDirectorAPI;
 }
 
 // ---------------------------------------------------------------------------
@@ -734,6 +744,8 @@ export interface RunnerOptions {
   userDataDir?: string;
   /** Path to a specific Chrome/Chromium binary (e.g. system Chrome for cookie access) */
   executablePath?: string;
+  /** Narration options (TTS voice-over + sound effects) */
+  narration?: NarrationOptions;
 }
 
 export async function run(opts: RunnerOptions): Promise<RunResult> {
@@ -845,6 +857,13 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
   const steps: StepRecord[] = [];
   let stepIndex = 0;
 
+  // Create audio director (real or no-op depending on narration config)
+  const audioDirector = createAudioDirector({
+    narration: opts.narration,
+    videoStartTime,
+    ffmpegPath: resolvedFfmpeg,
+  });
+
   // Capture console errors from the page
   page.on("console", (msg) => {
     if (msg.type() === "error") {
@@ -873,7 +892,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
   // Run scenario
   const scenarioStart = Date.now();
   try {
-    await scenario({ step, actor, page, baseURL });
+    await scenario({ step, actor, page, baseURL, audio: audioDirector });
   } catch (err) {
     console.error("\n  Scenario failed:", (err as Error).message);
     // Take a failure screenshot
@@ -960,6 +979,16 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
       }
     }
 
+    // Mix narration audio into video (if any audio events were recorded)
+    const audioEvents = audioDirector.getEvents?.() ?? [];
+    if (audioEvents.length > 0 && videoPath && fs.existsSync(videoPath)) {
+      mixAudioIntoVideo({
+        videoPath,
+        events: audioEvents,
+        ffmpegPath: resolvedFfmpeg,
+      });
+    }
+
     // Generate subtitles
     const vtt = generateWebVTT(steps);
     fs.writeFileSync(subtitlesPath, vtt, "utf-8");
@@ -974,6 +1003,12 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
       videoPath,
       subtitlesPath,
       recordMode,
+      audioEvents: audioEvents.length > 0 ? audioEvents.map((e) => ({
+        type: e.type,
+        startMs: e.startMs,
+        durationMs: e.durationMs,
+        label: e.label,
+      })) : undefined,
       timestamp: new Date().toISOString(),
     };
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
@@ -988,6 +1023,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
       metadataPath,
       steps,
       durationMs,
+      audioEvents: audioEvents.length > 0 ? audioEvents : undefined,
     };
   }
 }
