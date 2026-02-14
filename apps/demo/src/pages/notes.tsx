@@ -138,7 +138,7 @@ function TaskItem({
   return (
     <Reorder.Item
       value={task}
-      className="flex items-center gap-2 rounded-lg border bg-card p-2 select-none transition-colors duration-100 active:bg-muted/50 active:cursor-grabbing"
+      className="flex items-center gap-2 rounded-lg border bg-card p-2 select-none transition-colors duration-100 hover:bg-muted/30 hover:border-muted-foreground/20 active:bg-muted/50 active:cursor-grabbing"
       data-testid={`note-item-${index}`}
       initial={{ opacity: 0, scale: 0 }}
       animate={{ opacity: 1, scale: 1 }}
