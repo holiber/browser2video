@@ -478,24 +478,52 @@ export class Actor {
       await this.moveTo(selector);
     }
 
-    if (this.mode === "human") {
-      // Use smooth scrollBy — the injected CSS scroll-behavior:smooth
-      // makes this animate natively in the browser.
-      if (selector) {
-        await this.page.evaluate(
-          `document.querySelector(${JSON.stringify(selector)})?.scrollBy({ top: ${deltaY}, behavior: 'smooth' })`,
-        );
-      } else {
-        await this.page.evaluate(
-          `window.scrollBy({ top: ${deltaY}, behavior: 'smooth' })`,
-        );
-      }
-      // Wait for the smooth scroll animation to finish (~400-600ms)
-      await sleep(600);
+    const behavior = this.mode === "human" ? "smooth" : "auto";
+
+    if (selector) {
+      // The selector may point at a wrapper (e.g. Radix ScrollArea Root) rather than the
+      // actual scrollable viewport. Resolve a best-effort scroll target inside the element.
+      await this.page.evaluate(
+        ({ selector, deltaY, behavior }) => {
+          const root = document.querySelector(selector) as HTMLElement | null;
+          if (!root) return;
+
+          const isScrollable = (el: HTMLElement) =>
+            el.scrollHeight > el.clientHeight + 1 &&
+            (getComputedStyle(el).overflowY === "auto" ||
+              getComputedStyle(el).overflowY === "scroll" ||
+              getComputedStyle(el).overflowY === "overlay");
+
+          const direct =
+            root instanceof HTMLElement && isScrollable(root) ? root : null;
+
+          // Radix ScrollArea (our UI) scrolls the Viewport, not the Root.
+          const radixViewport = root.querySelector(
+            '[data-slot="scroll-area-viewport"]',
+          ) as HTMLElement | null;
+
+          const descendantScrollable =
+            Array.from(root.querySelectorAll("*"))
+              .find((n) => n instanceof HTMLElement && isScrollable(n as HTMLElement)) as
+              | HTMLElement
+              | undefined;
+
+          const target = direct ?? radixViewport ?? descendantScrollable ?? root;
+          target.scrollBy({ top: deltaY, behavior });
+        },
+        { selector, deltaY, behavior },
+      );
     } else {
-      await this.page.mouse.wheel({ deltaY });
-      await sleep(50);
+      await this.page.evaluate(
+        ({ deltaY, behavior }) => {
+          window.scrollBy({ top: deltaY, behavior });
+        },
+        { deltaY, behavior },
+      );
     }
+
+    // Wait for the scroll animation to finish (~400-600ms in human mode)
+    await sleep(this.mode === "human" ? 600 : 50);
   }
 
   /** Drag from one position to another */
