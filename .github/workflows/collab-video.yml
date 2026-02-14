@@ -17,12 +17,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: pnpm
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: latest
+          version: 10.29.3
 
       - name: Install system deps (xvfb, ffmpeg, xterm)
         run: |
@@ -32,18 +31,22 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
+      - name: Build workspace
+        run: pnpm build
+
       - name: Record drift-free collab video (Xvfb + FFmpeg screen capture)
         run: |
+          ART_DIR="artifacts/collab-video"
+          rm -rf "$ART_DIR"
+          mkdir -p "$ART_DIR"
           xvfb-run -a --server-args="-screen 0 2560x720x24" \
-            pnpm b2v run --scenario collab --mode human --headed --record screen --display-size 2560x720
-
-      - name: Upload artifacts
-        if: always()
-        run: |
-          set -euo pipefail
-          ART_DIR="$(ls -dt artifacts/collab-* | head -1)"
-          echo "ART_DIR=$ART_DIR" >> "$GITHUB_ENV"
-          echo "Latest artifacts: $ART_DIR"
+            pnpm b2v run \
+              --scenario collab \
+              --mode human \
+              --record screen \
+              --headed \
+              --display-size 2560x720 \
+              --artifacts "$ART_DIR"
 
       - name: Upload latest run (mp4 + vtt + json)
         if: always()
@@ -51,10 +54,10 @@ jobs:
         with:
           name: collab-video
           path: |
-            ${{ env.ART_DIR }}/run.mp4
-            ${{ env.ART_DIR }}/captions.vtt
-            ${{ env.ART_DIR }}/*-captions.vtt
-            ${{ env.ART_DIR }}/reviewer.log
-            ${{ env.ART_DIR }}/run.json
+            artifacts/collab-video/run.mp4
+            artifacts/collab-video/captions.vtt
+            artifacts/collab-video/*-captions.vtt
+            artifacts/collab-video/reviewer.log
+            artifacts/collab-video/run.json
           if-no-files-found: error
 
