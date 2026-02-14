@@ -232,6 +232,18 @@ function formatVttTime(ms: number): string {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
 }
 
+function stepEaseMultiplier(i: number, n: number, amplitude = 0.4): number {
+  if (!Number.isFinite(i) || !Number.isFinite(n) || n <= 1) return 1;
+  const t = Math.min(1, Math.max(0, i / (n - 1)));
+  // High at ends, low in the middle: 1±amplitude
+  return 1 + amplitude * Math.cos(2 * Math.PI * t);
+}
+
+function easedStepMs(baseMs: number, i: number, n: number, factor = 1): number {
+  const ms = baseMs * factor * stepEaseMultiplier(i, n);
+  return Math.max(0, Math.round(ms));
+}
+
 // ---------------------------------------------------------------------------
 //  Cursor overlay injection script (runs inside the browser page)
 // ---------------------------------------------------------------------------
@@ -247,7 +259,8 @@ const CURSOR_OVERLAY_SCRIPT = `
     position: fixed; top: 0; left: 0; z-index: 999999;
     width: 20px; height: 20px; pointer-events: none;
     transform: translate(-2px, -2px);
-    transition: none;
+    transition: transform 40ms ease-in-out;
+    will-change: transform;
   \`;
   cursor.innerHTML = \`<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path d="M3 2L3 17L7.5 12.5L11.5 18L14 16.5L10 11L16 11L3 2Z" fill="white" stroke="black" stroke-width="1.2" stroke-linejoin="round"/>
@@ -352,12 +365,13 @@ export class Actor {
       const from = { x: this.cursorX, y: this.cursorY };
       const points = windMouse(from, target);
 
-      for (const p of points) {
+      for (let i = 0; i < points.length; i++) {
+        const p = points[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(
           `window.__b2v_moveCursor?.(${p.x}, ${p.y})`,
         );
-        await sleep(pickMs(this.delays.mouseMoveStepMs));
+        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
       }
     }
 
@@ -438,10 +452,11 @@ export class Actor {
         if (this.mode === "human") {
           const from = { x: this.cursorX, y: this.cursorY };
           const points = windMouse(from, target);
-          for (const p of points) {
+          for (let i = 0; i < points.length; i++) {
+            const p = points[i]!;
             await this.page.mouse.move(p.x, p.y);
             await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-            await sleep(pickMs(this.delays.mouseMoveStepMs));
+            await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
           }
           await this.page.evaluate(`window.__b2v_clickEffect?.(${target.x}, ${target.y})`);
           await sleep(pickMs(this.delays.clickEffectMs));
@@ -508,10 +523,11 @@ export class Actor {
         { x: this.cursorX, y: this.cursorY },
         from,
       );
-      for (const p of movePoints) {
+      for (let i = 0; i < movePoints.length; i++) {
+        const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(pickMs(this.delays.mouseMoveStepMs));
+        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
     }
 
@@ -522,11 +538,12 @@ export class Actor {
 
     const dragSteps = this.mode === "human" ? 25 : 5;
     const dragPoints = linearPath(from, to, dragSteps);
-    for (const p of dragPoints) {
+    for (let i = 0; i < dragPoints.length; i++) {
+      const p = dragPoints[i]!;
       await this.page.mouse.move(p.x, p.y);
       if (this.mode === "human") {
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(pickMs(this.delays.mouseMoveStepMs));
+        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, dragPoints.length));
       }
     }
 
@@ -559,10 +576,11 @@ export class Actor {
         { x: this.cursorX, y: this.cursorY },
         from,
       );
-      for (const p of movePoints) {
+      for (let i = 0; i < movePoints.length; i++) {
+        const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(pickMs(this.delays.mouseMoveStepMs));
+        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
     }
 
@@ -572,11 +590,12 @@ export class Actor {
 
     const dragSteps = this.mode === "human" ? 25 : 5;
     const dragPoints = linearPath(from, to, dragSteps);
-    for (const p of dragPoints) {
+    for (let i = 0; i < dragPoints.length; i++) {
+      const p = dragPoints[i]!;
       await this.page.mouse.move(p.x, p.y);
       if (this.mode === "human") {
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(pickMs(this.delays.mouseMoveStepMs));
+        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, dragPoints.length));
       }
     }
 
@@ -617,10 +636,11 @@ export class Actor {
         { x: this.cursorX, y: this.cursorY },
         absPoints[0],
       );
-      for (const p of movePoints) {
+      for (let i = 0; i < movePoints.length; i++) {
+        const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(pickMs(this.delays.mouseMoveStepMs));
+        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
     }
 
@@ -628,13 +648,18 @@ export class Actor {
     await this.page.mouse.down();
 
     for (let i = 1; i < absPoints.length; i++) {
-      const segSteps = this.mode === "human" ? 5 : 1;
+      const segSteps = this.mode === "human" ? 12 : 1;
       const segPoints = linearPath(absPoints[i - 1], absPoints[i], segSteps);
-      for (const p of segPoints) {
+      for (let j = 0; j < segPoints.length; j++) {
+        const p = segPoints[j]!;
         await this.page.mouse.move(p.x, p.y);
         if (this.mode === "human") {
           await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-          await sleep(pickMs(this.delays.mouseMoveStepMs));
+          // Drawing looks unnaturally fast with the same step pacing as normal moves.
+          // Keep it deterministic but slower/more "hand-like".
+          await sleep(
+            easedStepMs(pickMs(this.delays.mouseMoveStepMs), j, segPoints.length, 2),
+          );
         }
       }
     }
@@ -834,12 +859,27 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
   } finally {
     const durationMs = Date.now() - scenarioStart;
 
-    // Stop screencast capture so the overlay below is NOT recorded in the video
+    // Tail-capture: allow final UI updates to render before stopping recording.
+    // Deterministic (no randomness), and 0ms in fast mode.
+    const tailCaptureMs = mode === "human" ? 300 : 0;
+    if (recorder && tailCaptureMs > 0) {
+      try {
+        await sleep(tailCaptureMs);
+      } catch { /* ignore */ }
+    }
+
+    // Stop recording (flushes remaining frames and waits for ffmpeg).
+    // IMPORTANT: don't stop the CDP screencast before recorder.stop(), or we can
+    // truncate the last frames and "miss the last steps" in the final MP4.
+    if (recorder) await recorder.stop();
+
+    // Stop CDP screencast after recording is finalized.
     try {
       await (page.mainFrame() as any).client.send("Page.stopScreencast");
     } catch { /* ignore */ }
 
-    // Show processing overlay so the user sees feedback instead of a frozen page
+    // Show processing overlay so the user sees feedback instead of a frozen page.
+    // This happens AFTER recording stops so it's never captured in the output.
     try {
       await page.evaluate(`(() => {
         const overlay = document.createElement('div');
@@ -848,11 +888,6 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
         document.body.appendChild(overlay);
       })()`);
     } catch { /* page may already be gone on error path */ }
-
-    // Stop recording (flushes remaining frames and waits for ffmpeg)
-    if (recorder) {
-      await recorder.stop();
-    }
 
     // Close browser immediately after recording stops
     await browser.close();
