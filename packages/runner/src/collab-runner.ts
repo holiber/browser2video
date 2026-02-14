@@ -1281,14 +1281,21 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
   } finally {
     const durationMs = Date.now() - scenarioStart;
 
-    // Stop screencasts before closing
+    // Stop recorders
+    let t0 = Date.now();
+    if (bossRecorder) await bossRecorder.stop();
+    if (workerRecorder) await workerRecorder.stop();
+    if (screenRecorder) await screenRecorder.stop();
+    console.log(`\n  Recorders stopped      (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+
+    // Stop screencasts after recording is finalized (avoid truncating last frames).
     for (const pg of [a0Page, a1Page]) {
       try {
         await (pg.mainFrame() as any).client.send("Page.stopScreencast");
       } catch { /* ignore */ }
     }
 
-    // Show processing overlay
+    // Show processing overlay (after recording stops so it never appears in output video).
     for (const pg of [a0Page, a1Page]) {
       try {
         await pg.evaluate(`(() => {
@@ -1299,13 +1306,6 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
         })()`);
       } catch { /* ignore */ }
     }
-
-    // Stop recorders
-    let t0 = Date.now();
-    if (bossRecorder) await bossRecorder.stop();
-    if (workerRecorder) await workerRecorder.stop();
-    if (screenRecorder) await screenRecorder.stop();
-    console.log(`\n  Recorders stopped      (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
     t0 = Date.now();
     await browser.close();
