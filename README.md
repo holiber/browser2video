@@ -18,6 +18,14 @@ pnpm b2v list-scenarios
 pnpm b2v run --scenario basic-ui --mode human --record screencast --headed
 ```
 
+## Video example
+
+Collab scenario demo (generated from `--scenario collab`):
+
+[![Collab scenario demo](https://github.com/holiber/browser2video/releases/download/examples-v1/collab-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v1/run.mp4)
+
+Docs site: `https://holiber.github.io/browser2video/`
+
 Artifacts are saved to `artifacts/<scenario>-<timestamp>/`:
 - `run.mp4` (when recording enabled)
 - `captions.vtt`

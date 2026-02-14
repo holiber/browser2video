@@ -10,3 +10,7 @@ Browser2Video is a small toolkit for producing **video proofs** from browser aut
 
 See the repository README for usage examples.
 
+## Examples
+
+See **Video examples** for an embedded collab scenario recording.
+
