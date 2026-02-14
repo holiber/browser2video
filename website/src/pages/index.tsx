@@ -16,7 +16,7 @@ export default function Home() {
           muted
           playsInline
           style={{ width: "100%", borderRadius: 12, border: "1px solid rgba(0,0,0,0.12)" }}
-          src="https://github.com/holiber/browser2video/releases/download/examples-v2/collab-demo.mp4"
+          src="https://github.com/holiber/browser2video/releases/download/examples-v3/collab-demo.mp4"
         />
         <p>
           Start with the docs: <a href="/browser2video/docs/intro">/docs/intro</a>

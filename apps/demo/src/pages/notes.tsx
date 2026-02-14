@@ -140,13 +140,10 @@ function TaskItem({
       value={task}
       className="flex items-center gap-2 rounded-lg border bg-card p-2 select-none transition-colors duration-100 hover:bg-muted/30 hover:border-muted-foreground/20 active:bg-muted/50 active:cursor-grabbing"
       data-testid={`note-item-${index}`}
-      initial={{ opacity: 0, scale: 0 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0 }}
-      transition={{
-        duration: 0.4,
-        scale: { type: "spring", visualDuration: 0.4, bounce: 0.5 },
-      }}
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
+      transition={{ duration: 0.18, ease: "easeOut" }}
       whileDrag={{
         scale: 1.02,
         boxShadow: "0 4px 20px rgba(0,0,0,0.15)",
@@ -325,7 +322,7 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
 
   return (
     <div
-      className="mx-auto max-w-xl space-y-4 p-4"
+      className="mx-auto max-w-md space-y-3 p-3"
       data-testid="notes-page"
     >
       {/* Header */}
@@ -388,7 +385,7 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
 
       {/* Task list */}
       <Card>
-        <CardContent className="pt-4">
+        <CardContent className="pt-4 overflow-hidden">
           {tasks.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               No tasks yet. Add one above!

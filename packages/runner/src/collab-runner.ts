@@ -68,6 +68,11 @@ export interface CollabRunnerOptions {
   headless?: boolean;
   delays?: Partial<ActorDelays>;
   /**
+   * Show the sync debug overlay (small text box in the top-left corner).
+   * Defaults to false.
+   */
+  debugOverlay?: boolean;
+  /**
    * Actor definitions (exactly 2).
    * If omitted, defaults to:
    * - { id: "boss", name: "Boss", path: bossPath }
@@ -769,6 +774,7 @@ async function runFfmpegScreenRecording(opts: {
 
 export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
   const { mode, baseURL, artifactDir, scenario, ffmpegPath } = opts;
+  const debugOverlay = opts.debugOverlay ?? false;
 
   fs.mkdirSync(artifactDir, { recursive: true });
 
@@ -953,10 +959,12 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
     await a1Page.evaluateOnNewDocument(hideCursorScript);
   }
 
-  // Install a small in-page overlay used to debug sync (must be inside the
+  // Optional: install a small in-page overlay used to debug sync (must be inside the
   // captured component crop, so it mounts into [data-testid="notes-page"]).
-  await installSyncOverlay(a0Page, a0.name);
-  await installSyncOverlay(a1Page, a1.name);
+  if (debugOverlay) {
+    await installSyncOverlay(a0Page, a0.name);
+    await installSyncOverlay(a1Page, a1.name);
+  }
 
   // Fast mode: reduce UI animations for determinism and speed.
   if (mode === "fast") {
@@ -1089,11 +1097,11 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
           "xterm",
           [
             "-geometry",
-            `120x40+${tileW * 2}+0`,
+            `96x40+${tileW * 2}+0`,
             "-fa",
             "Monospace",
             "-fs",
-            "12",
+            "11",
             "-T",
             "Reviewer",
             "-e",

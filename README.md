@@ -22,7 +22,11 @@ pnpm b2v run --scenario basic-ui --mode human --record screencast --headed
 
 Collab scenario demo (**human mode**, screen recording; includes cursor + reviewer terminal):
 
-[![Collab scenario demo](https://github.com/holiber/browser2video/releases/download/examples-v2/collab-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v2/collab-demo.mp4)
+[![Collab scenario demo](https://github.com/holiber/browser2video/releases/download/examples-v3/collab-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/collab-demo.mp4)
+
+Single-browser demo (**human mode**, screencast; includes scrolling + drag + drawing):
+
+[![Basic UI demo](https://github.com/holiber/browser2video/releases/download/examples-v3/basic-ui-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/basic-ui-demo.mp4)
 
 Docs site: `https://holiber.github.io/browser2video/`
 
