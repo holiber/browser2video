@@ -274,6 +274,9 @@ cli.command(
     );
 
     console.log(`Artifacts: ${artifactsDir}`);
+
+    // Force exit — Vite file watchers and other handles may linger
+    process.exit(0);
   },
 );
 

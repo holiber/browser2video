@@ -82,7 +82,16 @@ export async function startSyncServer(opts: {
 
   const stop = async () => {
     try { proc.kill("SIGINT"); } catch { /* ignore */ }
-    await new Promise<void>((resolve) => proc.once("exit", () => resolve()));
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        try { proc.kill("SIGKILL"); } catch { /* ignore */ }
+        resolve();
+      }, 5000);
+      proc.once("exit", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
     if (proc.exitCode && proc.exitCode !== 0) {
       console.warn(`  Sync server exited with code ${proc.exitCode}`);
       if (stderr.trim()) console.warn(`  Sync server stderr:\n${stderr.trim()}`);
