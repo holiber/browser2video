@@ -379,7 +379,7 @@ export async function run(
 
       if (pane.url) {
         // External URL (no server)
-        await page.goto(pane.url, { waitUntil: "load", timeout: 20000 });
+        await page.goto(pane.url, { waitUntil: "domcontentloaded", timeout: 30000 });
         await actor.injectCursor();
       } else if (baseURL) {
         await page.goto(`${baseURL}${pane.path ?? "/"}`, { waitUntil: "domcontentloaded" });

@@ -22,6 +22,7 @@ export interface ActorDelays {
   beforeTypeMs: DelayRange;
   keyDelayMs: DelayRange;
   keyBoundaryPauseMs: DelayRange;
+  afterTypeMs: DelayRange;
   selectOpenMs: DelayRange;
   selectOptionMs: DelayRange;
   afterDragMs: DelayRange;
