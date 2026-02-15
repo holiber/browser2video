@@ -94,7 +94,7 @@ jobs:
             echo "────────────────────────────────────────"
             echo "Running scenario: $s (human mode)"
             echo "────────────────────────────────────────"
-            pnpm b2v run --scenario "$s" \
+            pnpm b2v run "tests/scenarios/$s.scenario.ts" \
               --mode human \
               --record screencast \
               --artifacts "artifacts/$s" \

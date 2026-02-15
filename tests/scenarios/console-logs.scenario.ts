@@ -3,7 +3,12 @@
  * Opens the notes app with an embedded console panel and performs
  * CRUD operations that generate visible console output.
  */
-import type { ScenarioContext } from "@browser2video/runner";
+import type { ScenarioConfig, ScenarioContext } from "@browser2video/runner";
+
+export const config: ScenarioConfig = {
+  server: { type: "vite", root: "apps/demo" },
+  panes: [{ id: "main", type: "browser", path: "/notes?role=boss&showConsole=true" }],
+};
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -11,14 +16,16 @@ function sleep(ms: number) {
 
 const TASKS = ["setup database", "write API routes", "add auth middleware"];
 
-export async function consoleLogsScenario(ctx: ScenarioContext) {
-  const { step, actor, page, baseURL } = ctx;
+export default async function scenario(ctx: ScenarioContext) {
+  const actor = ctx.actor("main");
+  const page = ctx.page("main");
+  const { baseURL } = ctx;
 
   // ------------------------------------------------------------------
   //  1. Open the notes page (DevTools console shows logs automatically)
   // ------------------------------------------------------------------
 
-  await step("Open notes page with console", async () => {
+  await ctx.step("main", "Open notes page with console", async () => {
     await actor.goto(`${baseURL}/notes?role=boss&showConsole=true`);
     await actor.waitFor('[data-testid="notes-page"]');
     await actor.waitFor('[data-testid="console-panel"]');
@@ -31,7 +38,7 @@ export async function consoleLogsScenario(ctx: ScenarioContext) {
   // ------------------------------------------------------------------
 
   for (const title of TASKS) {
-    await step(`Add task: "${title}"`, async () => {
+    await ctx.step("main", `Add task: "${title}"`, async () => {
       await actor.type('[data-testid="note-input"]', title);
       await sleep(150);
       await actor.click('[data-testid="note-add-btn"]');
@@ -43,7 +50,7 @@ export async function consoleLogsScenario(ctx: ScenarioContext) {
   //  3. Complete a task (generates "Task completed" console log)
   // ------------------------------------------------------------------
 
-  await step(`Complete task: "${TASKS[0]}"`, async () => {
+  await ctx.step("main", `Complete task: "${TASKS[0]}"`, async () => {
     // TASKS are added via unshift, so "setup database" (first added) is at the bottom.
     // The list order after all adds (top-insert) is:
     //   0: add auth middleware
@@ -66,7 +73,7 @@ export async function consoleLogsScenario(ctx: ScenarioContext) {
   //  4. Delete a task (generates "Task deleted" console log)
   // ------------------------------------------------------------------
 
-  await step(`Delete task: "${TASKS[1]}"`, async () => {
+  await ctx.step("main", `Delete task: "${TASKS[1]}"`, async () => {
     const idx = await page.evaluate((title: string) => {
       const items = document.querySelectorAll('[data-testid^="note-title-"]');
       const arr = Array.from(items);
@@ -84,7 +91,7 @@ export async function consoleLogsScenario(ctx: ScenarioContext) {
   //  5. Add one more task to generate more console output
   // ------------------------------------------------------------------
 
-  await step("Add another task", async () => {
+  await ctx.step("main", "Add another task", async () => {
     await actor.type('[data-testid="note-input"]', "deploy to production");
     await sleep(150);
     await actor.click('[data-testid="note-add-btn"]');

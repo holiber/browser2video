@@ -2,16 +2,23 @@
  * @description Demo scenario exercising form, scroll, drag, node graph, and drawing.
  * Shared by both human and fast modes — the Actor handles mode differences.
  */
-import type { ScenarioContext } from "@browser2video/runner";
+import type { ScenarioConfig, ScenarioContext } from "@browser2video/runner";
 
-export async function basicUiScenario(ctx: ScenarioContext) {
-  const { step, actor, page, baseURL } = ctx;
+export const config: ScenarioConfig = {
+  server: { type: "vite", root: "apps/demo" },
+  panes: [{ id: "main", type: "browser", path: "/" }],
+};
+
+export default async function scenario(ctx: ScenarioContext) {
+  const actor = ctx.actor("main");
+  const page = ctx.page("main");
+  const { baseURL } = ctx;
 
   // ------------------------------------------------------------------
   //  1. Open dashboard
   // ------------------------------------------------------------------
 
-  await step("Open dashboard", async () => {
+  await ctx.step("main", "Open dashboard", async () => {
     await actor.goto(`${baseURL}/`);
     await actor.waitFor('[data-testid="app-page"]');
   });
@@ -20,20 +27,20 @@ export async function basicUiScenario(ctx: ScenarioContext) {
   //  2. Fill the demo form
   // ------------------------------------------------------------------
 
-  await step("Fill full name", async () => {
+  await ctx.step("main", "Fill full name", async () => {
     await actor.type('[data-testid="form-name"]', "Jane Doe");
   });
 
-  await step("Fill email field", async () => {
+  await ctx.step("main", "Fill email field", async () => {
     await actor.type('[data-testid="form-email"]', "jane@example.com");
   });
 
-  await step("Toggle preferences", async () => {
+  await ctx.step("main", "Toggle preferences", async () => {
     await actor.click('[data-testid="form-pref-updates"]');
     await actor.click('[data-testid="form-pref-analytics"]');
   });
 
-  await step("Enable notifications", async () => {
+  await ctx.step("main", "Enable notifications", async () => {
     await actor.click('[data-testid="form-notifications"]');
   });
 
@@ -41,15 +48,15 @@ export async function basicUiScenario(ctx: ScenarioContext) {
   //  3. Scroll
   // ------------------------------------------------------------------
 
-  await step("Scroll page down to scrollable area", async () => {
+  await ctx.step("main", "Scroll page down to scrollable area", async () => {
     await actor.scroll(null, 400);
   });
 
-  await step("Scroll inside the scroll area", async () => {
+  await ctx.step("main", "Scroll inside the scroll area", async () => {
     await actor.scroll('[data-testid="scroll-area"]', 600);
   });
 
-  await step("Scroll page to drag section", async () => {
+  await ctx.step("main", "Scroll page to drag section", async () => {
     await actor.scroll(null, 400);
   });
 
@@ -57,7 +64,7 @@ export async function basicUiScenario(ctx: ScenarioContext) {
   //  4. Drag & Drop
   // ------------------------------------------------------------------
 
-  await step("Reorder drag items", async () => {
+  await ctx.step("main", "Reorder drag items", async () => {
     await actor.drag(
       '[data-testid="drag-item-task-1"]',
       '[data-testid="drag-item-task-3"]',
@@ -68,11 +75,11 @@ export async function basicUiScenario(ctx: ScenarioContext) {
   //  5. Node Graph (React Flow)
   // ------------------------------------------------------------------
 
-  await step("Scroll to node graph", async () => {
+  await ctx.step("main", "Scroll to node graph", async () => {
     await actor.scroll(null, 500);
   });
 
-  await step("Connect Data Source to Transform", async () => {
+  await ctx.step("main", "Connect Data Source to Transform", async () => {
     // Wait for React Flow to render
     await actor.waitFor('[data-testid="flow-container"] .react-flow__node');
     // Drag from source handle of "source" node to target handle of "transform" node
@@ -83,18 +90,18 @@ export async function basicUiScenario(ctx: ScenarioContext) {
     );
   });
 
-  await step("Connect Transform to Output", async () => {
+  await ctx.step("main", "Connect Transform to Output", async () => {
     await actor.drag(
       '.react-flow__node[data-id="transform"] .react-flow__handle.source',
       '.react-flow__node[data-id="output"] .react-flow__handle.target',
     );
   });
 
-  await step("Move Data Source node down", async () => {
+  await ctx.step("main", "Move Data Source node down", async () => {
     await actor.dragByOffset('.react-flow__node[data-id="source"]', 0, 80);
   });
 
-  await step("Move Output node up", async () => {
+  await ctx.step("main", "Move Output node up", async () => {
     await actor.dragByOffset('.react-flow__node[data-id="output"]', 0, -60);
   });
 
@@ -102,11 +109,11 @@ export async function basicUiScenario(ctx: ScenarioContext) {
   //  6. Drawing
   // ------------------------------------------------------------------
 
-  await step("Scroll to drawing section", async () => {
+  await ctx.step("main", "Scroll to drawing section", async () => {
     await actor.scroll(null, 500);
   });
 
-  await step("Select rectangle tool and draw", async () => {
+  await ctx.step("main", "Select rectangle tool and draw", async () => {
     await actor.click('[data-testid="draw-tool-rectangle"]');
     await actor.draw('[data-testid="draw-canvas"]', [
       // Square
@@ -115,7 +122,7 @@ export async function basicUiScenario(ctx: ScenarioContext) {
     ]);
   });
 
-  await step("Draw a star inside the square", async () => {
+  await ctx.step("main", "Draw a star inside the square", async () => {
     await actor.click('[data-testid="draw-tool-freehand"]');
     const cx = 0.55;
     const cy = 0.4;
@@ -134,7 +141,7 @@ export async function basicUiScenario(ctx: ScenarioContext) {
     await actor.draw('[data-testid="draw-canvas"]', starPoints);
   });
 
-  await step("Draw a stickman on the left", async () => {
+  await ctx.step("main", "Draw a stickman on the left", async () => {
     await actor.click('[data-testid="draw-tool-circle"]');
     await actor.draw('[data-testid="draw-canvas"]', [
       // Head

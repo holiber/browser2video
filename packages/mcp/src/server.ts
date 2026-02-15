@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 /**
  * @description Browser2Video MCP server (stdio).
+ * Uses the unified runner API — scenarios are loaded dynamically from files.
  */
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import * as z from "zod";
 import { createServer, type ViteDevServer } from "vite";
-import { run, runCollab, type Mode, type RecordMode } from "@browser2video/runner";
-import { basicUiScenario, collabScenario, githubScenario } from "@browser2video/scenarios";
-
-type ScenarioName = "basic-ui" | "collab" | "github";
+import { run, type Mode, type RecordMode, type ScenarioConfig, type ScenarioContext } from "@browser2video/runner";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const demoRoot = path.join(repoRoot, "apps", "demo");
+const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
 
 function isoStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -31,15 +31,11 @@ async function getFfmpegPath(): Promise<string | undefined> {
 }
 
 async function withViteIfNeeded(
-  needsDemoServer: boolean,
+  viteRoot: string | null,
   baseUrlFromArgs: string | undefined,
   fn: (baseURL: string | undefined) => Promise<void>,
 ) {
-  if (!needsDemoServer) {
-    await fn(baseUrlFromArgs);
-    return;
-  }
-  if (baseUrlFromArgs) {
+  if (!viteRoot || baseUrlFromArgs) {
     await fn(baseUrlFromArgs);
     return;
   }
@@ -47,7 +43,7 @@ async function withViteIfNeeded(
   let server: ViteDevServer | undefined;
   try {
     server = await createServer({
-      root: demoRoot,
+      root: viteRoot,
       server: { port: 0, strictPort: false },
       logLevel: "error",
     });
@@ -60,6 +56,39 @@ async function withViteIfNeeded(
   }
 }
 
+/**
+ * Dynamically import a scenario file and extract config + default exports.
+ */
+async function loadScenarioFile(filePath: string): Promise<{
+  config: ScenarioConfig;
+  scenarioFn: (ctx: ScenarioContext) => Promise<void>;
+}> {
+  const abs = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(process.cwd(), filePath);
+
+  if (!fs.existsSync(abs)) {
+    throw new Error(`Scenario file not found: ${abs}`);
+  }
+
+  const mod: any = await import(pathToFileURL(abs).href);
+
+  const scenarioFn =
+    typeof mod.default === "function" ? mod.default :
+    typeof mod.scenario === "function" ? mod.scenario : undefined;
+
+  if (!scenarioFn) {
+    throw new Error(`Scenario file does not export a default or "scenario" function: ${abs}`);
+  }
+
+  const config: ScenarioConfig = mod.config ?? {
+    server: { type: "vite" as const, root: demoRoot },
+    panes: [{ id: "main", type: "browser" as const, path: "/" }],
+  };
+
+  return { config, scenarioFn };
+}
+
 const server = new McpServer(
   { name: "browser2video", version: "0.0.0" },
   { capabilities: { logging: {} } as any },
@@ -69,13 +98,18 @@ server.registerTool(
   "b2v_list_scenarios",
   {
     title: "List scenarios",
-    description: "List built-in Browser2Video scenarios.",
+    description: "List *.scenario.ts files in the default scenarios directory.",
     outputSchema: z.object({
       scenarios: z.array(z.string()),
     }),
   },
   async () => {
-    const out = { scenarios: ["basic-ui", "collab", "github"] };
+    const files = fs.existsSync(defaultScenariosDir)
+      ? fs.readdirSync(defaultScenariosDir)
+          .filter((f) => f.endsWith(".scenario.ts"))
+          .sort()
+      : [];
+    const out = { scenarios: files };
     return {
       content: [{ type: "text", text: JSON.stringify(out) }],
       structuredContent: out,
@@ -112,12 +146,9 @@ server.registerTool(
   "b2v_run",
   {
     title: "Run scenario",
-    description: "Run a scenario in human/fast mode and optionally record an MP4 proof.",
+    description: "Run a scenario file in human/fast mode and optionally record an MP4 proof.",
     inputSchema: z.object({
-      scenario: z.enum(["basic-ui", "collab", "github"]),
-      scenarioFile: z.string().optional(),
-      scenarioExport: z.string().optional(),
-      scenarioKind: z.enum(["single", "collab"]).default("single"),
+      scenarioFile: z.string().describe("Path to a *.scenario.ts file"),
       mode: z.enum(["human", "fast"]).default("human"),
       record: z.enum(["none", "screencast", "screen"]).default("screencast"),
       artifactsDir: z.string().optional(),
@@ -138,11 +169,14 @@ server.registerTool(
     }),
   },
   async (input) => {
-    const scenario = input.scenario as ScenarioName;
-    const mode = input.mode as Mode;
-    const recordMode = input.record as RecordMode;
+    const { config, scenarioFn } = await loadScenarioFile(input.scenarioFile);
+
+    const scenarioLabel = path
+      .basename(input.scenarioFile)
+      .replace(/\.scenario\.(ts|js|mts|mjs)$/, "");
+
     const artifactsDir =
-      input.artifactsDir ?? path.join(repoRoot, "artifacts", `${scenario}-${isoStamp()}`);
+      input.artifactsDir ?? path.join(repoRoot, "artifacts", `${scenarioLabel}-${isoStamp()}`);
 
     const headless =
       typeof input.headless === "boolean"
@@ -151,115 +185,24 @@ server.registerTool(
 
     const ffmpegPath = await getFfmpegPath();
 
+    const viteRoot = config.server?.type === "vite" ? config.server.root : null;
+
     let result:
       | { videoPath?: string; subtitlesPath: string; metadataPath: string; durationMs: number }
       | undefined;
 
-    const useScenarioFile = typeof input.scenarioFile === "string" && input.scenarioFile.trim().length > 0;
-    const scenarioKind = input.scenarioKind ?? "single";
-    const needsDemoServer = useScenarioFile ? (scenarioKind === "single" || scenarioKind === "collab") : (scenario === "basic-ui" || scenario === "collab");
-
-    await withViteIfNeeded(needsDemoServer, input.baseUrl, async (baseURL) => {
-      if (!useScenarioFile && scenario === "collab") {
-        const r = await runCollab({
-          mode,
-          baseURL,
-          artifactDir: artifactsDir,
-          scenario: collabScenario,
-          ffmpegPath,
-          headless,
-          recordMode,
-          display: input.display,
-          displaySize: input.displaySize,
-          screenIndex: input.screenIndex,
-          bossPath: "/notes?role=boss",
-          workerPath: "/notes?role=worker",
-          captureSelector: '[data-testid="notes-page"]',
-          capturePadding: 24,
-          debugOverlay: Boolean(input.debugOverlay),
-        });
-        result = {
-          videoPath: r.videoPath,
-          subtitlesPath: r.subtitlesPath,
-          metadataPath: r.metadataPath,
-          durationMs: r.durationMs,
-        };
-        return;
-      }
-
-      if (useScenarioFile) {
-        const abs = path.isAbsolute(input.scenarioFile!)
-          ? input.scenarioFile!
-          : path.resolve(process.cwd(), input.scenarioFile!);
-        const mod: any = await import(pathToFileURL(abs).href);
-        const exportName = (input.scenarioExport ?? "").trim();
-        const candidates = exportName
-          ? [exportName]
-          : ["default", "scenario", "basicUiScenario", "collabScenario"];
-        let fn: any | undefined;
-        for (const name of candidates) {
-          const v = name === "default" ? mod?.default : mod?.[name];
-          if (typeof v === "function") {
-            fn = v;
-            break;
-          }
-        }
-        if (!fn) throw new Error(`Scenario module did not export a function. Tried: ${candidates.join(", ")}`);
-
-        if (scenarioKind === "collab") {
-          const r = await runCollab({
-            mode,
-            baseURL,
-            artifactDir: artifactsDir,
-            scenario: fn,
-            ffmpegPath,
-            headless,
-            recordMode,
-            display: input.display,
-            displaySize: input.displaySize,
-            screenIndex: input.screenIndex,
-            bossPath: "/notes?role=boss",
-            workerPath: "/notes?role=worker",
-            captureSelector: '[data-testid="notes-page"]',
-            capturePadding: 24,
-            debugOverlay: Boolean(input.debugOverlay),
-          });
-          result = {
-            videoPath: r.videoPath,
-            subtitlesPath: r.subtitlesPath,
-            metadataPath: r.metadataPath,
-            durationMs: r.durationMs,
-          };
-          return;
-        }
-
-        const r = await run({
-          mode,
-          baseURL,
-          artifactDir: artifactsDir,
-          scenario: fn,
-          ffmpegPath,
-          headless,
-          recordMode,
-        });
-        result = {
-          videoPath: r.videoPath,
-          subtitlesPath: r.subtitlesPath,
-          metadataPath: r.metadataPath,
-          durationMs: r.durationMs,
-        };
-        return;
-      }
-
-      const scenarioFn = scenario === "github" ? githubScenario : basicUiScenario;
-      const r = await run({
-        mode,
+    await withViteIfNeeded(viteRoot, input.baseUrl, async (baseURL) => {
+      const r = await run(config, scenarioFn, {
+        mode: input.mode as Mode,
         baseURL,
         artifactDir: artifactsDir,
-        scenario: scenarioFn,
+        recordMode: input.record as RecordMode,
         ffmpegPath,
         headless,
-        recordMode,
+        display: input.display,
+        displaySize: input.displaySize,
+        screenIndex: input.screenIndex,
+        debugOverlay: Boolean(input.debugOverlay),
       });
       result = {
         videoPath: r.videoPath,
@@ -290,4 +233,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

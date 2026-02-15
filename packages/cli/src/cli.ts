@@ -1,20 +1,35 @@
 #!/usr/bin/env node
 /**
- * @description Browser2Video CLI.
+ * @description Browser2Video CLI — yargs-based command parser.
+ * Commands: run <file>, list [dir], doctor.
+ * Scenarios are loaded dynamically from files (no hardcoded names).
  */
-import { Command } from "commander";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createServer, type ViteDevServer } from "vite";
-import { run, runCollab, type Mode, type NarrationOptions } from "@browser2video/runner";
-import { basicUiScenario, collabScenario, githubScenario, kanbanScenario, tuiTerminalsScenario, consoleLogsScenario } from "@browser2video/scenarios";
+import yargs, { type Argv } from "yargs";
+import { hideBin } from "yargs/helpers";
+import { run } from "@browser2video/runner";
+import type {
+  ScenarioConfig,
+  ScenarioContext,
+  RunOptions,
+  Mode,
+  NarrationOptions,
+} from "@browser2video/runner";
 
-type ScenarioName = "basic-ui" | "collab" | "github" | "kanban" | "tui-terminals" | "console-logs";
-type RecordMode = "none" | "screencast" | "screen";
+// ---------------------------------------------------------------------------
+//  Paths
+// ---------------------------------------------------------------------------
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
-const demoRoot = path.join(repoRoot, "apps", "demo");
+const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
+
+// ---------------------------------------------------------------------------
+//  Helpers
+// ---------------------------------------------------------------------------
 
 function isoStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -29,6 +44,10 @@ async function getFfmpegPath(): Promise<string | undefined> {
   }
 }
 
+/**
+ * Start a Vite dev server when a scenario declares `server.type === "vite"`,
+ * unless the caller already passed a --base-url.
+ */
 async function withViteIfNeeded(
   viteRoot: string | null,
   baseUrlFromArgs: string | undefined,
@@ -52,221 +71,277 @@ async function withViteIfNeeded(
     });
     await server.listen();
     const info = server.resolvedUrls!;
-    const baseURL = info.local[0]?.replace(/\/$/, "") ?? "http://localhost:5173";
+    const baseURL =
+      info.local[0]?.replace(/\/$/, "") ?? "http://localhost:5173";
     await fn(baseURL);
   } finally {
     await server?.close();
   }
 }
 
-async function loadScenarioFromFile(opts: {
-  scenarioFile: string;
-  exportName?: string;
-}): Promise<unknown> {
-  const abs = path.isAbsolute(opts.scenarioFile)
-    ? opts.scenarioFile
-    : path.resolve(process.cwd(), opts.scenarioFile);
-  const mod: any = await import(pathToFileURL(abs).href);
-  const exportName = (opts.exportName ?? "").trim();
-  const candidates = exportName
-    ? [exportName]
-    : ["default", "scenario", "basicUiScenario", "collabScenario"];
-  for (const name of candidates) {
-    const v = name === "default" ? mod?.default : mod?.[name];
-    if (typeof v === "function") return v;
+/**
+ * Dynamically import a scenario file and extract `config` + `default` exports.
+ */
+async function loadScenarioFile(filePath: string): Promise<{
+  config: ScenarioConfig;
+  scenarioFn: (ctx: ScenarioContext) => Promise<void>;
+}> {
+  const abs = path.isAbsolute(filePath)
+    ? filePath
+    : path.resolve(process.cwd(), filePath);
+
+  if (!fs.existsSync(abs)) {
+    throw new Error(`Scenario file not found: ${abs}`);
   }
-  throw new Error(
-    `Scenario module did not export a function. Tried: ${candidates.join(", ")}`,
-  );
+
+  const mod: any = await import(pathToFileURL(abs).href);
+
+  const scenarioFn: ((ctx: ScenarioContext) => Promise<void>) | undefined =
+    typeof mod.default === "function"
+      ? mod.default
+      : typeof mod.scenario === "function"
+        ? mod.scenario
+        : undefined;
+
+  if (!scenarioFn) {
+    throw new Error(
+      `Scenario file does not export a default or "scenario" function: ${abs}`,
+    );
+  }
+
+  // If the file exports a config, use it.
+  // Otherwise fall back to a sensible default (single browser pane + vite).
+  const config: ScenarioConfig = mod.config ?? {
+    server: { type: "vite" as const, root: path.join(repoRoot, "apps", "demo") },
+    panes: [{ id: "main", type: "browser" as const, path: "/" }],
+  };
+
+  return { config, scenarioFn };
 }
 
-const program = new Command();
+// ---------------------------------------------------------------------------
+//  Shared CLI options (used by `run`)
+// ---------------------------------------------------------------------------
 
-program
-  .name("b2v")
-  .description("Run E2E scenarios and record video proofs.")
-  .addHelpText(
-    "after",
-    `
-Examples:
-  b2v list-scenarios
-  b2v run --scenario basic-ui --mode human --record screencast --headed
-  b2v run --scenario collab --mode human --record screen --headed --display-size 2560x720
-  b2v run --scenario basic-ui --mode fast --record none
-  b2v run --scenario kanban --mode human --record screencast --headed --narrate --voice nova
-`,
-  );
+function addRunOptions<T>(yarg: Argv<T>) {
+  return yarg
+    .option("mode", {
+      alias: "m",
+      type: "string",
+      choices: ["human", "fast"] as const,
+      default: "human" as const,
+      describe: "Execution speed mode",
+    })
+    .option("record", {
+      alias: "r",
+      type: "string",
+      choices: ["none", "screencast", "screen"] as const,
+      default: "screencast" as const,
+      describe: "Recording mode",
+    })
+    .option("artifacts", {
+      type: "string",
+      describe: "Artifacts output directory",
+    })
+    .option("base-url", {
+      type: "string",
+      describe: "Use an existing server instead of starting one",
+    })
+    .option("headed", {
+      type: "boolean",
+      describe: "Force headed browser",
+    })
+    .option("headless", {
+      type: "boolean",
+      describe: "Force headless browser",
+    })
+    .option("display-size", {
+      type: "string",
+      describe: "Linux screen capture display size, e.g. 2560x720",
+    })
+    .option("display", {
+      type: "string",
+      describe: "Linux DISPLAY, e.g. :99",
+    })
+    .option("screen-index", {
+      type: "number",
+      describe: "macOS screen index for avfoundation capture",
+    })
+    .option("debug-overlay", {
+      type: "boolean",
+      default: false,
+      describe: "Show sync debug overlay",
+    })
+    .option("devtools", {
+      type: "boolean",
+      default: false,
+      describe: "Open Chrome DevTools automatically",
+    })
+    .option("narrate", {
+      type: "boolean",
+      describe: "Enable TTS narration (requires OPENAI_API_KEY)",
+    })
+    .option("voice", {
+      type: "string",
+      default: "nova",
+      describe: "OpenAI TTS voice: alloy | echo | fable | onyx | nova | shimmer",
+    })
+    .option("narrate-speed", {
+      type: "number",
+      default: 1.0,
+      describe: "Narration speed 0.25-4.0",
+    });
+}
 
-program
-  .command("list-scenarios")
-  .description("List built-in scenarios.")
-  .action(() => {
-    console.log(["basic-ui", "collab", "github", "kanban", "tui-terminals", "console-logs"].join("\n"));
-  });
+// ---------------------------------------------------------------------------
+//  CLI definition
+// ---------------------------------------------------------------------------
 
-program
-  .command("doctor")
-  .description("Print environment diagnostics and common fixes.")
-  .action(async () => {
+const cli = yargs(hideBin(process.argv))
+  .scriptName("b2v")
+  .usage("$0 <command> [options]")
+  .strict()
+  .demandCommand(1, "Please specify a command: run, list, or doctor")
+  .help();
+
+// ---- run <file> -----------------------------------------------------------
+
+cli.command(
+  "run <file>",
+  "Run a scenario file and optionally record video",
+  (y) => {
+    const withFile = y.positional("file", {
+      type: "string",
+      describe: "Path to a *.scenario.ts file",
+      demandOption: true,
+    });
+    return addRunOptions(withFile);
+  },
+  async (argv) => {
+    const filePath = argv.file as string;
+    const { config, scenarioFn } = await loadScenarioFile(filePath);
+
+    const scenarioLabel = path
+      .basename(filePath)
+      .replace(/\.scenario\.(ts|js|mts|mjs)$/, "");
+
+    const artifactsDir =
+      argv.artifacts ??
+      path.join(repoRoot, "artifacts", `${scenarioLabel}-${isoStamp()}`);
+
+    const ffmpegPath = await getFfmpegPath();
+
+    const headless =
+      typeof argv.headless === "boolean"
+        ? argv.headless
+        : typeof argv.headed === "boolean"
+          ? !argv.headed
+          : undefined;
+
+    const narration: NarrationOptions | undefined = argv.narrate
+      ? {
+          enabled: true,
+          voice: argv.voice as string,
+          speed: argv.narrateSpeed as number,
+        }
+      : undefined;
+
+    // Determine vite root from config when server.type === "vite"
+    const viteRoot =
+      config.server?.type === "vite" ? config.server.root : null;
+
+    await withViteIfNeeded(
+      viteRoot,
+      argv.baseUrl as string | undefined,
+      async (baseURL) => {
+        const runOpts: RunOptions = {
+          mode: argv.mode as Mode,
+          baseURL,
+          artifactDir: artifactsDir,
+          recordMode: argv.record as RunOptions["recordMode"],
+          ffmpegPath,
+          headless,
+          narration,
+          devtools: Boolean(argv.devtools),
+          display: argv.display as string | undefined,
+          displaySize: argv.displaySize as string | undefined,
+          screenIndex: argv.screenIndex as number | undefined,
+          debugOverlay: Boolean(argv.debugOverlay),
+        };
+
+        await run(config, scenarioFn, runOpts);
+      },
+    );
+
+    console.log(`Artifacts: ${artifactsDir}`);
+  },
+);
+
+// ---- list [dir] -----------------------------------------------------------
+
+cli.command(
+  "list [dir]",
+  "List *.scenario.ts files in a directory",
+  (y) =>
+    y.positional("dir", {
+      type: "string",
+      default: defaultScenariosDir,
+      describe: "Directory to scan (default: tests/scenarios)",
+    }),
+  (argv) => {
+    const dir = path.isAbsolute(argv.dir as string)
+      ? (argv.dir as string)
+      : path.resolve(process.cwd(), argv.dir as string);
+
+    if (!fs.existsSync(dir)) {
+      console.error(`Directory not found: ${dir}`);
+      process.exit(1);
+    }
+
+    const files = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".scenario.ts"))
+      .sort();
+
+    if (files.length === 0) {
+      console.log("(no scenario files found)");
+    } else {
+      for (const f of files) {
+        console.log(f);
+      }
+    }
+  },
+);
+
+// ---- doctor ---------------------------------------------------------------
+
+cli.command(
+  "doctor",
+  "Print environment diagnostics and common fixes",
+  () => {},
+  async () => {
     const ffmpeg = await getFfmpegPath();
     console.log(`platform: ${process.platform} ${process.arch}`);
     console.log(`node: ${process.version}`);
-    console.log(`ffmpeg: ${ffmpeg ?? "(not found via @ffmpeg-installer/ffmpeg; will use PATH)"}`);
+    console.log(
+      `ffmpeg: ${ffmpeg ?? "(not found via @ffmpeg-installer/ffmpeg; will use PATH)"}`,
+    );
     if (process.platform === "darwin") {
       console.log(
         "macOS note: screen recording requires Privacy & Security → Screen Recording permission for the app launching ffmpeg.",
       );
     }
     if (process.platform !== "darwin") {
-      console.log("Linux/CI note: screen recording requires DISPLAY (use Xvfb/xvfb-run).");
+      console.log(
+        "Linux/CI note: screen recording requires DISPLAY (use Xvfb/xvfb-run).",
+      );
     }
-  });
+  },
+);
 
-program
-  .command("run")
-  .description("Run a scenario in human or fast mode, optionally recording a video.")
-  .option("--scenario <name>", "Scenario name: basic-ui | collab | github")
-  .option("--scenario-file <path>", "Path to a TS/JS module exporting a scenario function")
-  .option("--scenario-export <name>", "Which export to use from --scenario-file (default: auto)")
-  .option("--scenario-kind <kind>", "When using --scenario-file: single | collab", "single")
-  .option("--mode <mode>", "Mode: human | fast", "human")
-  .option("--record <mode>", "Record mode: none | screencast | screen", "screencast")
-  .option("--artifacts <dir>", "Artifacts output directory (default: artifacts/<scenario>-<timestamp>)")
-  .option("--base-url <url>", "Use an existing server instead of starting Vite")
-  .option("--headed", "Force headed browser")
-  .option("--headless", "Force headless browser")
-  .option("--display-size <WxH>", "Linux screen capture display size, e.g. 2560x720")
-  .option("--display <DISPLAY>", "Linux DISPLAY, e.g. :99")
-  .option("--screen-index <n>", "macOS screen index for avfoundation capture")
-  .option("--debug-overlay", "Show sync debug overlay in collab scenario", false)
-  .option("--devtools", "Open Chrome DevTools automatically (useful for console-logs scenario)")
-  .option("--narrate", "Enable TTS narration (requires OPENAI_API_KEY)")
-  .option("--voice <voice>", "OpenAI TTS voice: alloy | echo | fable | onyx | nova | shimmer", "nova")
-  .option("--narrate-speed <n>", "Narration speed 0.25-4.0", "1.0")
-  .action(async (opts) => {
-    const scenario = (opts.scenario as ScenarioName | undefined) ?? undefined;
-    const mode = opts.mode as Mode;
-    const record = opts.record as RecordMode;
-    const scenarioLabelForArtifacts =
-      (opts.scenarioFile ? "custom" : scenario) ?? "custom";
-    const artifactsDir =
-      opts.artifacts ?? path.join(repoRoot, "artifacts", `${scenarioLabelForArtifacts}-${isoStamp()}`);
+// ---- parse & run ----------------------------------------------------------
 
-    const ffmpegPath = await getFfmpegPath();
-
-    const headless =
-      typeof opts.headless === "boolean"
-        ? opts.headless
-        : (typeof opts.headed === "boolean" ? !opts.headed : undefined);
-
-    const useScenarioFile = typeof opts.scenarioFile === "string" && opts.scenarioFile.trim().length > 0;
-    if (!useScenarioFile && !scenario) {
-      throw new Error('Missing scenario. Provide either "--scenario <name>" or "--scenario-file <path>".');
-    }
-
-    // Build narration config
-    const narration: NarrationOptions | undefined = opts.narrate
-      ? {
-          enabled: true,
-          voice: opts.voice,
-          speed: parseFloat(opts.narrateSpeed),
-        }
-      : undefined;
-
-    const scenarioKind = String(opts.scenarioKind ?? "single");
-    // Determine which Vite app to serve (null = no server needed)
-    const viteRoot: string | null = useScenarioFile
-      ? (scenarioKind === "single" || scenarioKind === "collab" ? demoRoot : null)
-      : (scenario === "basic-ui" || scenario === "collab" || scenario === "kanban" || scenario === "tui-terminals" || scenario === "console-logs")
-        ? demoRoot
-        : null;
-
-    await withViteIfNeeded(viteRoot, opts.baseUrl, async (baseURL) => {
-      if (!useScenarioFile && scenario === "collab") {
-        await runCollab({
-          mode,
-          baseURL,
-          artifactDir: artifactsDir,
-          scenario: collabScenario,
-          ffmpegPath,
-          headless,
-          recordMode: record,
-          display: opts.display,
-          displaySize: opts.displaySize,
-          screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
-          bossPath: `/notes?role=boss`,
-          workerPath: `/notes?role=worker`,
-          viewportWidth: 460,
-          debugOverlay: Boolean(opts.debugOverlay),
-          narration,
-        });
-        return;
-      }
-
-      if (useScenarioFile) {
-        const fn = await loadScenarioFromFile({ scenarioFile: opts.scenarioFile, exportName: opts.scenarioExport });
-        if (scenarioKind === "collab") {
-          await runCollab({
-            mode,
-            baseURL,
-            artifactDir: artifactsDir,
-            scenario: fn as any,
-            ffmpegPath,
-            headless,
-            recordMode: record,
-            display: opts.display,
-            displaySize: opts.displaySize,
-            screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
-            bossPath: "/notes?role=boss",
-            workerPath: "/notes?role=worker",
-            captureSelector: '[data-testid="notes-page"]',
-            capturePadding: 24,
-            debugOverlay: Boolean(opts.debugOverlay),
-            narration,
-          });
-          return;
-        }
-
-        await run({
-          mode,
-          baseURL,
-          artifactDir: artifactsDir,
-          scenario: fn as any,
-          ffmpegPath,
-          headless,
-          recordMode: record,
-          narration,
-        });
-        return;
-      }
-
-      const scenarioFn =
-        scenario === "github" ? githubScenario :
-        scenario === "kanban" ? kanbanScenario :
-        scenario === "tui-terminals" ? tuiTerminalsScenario :
-        scenario === "console-logs" ? consoleLogsScenario :
-        basicUiScenario;
-      await run({
-        mode,
-        baseURL,
-        artifactDir: artifactsDir,
-        scenario: scenarioFn,
-        ffmpegPath,
-        headless,
-        recordMode: record,
-        narration,
-        devtools: Boolean(opts.devtools),
-        display: opts.display,
-        displaySize: opts.displaySize,
-        screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
-      });
-    });
-
-    console.log(`Artifacts: ${artifactsDir}`);
-  });
-
-program.parseAsync(process.argv).catch((err) => {
+cli.parseAsync().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 });
-

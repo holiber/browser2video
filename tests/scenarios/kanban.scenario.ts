@@ -3,20 +3,27 @@
  * lifecycle of a task: creation, progression through columns, and release.
  * Uses the local kanban-demo app with data-testid selectors.
  */
-import type { ScenarioContext } from "@browser2video/runner";
+import type { ScenarioConfig, ScenarioContext } from "@browser2video/runner";
+
+export const config: ScenarioConfig = {
+  server: { type: "vite", root: "apps/demo" },
+  panes: [{ id: "main", type: "browser", path: "/kanban" }],
+};
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-export async function kanbanScenario(ctx: ScenarioContext) {
-  const { step, actor, page, baseURL, audio } = ctx;
+export default async function scenario(ctx: ScenarioContext) {
+  const actor = ctx.actor("main");
+  const page = ctx.page("main");
+  const { baseURL, audio } = ctx;
 
   // ------------------------------------------------------------------
   //  Act 1: Open the board
   // ------------------------------------------------------------------
 
-  await step("Open Kanban board", async () => {
+  await ctx.step("main", "Open Kanban board", async () => {
     await audio.speak(
       "Welcome! In this video we'll walk through a complete task lifecycle " +
       "on a Kanban board, from creation all the way to release.",
@@ -30,7 +37,7 @@ export async function kanbanScenario(ctx: ScenarioContext) {
   //  Act 2: Create tasks in Backlog
   // ------------------------------------------------------------------
 
-  await step("Create task: Implement user authentication", async () => {
+  await ctx.step("main", "Create task: Implement user authentication", async () => {
     await audio.speak(
       "Let's create our first task. We'll add 'Implement user authentication' " +
       "to the Backlog column.",
@@ -38,14 +45,14 @@ export async function kanbanScenario(ctx: ScenarioContext) {
     await addCard(ctx, "backlog", "Implement user authentication");
   });
 
-  await step("Create task: Write API tests", async () => {
+  await ctx.step("main", "Create task: Write API tests", async () => {
     await audio.speak(
       "And let's add another task for writing the API test suite.",
     );
     await addCard(ctx, "backlog", "Write API tests");
   });
 
-  await step("Create task: Update documentation", async () => {
+  await ctx.step("main", "Create task: Update documentation", async () => {
     await audio.speak(
       "One more task: updating the project documentation.",
     );
@@ -56,28 +63,28 @@ export async function kanbanScenario(ctx: ScenarioContext) {
   //  Act 3: Task lifecycle — move first task through all columns
   // ------------------------------------------------------------------
 
-  await step("Start work on authentication task", async () => {
+  await ctx.step("main", "Start work on authentication task", async () => {
     await audio.speak(
       "A developer picks up the authentication task and moves it to In Progress.",
     );
     await dragCardToColumn(ctx, "Implement user authentication", "in-progress");
   });
 
-  await step("Submit authentication for code review", async () => {
+  await ctx.step("main", "Submit authentication for code review", async () => {
     await audio.speak(
       "After completing the implementation, the task moves to Code Review.",
     );
     await dragCardToColumn(ctx, "Implement user authentication", "code-review");
   });
 
-  await step("Code review approved", async () => {
+  await ctx.step("main", "Code review approved", async () => {
     await audio.speak(
       "The code review passes — the task is now Done.",
     );
     await dragCardToColumn(ctx, "Implement user authentication", "done");
   });
 
-  await step("Release authentication feature", async () => {
+  await ctx.step("main", "Release authentication feature", async () => {
     await audio.speak(
       "After deployment, we move the task to Released. " +
       "That completes the full lifecycle of our first task.",
@@ -89,18 +96,18 @@ export async function kanbanScenario(ctx: ScenarioContext) {
   //  Act 4: Move second task through the pipeline
   // ------------------------------------------------------------------
 
-  await step("Start work on API tests", async () => {
+  await ctx.step("main", "Start work on API tests", async () => {
     await audio.speak(
       "Now let's move the API tests task through the pipeline.",
     );
     await dragCardToColumn(ctx, "Write API tests", "in-progress");
   });
 
-  await step("Submit API tests for review", async () => {
+  await ctx.step("main", "Submit API tests for review", async () => {
     await dragCardToColumn(ctx, "Write API tests", "code-review");
   });
 
-  await step("API tests review approved", async () => {
+  await ctx.step("main", "API tests review approved", async () => {
     await dragCardToColumn(ctx, "Write API tests", "done");
   });
 
@@ -108,7 +115,7 @@ export async function kanbanScenario(ctx: ScenarioContext) {
   //  Act 5: Closing
   // ------------------------------------------------------------------
 
-  await step("Summary", async () => {
+  await ctx.step("main", "Summary", async () => {
     await audio.speak(
       "And there you have it — a complete Kanban workflow demonstrating " +
       "how tasks flow from Backlog through development, code review, " +
@@ -124,7 +131,7 @@ export async function kanbanScenario(ctx: ScenarioContext) {
 // ---------------------------------------------------------------------------
 
 async function addCard(ctx: ScenarioContext, columnId: string, title: string) {
-  const { actor, page } = ctx;
+  const actor = ctx.actor("main");
 
   // Click the "+ New card" button
   await actor.click(`[data-testid="add-card-btn-${columnId}"]`);
@@ -144,7 +151,8 @@ async function dragCardToColumn(
   cardTitle: string,
   toColumnId: string,
 ) {
-  const { actor, page } = ctx;
+  const actor = ctx.actor("main");
+  const page = ctx.page("main");
 
   // Find the card element by title text
   const cardEl = await page.evaluateHandle((title: string) => {

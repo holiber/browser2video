@@ -2,8 +2,38 @@
  * @description Collaborative scenario: Boss creates tasks in a shared todo list,
  * Worker marks them completed. Both windows are synced via Automerge.
  */
-import type { CollabScenarioContext } from "@browser2video/runner";
+import type { ScenarioConfig, ScenarioContext } from "@browser2video/runner";
 import type { Page } from "@playwright/test";
+import path from "path";
+
+export const config: ScenarioConfig = {
+  server: { type: "vite", root: "apps/demo" },
+  sync: { type: "automerge" },
+  panes: [
+    {
+      id: "boss",
+      type: "browser",
+      path: "/notes?role=boss",
+      label: "Boss",
+      viewport: { width: 460 },
+    },
+    {
+      id: "worker",
+      type: "browser",
+      path: "/notes?role=worker",
+      label: "Worker",
+      viewport: { width: 460 },
+    },
+    {
+      id: "reviewer",
+      type: "terminal",
+      label: "Reviewer",
+      command: (info) =>
+        `cd ${JSON.stringify(process.cwd())} && npx tsx packages/runner/src/reviewer-cli.ts --ws ${JSON.stringify(info.syncWsUrl ?? "")} --doc ${JSON.stringify(info.docUrl ?? "")} --log ${JSON.stringify(path.join(process.cwd(), "artifacts", "reviewer.log"))}`,
+    },
+  ],
+  layout: "row",
+};
 
 /** The tasks the Boss will create, in order */
 const TASKS = [
@@ -120,31 +150,37 @@ async function waitForApprovedByTitle(page: Page, title: string) {
   );
 }
 
-export async function collabScenario(ctx: CollabScenarioContext) {
-  const {
-    step,
-    actorIds,
-    actorNames,
-    actors,
-    pages,
-    setOverlaySeq,
-    setOverlayApplied,
-    reviewerCmd,
-  } = ctx;
+export default async function scenario(ctx: ScenarioContext) {
+  const creatorId = "boss";
+  const followerId = "worker";
+  const creatorName = "Boss";
+  const followerName = "Worker";
 
-  const [creatorId, followerId] = actorIds;
-  const creatorName = actorNames[creatorId] ?? creatorId;
-  const followerName = actorNames[followerId] ?? followerId;
-
-  const creator = actors[creatorId];
-  const follower = actors[followerId];
-  const creatorPage = pages[creatorId];
-  const followerPage = pages[followerId];
+  const creator = ctx.actor(creatorId);
+  const follower = ctx.actor(followerId);
+  const creatorPage = ctx.page(creatorId);
+  const followerPage = ctx.page(followerId);
   let seq = 0;
+
+  /** Set overlay sequence number on a pane */
+  async function setOverlaySeq(paneId: string, s: number, title: string) {
+    const p = ctx.page(paneId);
+    await p.evaluate(([seqNum, t]: [number, string]) => {
+      (window as any).__b2v_setOverlaySeq?.(seqNum, t);
+    }, [s, title] as [number, string]);
+  }
+
+  /** Set overlay applied status on a pane */
+  async function setOverlayApplied(paneId: string, s: number, title: string) {
+    const p = ctx.page(paneId);
+    await p.evaluate(([seqNum, t]: [number, string]) => {
+      (window as any).__b2v_setOverlayApplied?.(seqNum, t);
+    }, [s, title] as [number, string]);
+  }
 
   // Pages are already navigated by the runner (bossPath / workerPath).
   // Verify they loaded correctly.
-  await step("both", "Verify both pages are ready", async () => {
+  await ctx.step("all", "Verify both pages are ready", async () => {
     await creator.waitFor('[data-testid="notes-page"]');
     await follower.waitFor('[data-testid="notes-page"]');
   });
@@ -156,7 +192,7 @@ export async function collabScenario(ctx: CollabScenarioContext) {
   for (let i = 0; i < TASKS.length; i++) {
     const taskTitle = TASKS[i];
 
-    await step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
+    await ctx.step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
       seq += 1;
       await creator.type('[data-testid="note-input"]', taskTitle);
       await sleep(160);
@@ -165,7 +201,7 @@ export async function collabScenario(ctx: CollabScenarioContext) {
     });
 
     // Wait for the task to sync to Worker's page
-    await step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
+    await ctx.step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
       await waitForTitle(followerPage, taskTitle);
       await setOverlayApplied(followerId, seq, taskTitle);
       // Small visual pause so viewers can see the sync
@@ -173,30 +209,30 @@ export async function collabScenario(ctx: CollabScenarioContext) {
     });
 
     if (taskTitle === "add new note") {
-      await step("both", 'Reviewer approves "add new note"', async () => {
-        await reviewerCmd('APPROVE "add new note"');
+      await ctx.step("all", 'Reviewer approves "add new note"', async () => {
+        await ctx.terminal("reviewer").send('APPROVE "add new note"');
         await sleep(300);
       });
 
-      await step(creatorId, `${creatorName} sees "add new note" approved`, async () => {
+      await ctx.step(creatorId, `${creatorName} sees "add new note" approved`, async () => {
         await waitForApprovedByTitle(creatorPage, "add new note");
         await sleep(200);
       });
 
-      await step(followerId, `${followerName} sees "add new note" approved`, async () => {
+      await ctx.step(followerId, `${followerName} sees "add new note" approved`, async () => {
         await waitForApprovedByTitle(followerPage, "add new note");
         await sleep(200);
       });
     }
 
-    await step(followerId, `${followerName} marks "${taskTitle}" completed`, async () => {
+    await ctx.step(followerId, `${followerName} marks "${taskTitle}" completed`, async () => {
       const idx = await getIndexByTitle(followerPage, taskTitle);
       if (idx < 0) throw new Error(`${followerName}: could not find task "${taskTitle}" to complete`);
       await follower.click(`[data-testid="note-check-${idx}"]`);
     });
 
     // Wait for the completion to sync back to Boss
-    await step(creatorId, `${creatorName} sees "${taskTitle}" completed`, async () => {
+    await ctx.step(creatorId, `${creatorName} sees "${taskTitle}" completed`, async () => {
       await waitForCompletedByTitle(creatorPage, taskTitle);
       await sleep(300);
     });
@@ -209,7 +245,7 @@ export async function collabScenario(ctx: CollabScenarioContext) {
   for (let i = 0; i < EXTRA_TASKS.length; i++) {
     const taskTitle = EXTRA_TASKS[i];
 
-    await step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
+    await ctx.step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
       seq += 1;
       await creator.type('[data-testid="note-input"]', taskTitle);
       await sleep(160);
@@ -218,7 +254,7 @@ export async function collabScenario(ctx: CollabScenarioContext) {
     });
 
     // Wait for the task to sync to Worker
-    await step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
+    await ctx.step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
       await waitForTitle(followerPage, taskTitle);
       await setOverlayApplied(followerId, seq, taskTitle);
       await sleep(300);
@@ -237,7 +273,7 @@ export async function collabScenario(ctx: CollabScenarioContext) {
   //   4: create schemas
   //
   // Reorder demo: swap so write tests becomes above deploy.
-  await step(creatorId, `${creatorName} moves "write tests" above "deploy"`, async () => {
+  await ctx.step(creatorId, `${creatorName} moves "write tests" above "deploy"`, async () => {
     const idxWriteTests = await getIndexByTitle(creatorPage, "write tests");
     const idxDeploy = await getIndexByTitle(creatorPage, "deploy");
     if (idxWriteTests < 0 || idxDeploy < 0) {
@@ -255,13 +291,13 @@ export async function collabScenario(ctx: CollabScenarioContext) {
   //  4b. Boss deletes "edit note" (index 2, a completed item)
   // ------------------------------------------------------------------
 
-  await step(creatorId, `${creatorName} deletes "edit note"`, async () => {
+  await ctx.step(creatorId, `${creatorName} deletes "edit note"`, async () => {
     const idx = await getIndexByTitle(creatorPage, "edit note");
     if (idx < 0) throw new Error('Boss: could not find "edit note" to delete');
     await creator.click(`[data-testid="note-delete-${idx}"]`);
   });
 
-  await step(followerId, `${followerName} sees "edit note" disappear`, async () => {
+  await ctx.step(followerId, `${followerName} sees "edit note" disappear`, async () => {
     await waitForTitleGone(followerPage, "edit note");
     await sleep(300);
   });
@@ -281,7 +317,7 @@ export async function collabScenario(ctx: CollabScenarioContext) {
     "create schemas",
   ];
 
-  await step("both", `Verify all items are in the right order (${creatorName})`, async () => {
+  await ctx.step("all", `Verify all items are in the right order (${creatorName})`, async () => {
     const creatorOrder = await creatorPage.evaluate(() => {
       const doc = (globalThis as any).document;
       const items = doc.querySelectorAll('[data-testid^="note-title-"]');
@@ -305,7 +341,7 @@ export async function collabScenario(ctx: CollabScenarioContext) {
     console.log(`    ${creatorName}: all ${expectedOrder.length} items in correct order`);
   });
 
-  await step("both", `Verify all items are in the right order (${followerName})`, async () => {
+  await ctx.step("all", `Verify all items are in the right order (${followerName})`, async () => {
     const followerOrder = await followerPage.evaluate(() => {
       const doc = (globalThis as any).document;
       const items = doc.querySelectorAll('[data-testid^="note-title-"]');
