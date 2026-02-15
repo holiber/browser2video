@@ -5,4 +5,5 @@ export * from "./runner.js";
 export * from "./collab-runner.js";
 export * from "./window-layout.js";
 export * from "./narrator.js";
+export * from "./screen-capture.js";
 

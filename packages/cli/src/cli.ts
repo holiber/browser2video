@@ -7,15 +7,14 @@ import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createServer, type ViteDevServer } from "vite";
 import { run, runCollab, type Mode, type NarrationOptions } from "@browser2video/runner";
-import { basicUiScenario, collabScenario, githubScenario, kanbanScenario, tuiTerminalsScenario } from "@browser2video/scenarios";
+import { basicUiScenario, collabScenario, githubScenario, kanbanScenario, tuiTerminalsScenario, consoleLogsScenario, startTerminalWsServer } from "@browser2video/scenarios";
 
-type ScenarioName = "basic-ui" | "collab" | "github" | "kanban" | "tui-terminals";
+type ScenarioName = "basic-ui" | "collab" | "github" | "kanban" | "tui-terminals" | "console-logs";
 type RecordMode = "none" | "screencast" | "screen";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const demoRoot = path.join(repoRoot, "apps", "demo");
-const kanbanDemoRoot = path.join(repoRoot, "apps", "kanban-demo");
 
 function isoStamp() {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -102,7 +101,7 @@ program
   .command("list-scenarios")
   .description("List built-in scenarios.")
   .action(() => {
-    console.log(["basic-ui", "collab", "github", "kanban", "tui-terminals"].join("\n"));
+    console.log(["basic-ui", "collab", "github", "kanban", "tui-terminals", "console-logs"].join("\n"));
   });
 
 program
@@ -140,6 +139,7 @@ program
   .option("--display <DISPLAY>", "Linux DISPLAY, e.g. :99")
   .option("--screen-index <n>", "macOS screen index for avfoundation capture")
   .option("--debug-overlay", "Show sync debug overlay in collab scenario", false)
+  .option("--devtools", "Open Chrome DevTools automatically (useful for console-logs scenario)")
   .option("--narrate", "Enable TTS narration (requires OPENAI_API_KEY)")
   .option("--voice <voice>", "OpenAI TTS voice: alloy | echo | fable | onyx | nova | shimmer", "nova")
   .option("--narrate-speed <n>", "Narration speed 0.25-4.0", "1.0")
@@ -177,32 +177,34 @@ program
     // Determine which Vite app to serve (null = no server needed)
     const viteRoot: string | null = useScenarioFile
       ? (scenarioKind === "single" || scenarioKind === "collab" ? demoRoot : null)
-      : scenario === "kanban"
-        ? kanbanDemoRoot
-        : (scenario === "basic-ui" || scenario === "collab" || scenario === "tui-terminals")
-          ? demoRoot
-          : null;
+      : (scenario === "basic-ui" || scenario === "collab" || scenario === "kanban" || scenario === "tui-terminals" || scenario === "console-logs")
+        ? demoRoot
+        : null;
 
     await withViteIfNeeded(viteRoot, opts.baseUrl, async (baseURL) => {
       if (!useScenarioFile && scenario === "collab") {
-        await runCollab({
-          mode,
-          baseURL,
-          artifactDir: artifactsDir,
-          scenario: collabScenario,
-          ffmpegPath,
-          headless,
-          recordMode: record,
-          display: opts.display,
-          displaySize: opts.displaySize,
-          screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
-          bossPath: "/notes?role=boss",
-          workerPath: "/notes?role=worker",
-          captureSelector: '[data-testid="notes-page"]',
-          capturePadding: 24,
-          debugOverlay: Boolean(opts.debugOverlay),
-          narration,
-        });
+        const termServer = await startTerminalWsServer();
+        const termWs = encodeURIComponent(termServer.baseWsUrl);
+        try {
+          await runCollab({
+            mode,
+            baseURL,
+            artifactDir: artifactsDir,
+            scenario: collabScenario,
+            ffmpegPath,
+            headless,
+            recordMode: record,
+            display: opts.display,
+            displaySize: opts.displaySize,
+            screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
+            bossPath: `/notes?role=boss&termWs=${termWs}`,
+            workerPath: `/notes?role=worker&termWs=${termWs}`,
+            debugOverlay: Boolean(opts.debugOverlay),
+            narration,
+          });
+        } finally {
+          await termServer.close();
+        }
         return;
       }
 
@@ -247,6 +249,7 @@ program
         scenario === "github" ? githubScenario :
         scenario === "kanban" ? kanbanScenario :
         scenario === "tui-terminals" ? tuiTerminalsScenario :
+        scenario === "console-logs" ? consoleLogsScenario :
         basicUiScenario;
       await run({
         mode,
@@ -257,6 +260,10 @@ program
         headless,
         recordMode: record,
         narration,
+        devtools: Boolean(opts.devtools),
+        display: opts.display,
+        displaySize: opts.displaySize,
+        screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
       });
     });
 

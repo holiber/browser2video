@@ -16,9 +16,13 @@
     "e2e:github:human": "pnpm b2v run --scenario github --mode human --record screencast --headed",
     "e2e:kanban": "bash scripts/run-kanban.sh",
     "e2e:collab:auto": "bash scripts/run-collab-auto.sh",
-    "e2e:collab:docker": "bash scripts/run-collab-docker.sh"
+    "e2e:collab:docker": "bash scripts/run-collab-docker.sh",
+    "demo": "pnpm -C apps/demo dev",
+    "test:e2e": "pnpm build && npx playwright test",
+    "test:e2e:ui": "pnpm build && npx playwright test --ui"
   },
   "devDependencies": {
+    "@playwright/test": "^1.50.0",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "~5.7.0"
@@ -27,7 +31,7 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "node-pty",
-      "puppeteer",
+      "playwright",
       "@ffmpeg-installer/darwin-arm64",
       "@ffmpeg-installer/linux-x64",
       "@ffmpeg-installer/linux-arm64"

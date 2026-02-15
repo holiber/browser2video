@@ -1,6 +1,6 @@
 /**
- * @description Minimal Kanban board for narrated video demos.
- * Uses pointer events for drag-and-drop (works with Puppeteer mouse simulation).
+ * @description Kanban board page for narrated video demos.
+ * Uses pointer events for drag-and-drop (works with Playwright mouse simulation).
  * All interactive elements have data-testid attributes for reliable automation.
  */
 import { useState, useRef, useCallback, useEffect } from "react";
@@ -42,7 +42,7 @@ function nextCardId() {
 //  Component
 // ---------------------------------------------------------------------------
 
-export function KanbanBoard() {
+export default function KanbanPage() {
   const [columns, setColumns] = useState<Column[]>(INITIAL_COLUMNS);
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [newCardTitle, setNewCardTitle] = useState("");
@@ -122,7 +122,6 @@ export function KanbanBoard() {
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!dragCardId) return;
-      // Detect which column we're hovering over
       const board = boardRef.current;
       if (!board) return;
       const cols = board.querySelectorAll<HTMLElement>("[data-column-id]");
@@ -146,7 +145,6 @@ export function KanbanBoard() {
       return;
     }
 
-    // Move card to target column
     setColumns((prev) => {
       let card: Card | undefined;
       const next = prev.map((col) => {
@@ -182,28 +180,24 @@ export function KanbanBoard() {
     <div
       data-testid="kanban-board"
       ref={boardRef}
-      className="flex h-screen flex-col"
+      className="flex h-[calc(100vh-3rem)] flex-col"
       onPointerMove={handlePointerMove}
     >
-      {/* Header */}
-      <header
+      {/* Board header */}
+      <div
         data-testid="kanban-header"
         className="flex items-center gap-3 border-b px-6 py-3"
-        style={{ borderColor: "var(--border)" }}
       >
-        <div
-          className="flex h-8 w-8 items-center justify-center rounded-lg text-sm font-bold"
-          style={{ background: "var(--accent)", color: "#fff" }}
-        >
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-bold text-accent-foreground">
           K
         </div>
         <h1 className="text-lg font-semibold">Kanban Board</h1>
-        <span className="text-sm" style={{ color: "var(--text-muted)" }}>
+        <span className="text-sm text-muted-foreground">
           Task Lifecycle Demo
         </span>
-      </header>
+      </div>
 
-      {/* Board */}
+      {/* Board columns */}
       <div className="flex flex-1 gap-4 overflow-x-auto p-6">
         {columns.map((col) => (
           <div
@@ -215,11 +209,11 @@ export function KanbanBoard() {
               borderColor:
                 dragOverCol === col.id && dragCardId
                   ? col.color
-                  : "var(--border)",
+                  : undefined,
               background:
                 dragOverCol === col.id && dragCardId
-                  ? "var(--bg-drop)"
-                  : "var(--bg-column)",
+                  ? "var(--kanban-bg-drop)"
+                  : "var(--kanban-bg-column)",
             }}
           >
             {/* Column header */}
@@ -236,8 +230,7 @@ export function KanbanBoard() {
               </h2>
               <span
                 data-testid={`column-count-${col.id}`}
-                className="ml-auto text-xs"
-                style={{ color: "var(--text-muted)" }}
+                className="ml-auto text-xs text-muted-foreground"
               >
                 {col.cards.length}
               </span>
@@ -258,12 +251,12 @@ export function KanbanBoard() {
                   style={{
                     borderColor:
                       dragCardId === card.id
-                        ? "var(--accent)"
-                        : "var(--border)",
+                        ? "var(--kanban-accent)"
+                        : undefined,
                     background:
                       dragCardId === card.id
-                        ? "var(--bg-hover)"
-                        : "var(--bg-card)",
+                        ? "var(--kanban-bg-hover)"
+                        : "var(--kanban-bg-card)",
                     opacity: dragCardId === card.id ? 0.6 : 1,
                   }}
                 >
@@ -287,9 +280,7 @@ export function KanbanBoard() {
                     }}
                     className="rounded-lg border px-3 py-2 text-sm outline-none"
                     style={{
-                      borderColor: "var(--border)",
-                      background: "var(--bg-card)",
-                      color: "var(--text)",
+                      background: "var(--kanban-bg-card)",
                     }}
                   />
                   <div className="flex gap-2">
@@ -297,15 +288,14 @@ export function KanbanBoard() {
                       data-testid={`add-card-confirm-${col.id}`}
                       onClick={confirmAdd}
                       className="rounded-lg px-3 py-1.5 text-xs font-medium text-white transition-colors"
-                      style={{ background: "var(--accent)" }}
+                      style={{ background: "var(--kanban-accent)" }}
                     >
                       Add Card
                     </button>
                     <button
                       data-testid={`add-card-cancel-${col.id}`}
                       onClick={cancelAdd}
-                      className="rounded-lg px-3 py-1.5 text-xs transition-colors"
-                      style={{ color: "var(--text-muted)" }}
+                      className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors"
                     >
                       Cancel
                     </button>
@@ -315,14 +305,7 @@ export function KanbanBoard() {
                 <button
                   data-testid={`add-card-btn-${col.id}`}
                   onClick={() => startAdd(col.id)}
-                  className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm transition-colors"
-                  style={{ color: "var(--text-muted)" }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.background = "var(--bg-hover)")
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.background = "transparent")
-                  }
+                  className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/30"
                 >
                   <span className="text-base leading-none">+</span> New card
                 </button>

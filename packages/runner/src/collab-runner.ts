@@ -1,13 +1,9 @@
 /**
  * @description Multi-page scenario runner for collaborative (two-window) demos.
- * Launches one Puppeteer browser with two pages, records each via screencast,
+ * Launches one Playwright browser with two contexts, records each via Playwright video,
  * then composites them side-by-side into a single video using ffmpeg hstack.
  */
-import puppeteer, {
-  type Browser,
-  type Page,
-  type ScreenRecorder,
-} from "puppeteer";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import path from "path";
 import fs from "fs";
 import { execFileSync, spawn, spawnSync } from "child_process";
@@ -23,6 +19,13 @@ import {
   type RunResult,
 } from "./runner.js";
 import { tryTileHorizontally } from "./window-layout.js";
+import {
+  tryParseDisplaySize as _tryParseDisplaySize,
+  tryGetMacMainDisplayPixels as _tryGetMacMainDisplayPixels,
+  probeDurationSeconds as _probeDurationSeconds,
+  probeFrameCount as _probeFrameCount,
+  startScreenCapture,
+} from "./screen-capture.js";
 import {
   type NarrationOptions,
   type AudioDirectorAPI,
@@ -162,24 +165,7 @@ function tryGetMacDesktopBounds():
   }
 }
 
-function tryGetMacMainDisplayPixels(): { width: number; height: number } | null {
-  if (process.platform !== "darwin") return null;
-  try {
-    const out = execFileSync("system_profiler", ["SPDisplaysDataType"], { stdio: "pipe" })
-      .toString("utf-8");
-    // Example lines:
-    //   Resolution: 3456 x 2234
-    //   UI Looks like: 1728 x 1117
-    const m = out.match(/Resolution:\s*(\d+)\s*x\s*(\d+)/);
-    if (!m) return null;
-    const width = parseInt(m[1], 10);
-    const height = parseInt(m[2], 10);
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
-    return { width, height };
-  } catch {
-    return null;
-  }
-}
+const tryGetMacMainDisplayPixels = _tryGetMacMainDisplayPixels;
 
 function tryGetMacMenuBarHeightPts(): number {
   if (process.platform !== "darwin") return 0;
@@ -208,15 +194,7 @@ function roundEven(n: number) {
   return Math.round(n / 2) * 2;
 }
 
-function tryParseDisplaySize(size?: string): { w: number; h: number } | null {
-  if (!size) return null;
-  const m = size.trim().match(/^(\d+)\s*x\s*(\d+)$/i);
-  if (!m) return null;
-  const w = parseInt(m[1], 10);
-  const h = parseInt(m[2], 10);
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
-  return { w, h };
-}
+const tryParseDisplaySize = _tryParseDisplaySize;
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -300,7 +278,7 @@ async function startSyncServer(opts: { artifactDir: string }): Promise<{ wsUrl: 
 }
 
 async function installSyncOverlay(page: Page, roleLabel: string) {
-  await (page as any).evaluateOnNewDocument((role: string) => {
+  await page.addInitScript((role: string) => {
     (function () {
       const w: any = globalThis as any;
       w.__b2v_role = role;
@@ -372,33 +350,33 @@ async function installSyncOverlay(page: Page, roleLabel: string) {
 }
 
 async function setOverlayEpochAndRole(page: Page, epochMs: number, roleLabel: string) {
-  await page.evaluate((epoch: number, role: string) => {
+  await page.evaluate(([epoch, role]: [number, string]) => {
     const w = globalThis as any;
     w.__b2v_epochMs = epoch;
     w.__b2v_role = role;
-  }, epochMs, roleLabel);
+  }, [epochMs, roleLabel] as [number, string]);
 }
 
 async function setOverlaySeq(page: Page, seq: number, title: string) {
-  await page.evaluate((s: number, t: string) => {
+  await page.evaluate(([s, t]: [number, string]) => {
     const w = globalThis as any;
     w.__b2v_seq = s;
     w.__b2v_seqTitle = t;
-  }, seq, title);
+  }, [seq, title] as [number, string]);
 }
 
 async function setOverlayApplied(page: Page, seq: number, title: string) {
-  await page.evaluate((s: number, t: string) => {
+  await page.evaluate(([s, t]: [number, string]) => {
     const w = globalThis as any;
     w.__b2v_appliedSeq = s;
     w.__b2v_appliedTitle = t;
-  }, seq, title);
+  }, [seq, title] as [number, string]);
 }
 
 /**
  * Single-pass: normalise framerates + composite side-by-side.
  *
- * Uses `setpts=N/60/TB` to assign deterministic PTS by frame index (Puppeteer
+ * Uses `setpts=N/60/TB` to assign deterministic PTS by frame index (Playwright
  * screencast PTS values are unreliable), `fps=60` to regularise the framerate,
  * and `hstack` with `shortest=1` so neither stream outruns the other.
  *
@@ -418,58 +396,8 @@ function probeWidth(videoPath: string, ffmpeg: string): number {
   return match ? parseInt(match[1], 10) : 0;
 }
 
-/**
- * Probe a video file's duration (seconds) using ffmpeg stderr parsing.
- * Returns 0 if probing fails.
- */
-function probeDurationSeconds(videoPath: string, ffmpeg: string): number {
-  const parseHms = (m: RegExpMatchArray) => {
-    const hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    const ss = parseInt(m[3], 10);
-    const fracRaw = m[4];
-    const frac = parseInt(fracRaw, 10) / Math.pow(10, fracRaw.length);
-    return hh * 3600 + mm * 60 + ss + frac;
-  };
-
-  // Fast path: container Duration header (may be N/A for some screencasts)
-  {
-    const res = spawnSync(ffmpeg, ["-i", videoPath], { encoding: "utf-8" });
-    const text = String(res.stderr ?? "") + String(res.stdout ?? "");
-    const m = text.match(/Duration:\s*(\d{2}):(\d{2}):(\d{2})\.(\d+)/);
-    if (m) return parseHms(m);
-  }
-
-  // Fallback: decode to null and parse the final progress `time=...`
-  const res = spawnSync(
-    ffmpeg,
-    ["-hide_banner", "-i", videoPath, "-map", "0:v:0", "-f", "null", "-"],
-    { encoding: "utf-8" },
-  );
-  const text = String(res.stderr ?? "") + String(res.stdout ?? "");
-  const matches = Array.from(text.matchAll(/time=(\d{2}):(\d{2}):(\d{2})\.(\d+)/g));
-  const last = matches[matches.length - 1];
-  if (!last) return 0;
-  // matchAll includes full match at index 0, groups start at 1
-  return parseHms(last as unknown as RegExpMatchArray);
-}
-
-/**
- * Probe a video's decoded frame count by decoding to null and parsing ffmpeg progress.
- * Returns 0 if probing fails.
- */
-function probeFrameCount(videoPath: string, ffmpeg: string): number {
-  const res = spawnSync(
-    ffmpeg,
-    ["-hide_banner", "-i", videoPath, "-map", "0:v:0", "-f", "null", "-"],
-    { encoding: "utf-8" },
-  );
-  const text = String(res.stderr ?? "") + String(res.stdout ?? "");
-  const matches = Array.from(text.matchAll(/frame=\s*([0-9]+)/g));
-  const last = matches[matches.length - 1];
-  if (!last) return 0;
-  return parseInt(last[1], 10);
-}
+const probeDurationSeconds = _probeDurationSeconds;
+const probeFrameCount = _probeFrameCount;
 
 function composeSideBySide(
   leftPath: string,
@@ -482,7 +410,7 @@ function composeSideBySide(
 ): void {
   // If crop is requested, scale CSS pixels to actual video pixels by probing
   // the raw video dimensions.  On Retina Macs the screencast captures at 2x
-  // even when Puppeteer sets deviceScaleFactor to 1.
+  // even when Playwright sets deviceScaleFactor to 1.
   let cropFilter = "";
   if (cssCrop) {
     const actualW = probeWidth(leftPath, ffmpeg);
@@ -585,7 +513,8 @@ function composeSideBySide(
   if (outDur > 0) console.log(`  Output duration: ${outDur.toFixed(2)}s`);
 }
 
-async function runFfmpegScreenRecording(opts: {
+/** @deprecated Use startScreenCapture from screen-capture.ts — this is a thin wrapper for backward compat */
+const runFfmpegScreenRecording = (opts: {
   ffmpeg: string;
   outputPath: string;
   fps: number;
@@ -594,189 +523,7 @@ async function runFfmpegScreenRecording(opts: {
   display?: string;
   displaySize?: string;
   crop?: { x: number; y: number; w: number; h: number };
-}): Promise<{ stop: () => Promise<void> }> {
-  const { ffmpeg, outputPath, fps, screenIndex, display, displaySize, crop } = opts;
-
-  const args: string[] = ["-y"];
-  if (process.platform === "darwin") {
-    // macOS: avfoundation screen capture
-    const idx = screenIndex;
-    if (typeof idx !== "number") {
-      throw new Error(
-        "screen recording on macOS requires --screen-index. " +
-        "Run: ffmpeg -f avfoundation -list_devices true -i \"\"",
-      );
-    }
-    args.push("-f", "avfoundation", "-framerate", String(fps), "-i", `${idx}:none`);
-  } else if (process.platform === "win32") {
-    // Windows: gdigrab
-    const size = displaySize ?? "1920x1080";
-    args.push(
-      "-thread_queue_size",
-      "1024",
-      "-rtbufsize",
-      "512M",
-      "-use_wallclock_as_timestamps",
-      "1",
-      "-f",
-      "gdigrab",
-      "-video_size",
-      size,
-      "-framerate",
-      String(fps),
-      "-i",
-      "desktop",
-    );
-  } else {
-    // Linux: x11grab
-    const disp = display ?? process.env.DISPLAY;
-    if (!disp) {
-      throw new Error("screen recording on Linux requires DISPLAY (e.g. run via xvfb-run).");
-    }
-    const size = displaySize ?? "1920x1080";
-    // Input options must appear *before* -i to apply to the grab device.
-    args.push(
-      "-thread_queue_size",
-      "1024",
-      "-rtbufsize",
-      "512M",
-      "-use_wallclock_as_timestamps",
-      "1",
-      "-f",
-      "x11grab",
-      "-video_size",
-      size,
-      "-framerate",
-      String(fps),
-      "-i",
-      `${disp}.0`,
-    );
-  }
-
-  const vfParts: string[] = [];
-  if (crop && process.platform === "darwin") {
-    vfParts.push(`crop=${crop.w}:${crop.h}:${crop.x}:${crop.y}`);
-  }
-  // On Linux, prefer trusting x11grab timestamps and enforce CFR at the muxer level.
-  if (process.platform === "darwin") {
-    vfParts.push(`fps=${fps}`);
-  }
-  vfParts.push("format=yuv420p");
-
-  // Encode: smooth CFR; on macOS prefer hardware encode for performance.
-  if (process.platform === "darwin") {
-    args.push(
-      "-vf",
-      vfParts.join(","),
-      "-c:v",
-      "h264_videotoolbox",
-      "-r",
-      String(fps),
-      "-vsync",
-      "cfr",
-      "-b:v",
-      "10M",
-      "-maxrate",
-      "12M",
-      "-bufsize",
-      "20M",
-      "-pix_fmt",
-      "yuv420p",
-      "-movflags",
-      "+faststart",
-      outputPath,
-    );
-  } else {
-    const size = tryParseDisplaySize(displaySize);
-    const canForceLevel42 = (() => {
-      if (!size) return false;
-      // H.264 level 4.2 max macroblocks per second is 522240.
-      const mbW = Math.ceil(size.w / 16);
-      const mbH = Math.ceil(size.h / 16);
-      const mbPerSec = mbW * mbH * fps;
-      return mbPerSec <= 522240;
-    })();
-    args.push(
-      "-vf",
-      vfParts.join(","),
-      "-c:v",
-      "libx264",
-      "-preset",
-      "ultrafast",
-      "-tune",
-      "zerolatency",
-      "-r",
-      String(fps),
-      "-vsync",
-      "cfr",
-      "-crf",
-      "18",
-      "-profile:v",
-      "baseline",
-      ...(canForceLevel42 ? ["-level", "4.2"] : []),
-      "-pix_fmt",
-      "yuv420p",
-      "-movflags",
-      "+faststart",
-      outputPath,
-    );
-  }
-
-  const proc = spawn(ffmpeg, args, { stdio: ["pipe", "ignore", "pipe"] });
-  const startedAt = Date.now();
-
-  let stderrBuf = "";
-  proc.stderr?.on("data", () => {
-    // Keep stderr drained so ffmpeg doesn't block on pipe buffers.
-  });
-  proc.stderr?.on("data", (chunk) => {
-    stderrBuf += String(chunk);
-    // Cap buffer to last ~32KB
-    if (stderrBuf.length > 32768) stderrBuf = stderrBuf.slice(-32768);
-  });
-
-  if (proc.exitCode !== null) {
-    throw new Error("ffmpeg screen recorder exited immediately");
-  }
-
-  console.log(`  Screen recording started (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
-
-  const stop = async () => {
-    const t0 = Date.now();
-    // Prefer graceful stop (finalizes MP4 atom reliably)
-    try {
-      proc.stdin?.write("q");
-      proc.stdin?.end();
-    } catch {
-      // fallback to SIGINT below
-    }
-    // Wait a bit for graceful quit; interrupt only if still running.
-    const exited = await Promise.race([
-      new Promise<boolean>((resolve) => proc.once("exit", () => resolve(true))),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2500)),
-    ]);
-    if (!exited) {
-      try { proc.kill("SIGINT"); } catch { /* ignore */ }
-      await new Promise<void>((resolve) => proc.once("exit", () => resolve()));
-    }
-    console.log(`  Screen recording stopped (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-
-    // Validate output: ensure it has actual frames.
-    const frames = probeFrameCount(outputPath, ffmpeg);
-    if (frames <= 0) {
-      const hint =
-        process.platform === "darwin"
-          ? "On macOS you must grant Screen Recording permission to the app launching ffmpeg (Cursor/Terminal) in System Settings → Privacy & Security → Screen Recording."
-          : "On Linux you must run under Xvfb and set DISPLAY (e.g. via xvfb-run).";
-      throw new Error(
-        `FFmpeg screen capture produced no frames (output has no video stream). ${hint}\n` +
-        `Last ffmpeg logs:\n${stderrBuf}`.trim(),
-      );
-    }
-  };
-
-  return { stop };
-}
+}) => startScreenCapture(opts);
 
 // ---------------------------------------------------------------------------
 //  Runner
@@ -911,37 +658,47 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
   };
 
   // Launch browser
-  const browser: Browser = await puppeteer.launch({
+  const isScreencast = recordMode === "screencast";
+  const launchArgs = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    "--disable-extensions",
+    "--disable-sync",
+    "--no-first-run",
+    "--disable-background-networking",
+  ];
+
+  const browser: Browser = await chromium.launch({
     headless,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-gpu",
-      "--hide-scrollbars",
-      "--disable-extensions",
-      "--disable-sync",
-      "--no-first-run",
-      "--disable-background-networking",
-    ],
-    defaultViewport: { width: viewportW, height: viewportH },
+    args: launchArgs,
   });
 
-  // Create actor[0] page (reuse the default blank page)
-  const a0Page = (await browser.pages())[0] ?? await browser.newPage();
+  // Create two separate browser contexts (each opens its own window)
+  const a0ContextOpts: {
+    viewport: { width: number; height: number };
+    recordVideo?: { dir: string; size: { width: number; height: number } };
+  } = {
+    viewport: { width: viewportW, height: viewportH },
+  };
+  const a1ContextOpts = { ...a0ContextOpts };
 
-  // Create Worker page in a **separate window** so Chrome renders both
-  // simultaneously.  Without this, the inactive tab doesn't produce
-  // screencast frames and the recording hangs in headed mode.
-  const cdp = await browser.target().createCDPSession();
-  const { targetId: workerTargetId } = await cdp.send("Target.createTarget", {
-    url: "about:blank",
-    newWindow: true,
-  });
-  const workerTarget = await browser.waitForTarget(
-    (t) => (t as any)._targetId === workerTargetId,
-  );
-  const a1Page = (await workerTarget.page())!;
-  await a1Page.setViewport({ width: viewportW, height: viewportH });
+  if (isScreencast) {
+    a0ContextOpts.recordVideo = {
+      dir: path.dirname(a0VideoRaw),
+      size: { width: viewportW, height: viewportH },
+    };
+    a1ContextOpts.recordVideo = {
+      dir: path.dirname(a1VideoRaw),
+      size: { width: viewportW, height: viewportH },
+    };
+  }
+
+  const a0Context: BrowserContext = await browser.newContext(a0ContextOpts);
+  const a0Page: Page = await a0Context.newPage();
+  const a1Context: BrowserContext = await browser.newContext(a1ContextOpts);
+  const a1Page: Page = await a1Context.newPage();
 
   // Tile the browser windows so all panes fit on screen.
   if (!headless) {
@@ -965,8 +722,8 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
     });
   `;
   if (mode === "human") {
-    await a0Page.evaluateOnNewDocument(hideCursorScript);
-    await a1Page.evaluateOnNewDocument(hideCursorScript);
+    await a0Page.addInitScript(hideCursorScript);
+    await a1Page.addInitScript(hideCursorScript);
   }
 
   // Optional: install a small in-page overlay used to debug sync (must be inside the
@@ -992,8 +749,8 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
         document.head.appendChild(s);
       });
     `;
-    await a0Page.evaluateOnNewDocument(css);
-    await a1Page.evaluateOnNewDocument(css);
+    await a0Page.addInitScript(css);
+    await a1Page.addInitScript(css);
   }
 
   const a0Actor = new Actor(a0Page, mode, { delays: opts.delays });
@@ -1020,6 +777,7 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
     // Wait for the Boss page to create the doc and set the location hash
     await a0Page.waitForFunction(
       () => (globalThis as any).document.location.hash.length > 1,
+      undefined,
       { timeout: 10000 },
     );
     const hash = await a0Page.evaluate(() => (globalThis as any).document.location.hash);
@@ -1160,7 +918,7 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
     if (box) {
       // Store crop in CSS pixels; the actual DPR multiplier is determined
       // during post-processing by probing the raw video dimensions (the
-      // screencast may capture at 2x on Retina Macs even though Puppeteer
+      // screencast may capture at 2x on Retina Macs even though Playwright
       // sets deviceScaleFactor to 1).
       const even = (n: number) => Math.round(n / 2) * 2;
       const cssX = even(Math.max(0, Math.floor(box.x - padding)));
@@ -1173,19 +931,9 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
   }
 
   // Start recording:
-  // - screencast: per-page CDP screencasts (composed later)
+  // - screencast: Playwright's recordVideo per context (composed later)
   // - screen: single FFmpeg screen capture (one clock, no drift)
-  let bossRecorder: ScreenRecorder | undefined;
-  let workerRecorder: ScreenRecorder | undefined;
   let screenRecorder: { stop: () => Promise<void> } | undefined;
-
-  const screencastOpts = (outPath: string) => ({
-    path: outPath,
-    fps: 60,
-    speed: 1,
-    quality: 20,
-    ffmpegPath: resolvedFfmpeg,
-  });
 
   try {
     if (recordMode === "none") {
@@ -1222,11 +970,8 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
       });
       console.log("  Recording started: Screen (FFmpeg @ 60fps)");
     } else {
-      [bossRecorder, workerRecorder] = await Promise.all([
-        a0Page.screencast(screencastOpts(a0VideoRaw) as any),
-        a1Page.screencast(screencastOpts(a1VideoRaw) as any),
-      ]);
-      console.log("  Recording started: Boss + Worker (WebM @ 60fps)");
+      // Screencast mode: recording is handled by Playwright's recordVideo context option
+      console.log("  Recording started: Boss + Worker (video)");
     }
   } catch (err) {
     console.error("  Error: recording start failed:", (err as Error).message);
@@ -1301,19 +1046,10 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
 
     // Stop recorders
     let t0 = Date.now();
-    if (bossRecorder) await bossRecorder.stop();
-    if (workerRecorder) await workerRecorder.stop();
     if (screenRecorder) await screenRecorder.stop();
     console.log(`\n  Recorders stopped      (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
-    // Stop screencasts after recording is finalized (avoid truncating last frames).
-    for (const pg of [a0Page, a1Page]) {
-      try {
-        await (pg.mainFrame() as any).client.send("Page.stopScreencast");
-      } catch { /* ignore */ }
-    }
-
-    // Show processing overlay (after recording stops so it never appears in output video).
+    // Show processing overlay
     for (const pg of [a0Page, a1Page]) {
       try {
         await pg.evaluate(`(() => {
@@ -1325,7 +1061,23 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
       } catch { /* ignore */ }
     }
 
+    // Finalize video recordings by closing pages/contexts
+    if (isScreencast) {
+      try {
+        await a0Page.close();
+        await a1Page.close();
+        const a0Video = a0Page.video();
+        const a1Video = a1Page.video();
+        if (a0Video) await a0Video.saveAs(a0VideoRaw);
+        if (a1Video) await a1Video.saveAs(a1VideoRaw);
+      } catch (e) {
+        console.error("  Error saving video:", (e as Error).message);
+      }
+    }
+
     t0 = Date.now();
+    await a0Context.close();
+    await a1Context.close();
     await browser.close();
     console.log(`  Browser closed         (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
     // Stop/close reviewer UI + process.
@@ -1353,8 +1105,8 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
       await stopSyncServer();
     }
 
-    // Post-process: single-pass framerate fix + hstack + hardware encode
-    if (recordMode === "screencast" && bossRecorder && workerRecorder) {
+    // Post-process: single-pass hstack compose
+    if (isScreencast && fs.existsSync(a0VideoRaw) && fs.existsSync(a1VideoRaw)) {
       console.log("  Compositing side-by-side (single pass)...");
       try {
         t0 = Date.now();

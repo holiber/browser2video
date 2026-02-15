@@ -21,7 +21,7 @@ export async function kanbanScenario(ctx: ScenarioContext) {
       "Welcome! In this video we'll walk through a complete task lifecycle " +
       "on a Kanban board, from creation all the way to release.",
     );
-    await actor.goto(`${baseURL}/`);
+    await actor.goto(`${baseURL}/kanban`);
     await actor.waitFor('[data-testid="kanban-board"]');
     await sleep(500);
   });
@@ -160,7 +160,7 @@ async function dragCardToColumn(
     // Fallback: use the window API
     console.warn(`    Card "${cardTitle}" not found for drag, using API fallback`);
     await page.evaluate(
-      (title: string, colId: string) => {
+      ([title, colId]: [string, string]) => {
         const cards = document.querySelectorAll("[data-card-id]");
         for (const c of cards) {
           if (c.textContent?.trim() === title) {
@@ -172,8 +172,7 @@ async function dragCardToColumn(
           }
         }
       },
-      cardTitle,
-      toColumnId,
+      [cardTitle, toColumnId] as [string, string],
     );
     await sleep(300);
     return;
@@ -223,7 +222,7 @@ async function dragCardToColumn(
 
   // Verify the move happened; if not, use the API fallback
   const movedOk = await page.evaluate(
-    (title: string, colId: string) => {
+    ([title, colId]: [string, string]) => {
       const col = document.querySelector(`[data-testid="column-${colId}"]`);
       if (!col) return false;
       const cards = col.querySelectorAll("[data-card-id]");
@@ -232,14 +231,13 @@ async function dragCardToColumn(
       }
       return false;
     },
-    cardTitle,
-    toColumnId,
+    [cardTitle, toColumnId] as [string, string],
   );
 
   if (!movedOk) {
     console.log(`    Drag didn't register, using API fallback for "${cardTitle}"`);
     await page.evaluate(
-      (title: string, colId: string) => {
+      ([title, colId]: [string, string]) => {
         const cards = document.querySelectorAll("[data-card-id]");
         for (const c of cards) {
           if (c.textContent?.trim() === title) {
@@ -251,8 +249,7 @@ async function dragCardToColumn(
           }
         }
       },
-      cardTitle,
-      toColumnId,
+      [cardTitle, toColumnId] as [string, string],
     );
     await sleep(300);
   }

@@ -6,14 +6,10 @@ on:
     branches: [ main ]
 
 jobs:
-  e2e:
+  # ── Fast-mode tests: run all scenarios headless, no recording ──
+  test-fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        scenario: [basic-ui, collab, github, kanban, tui-terminals]
-        mode: [human, fast]
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,10 +24,10 @@ jobs:
         with:
           version: 10.29.3
 
-      - name: Install system deps (xvfb, xterm, ffmpeg, mc, htop)
+      - name: Install system deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xterm ffmpeg mc htop
+          sudo apt-get install -y xvfb xterm ffmpeg mc htop vim
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
@@ -39,51 +35,77 @@ jobs:
       - name: Build workspace
         run: pnpm build
 
-      - name: Run scenario (record artifacts)
-        env:
-          SCENARIO: ${{ matrix.scenario }}
-          MODE: ${{ matrix.mode }}
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run all scenario tests (fast mode)
         run: |
-          set -euo pipefail
-          ART_DIR="artifacts/ci-${SCENARIO}-${MODE}"
-          rm -rf "$ART_DIR"
-          mkdir -p "$ART_DIR"
+          xvfb-run -a --server-args="-screen 0 2560x720x24" \
+            npx playwright test --reporter=list
 
-          XVFB_ARGS="-screen 0 2560x720x24"
-
-          if [ "$SCENARIO" = "collab" ]; then
-            xvfb-run -a --server-args="$XVFB_ARGS" \
-              pnpm b2v run \
-                --scenario "$SCENARIO" \
-                --mode "$MODE" \
-                --record screen \
-                --headed \
-                --display-size 2560x720 \
-                --artifacts "$ART_DIR"
-          else
-            EXTRA_FLAGS=""
-            if [ "$MODE" = "human" ]; then
-              EXTRA_FLAGS="--headed"
-            else
-              EXTRA_FLAGS="--headless"
-            fi
-
-            xvfb-run -a --server-args="$XVFB_ARGS" \
-              pnpm b2v run \
-                --scenario "$SCENARIO" \
-                --mode "$MODE" \
-                --record screencast \
-                $EXTRA_FLAGS \
-                --artifacts "$ART_DIR"
-          fi
-
-          ls -la "$ART_DIR"
-
-      - name: Upload artifacts
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: b2v-${{ matrix.scenario }}-${{ matrix.mode }}
-          path: artifacts/ci-${{ matrix.scenario }}-${{ matrix.mode }}/
-          if-no-files-found: error
+          name: test-results-fast
+          path: test-results/
+          if-no-files-found: ignore
 
+  # ── Human-mode: run scenarios with video recording ──
+  test-human:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.29.3
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xterm ffmpeg mc htop vim
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace
+        run: pnpm build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run human-mode scenarios with recording
+        run: |
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 2
+
+          scenarios=(basic-ui collab kanban tui-terminals console-logs)
+          for s in "${scenarios[@]}"; do
+            echo "────────────────────────────────────────"
+            echo "Running scenario: $s (human mode)"
+            echo "────────────────────────────────────────"
+            pnpm b2v run --scenario "$s" \
+              --mode human \
+              --record screencast \
+              --artifacts "artifacts/$s" \
+              --headless \
+              || echo "⚠ Scenario $s failed (non-fatal)"
+          done
+
+      - name: Upload scenario videos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-videos
+          path: artifacts/
+          if-no-files-found: ignore

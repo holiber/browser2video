@@ -4,7 +4,7 @@
  * Uses Chrome DevTools Protocol `Browser.setWindowBounds` when available.
  * In headless mode or unsupported environments, functions become no-ops.
  */
-import type { Page } from "puppeteer";
+import type { Page, CDPSession } from "playwright";
 
 export type WindowRect = {
   left: number;
@@ -15,7 +15,7 @@ export type WindowRect = {
 
 async function tryGetWindowId(page: Page): Promise<number | null> {
   try {
-    const cdp = await page.createCDPSession();
+    const cdp: CDPSession = await page.context().newCDPSession(page);
     const res = await cdp.send("Browser.getWindowForTarget");
     await cdp.detach();
     const id = (res as any)?.windowId;
@@ -29,7 +29,7 @@ export async function trySetWindowRect(page: Page, rect: WindowRect): Promise<bo
   const windowId = await tryGetWindowId(page);
   if (windowId === null) return false;
   try {
-    const cdp = await page.createCDPSession();
+    const cdp: CDPSession = await page.context().newCDPSession(page);
     await cdp.send("Browser.setWindowBounds", {
       windowId,
       bounds: { ...rect, windowState: "normal" },
