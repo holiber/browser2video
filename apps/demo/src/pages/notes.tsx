@@ -181,8 +181,10 @@ function TaskItem({
         whileTap={{ scale: 0.75 }}
         transition={{ type: "spring", duration: 0.2, bounce: 0.5 }}
       >
-        {task.completed ? (
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
+        {task.approved ? (
+          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+        ) : task.completed ? (
+          <CheckCircle2 className="h-5 w-5 text-amber-400" />
         ) : (
           <Circle className="h-5 w-5 text-muted-foreground" />
         )}
@@ -201,7 +203,7 @@ function TaskItem({
         />
       ) : (
         <span
-          className="relative flex-1 text-sm leading-5"
+          className="flex-1 text-sm leading-5"
           onDoubleClick={() => {
             setEditValue(task.title);
             setEditing(true);
@@ -209,7 +211,13 @@ function TaskItem({
           data-testid={`note-title-${index}`}
         >
           <div className="flex items-center gap-2">
-            <span className={task.completed ? "text-muted-foreground" : ""}>
+            <span className={
+              task.approved
+                ? "text-emerald-400"
+                : task.completed
+                  ? "text-amber-400"
+                  : ""
+            }>
               {task.title}
             </span>
             {task.approved && (
@@ -221,17 +229,6 @@ function TaskItem({
               </span>
             )}
           </div>
-          <AnimatePresence>
-            {task.completed && (
-              <motion.span
-                className="absolute left-0 top-1/2 h-px w-full bg-muted-foreground origin-left"
-                initial={{ scaleX: 0 }}
-                animate={{ scaleX: 1 }}
-                exit={{ scaleX: 0 }}
-                transition={{ duration: 0.3, ease: "easeOut" }}
-              />
-            )}
-          </AnimatePresence>
         </span>
       )}
 

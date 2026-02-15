@@ -121,6 +121,8 @@ export interface CollabRunnerOptions {
   capturePadding?: number;
   /** Narration options (TTS voice-over + sound effects) */
   narration?: NarrationOptions;
+  /** Viewport width for each actor window (default: 1280 screencast, or auto for screen) */
+  viewportWidth?: number;
 }
 
 /** Crop rectangle (in pixels, even-aligned for codec compatibility). */
@@ -605,7 +607,7 @@ export async function runCollab(opts: CollabRunnerOptions): Promise<RunResult> {
         : (linuxDisplaySize?.h ?? 800))
       : 800;
 
-  const viewportW = recordMode === "screen" ? Math.min(960, tileW) : 1280;
+  const viewportW = opts.viewportWidth ?? (recordMode === "screen" ? Math.min(960, tileW) : 1280);
   const viewportH = 720;
 
   // Start a local WebSocket sync server if needed (for Node reviewer / cross-process sync).

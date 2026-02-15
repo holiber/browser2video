@@ -89,7 +89,8 @@ async function waitForCompletedByTitle(page: Page, title: string) {
         if (String(titleSpan?.textContent ?? "").trim() !== t) continue;
         const check = item.querySelector('[data-testid^="note-check-"]');
         const svg = check?.querySelector("svg");
-        return svg?.classList.contains("text-green-500") ?? false;
+        // completed items are amber-400, approved+completed items are emerald-500
+        return (svg?.classList.contains("text-amber-400") || svg?.classList.contains("text-emerald-500")) ?? false;
       }
       return false;
     },
@@ -327,27 +328,6 @@ export async function collabScenario(ctx: CollabScenarioContext) {
     }
     console.log(`    ${followerName}: all ${expectedOrder.length} items in correct order`);
   });
-
-  // ------------------------------------------------------------------
-  //  6. Boss types a command in the terminal (if terminal pane is visible)
-  // ------------------------------------------------------------------
-
-  const hasTerminal = await creatorPage.evaluate(() => {
-    return !!document.querySelector('[data-testid="xterm-notes-terminal"]');
-  });
-
-  if (hasTerminal) {
-    await step(creatorId, `${creatorName} types a command in the terminal`, async () => {
-      // Click into the terminal to focus it
-      await creator.click('[data-testid="xterm-notes-terminal"]');
-      await sleep(400);
-      // Type a command using page.keyboard (terminal isn't a regular input)
-      await creatorPage.keyboard.type("ls -la", { delay: 80 });
-      await sleep(200);
-      await creatorPage.keyboard.press("Enter");
-      await sleep(1500);
-    });
-  }
 
   // Final pause so viewers can see the end state
   await sleep(1200);

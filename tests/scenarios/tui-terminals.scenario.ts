@@ -2,7 +2,7 @@
  * @description Scenario showing interactive shell terminals with TUI apps (htop, mc)
  * running inside in-browser xterm panes connected to real PTYs.
  * Demonstrates keyboard and mouse interaction within TUIs.
- * 2x2 grid: mc (term1), htop (term2), opencode (term3), shell (term4).
+ * Layout: mc (top-left), htop (bottom-left), shell (right column, 2 rows).
  */
 import type { ScenarioContext } from "@browser2video/runner";
 import { startTerminalWsServer } from "./terminal/terminal-ws-server.js";

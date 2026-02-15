@@ -7,7 +7,7 @@ import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createServer, type ViteDevServer } from "vite";
 import { run, runCollab, type Mode, type NarrationOptions } from "@browser2video/runner";
-import { basicUiScenario, collabScenario, githubScenario, kanbanScenario, tuiTerminalsScenario, consoleLogsScenario, startTerminalWsServer } from "@browser2video/scenarios";
+import { basicUiScenario, collabScenario, githubScenario, kanbanScenario, tuiTerminalsScenario, consoleLogsScenario } from "@browser2video/scenarios";
 
 type ScenarioName = "basic-ui" | "collab" | "github" | "kanban" | "tui-terminals" | "console-logs";
 type RecordMode = "none" | "screencast" | "screen";
@@ -183,28 +183,23 @@ program
 
     await withViteIfNeeded(viteRoot, opts.baseUrl, async (baseURL) => {
       if (!useScenarioFile && scenario === "collab") {
-        const termServer = await startTerminalWsServer();
-        const termWs = encodeURIComponent(termServer.baseWsUrl);
-        try {
-          await runCollab({
-            mode,
-            baseURL,
-            artifactDir: artifactsDir,
-            scenario: collabScenario,
-            ffmpegPath,
-            headless,
-            recordMode: record,
-            display: opts.display,
-            displaySize: opts.displaySize,
-            screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
-            bossPath: `/notes?role=boss&termWs=${termWs}`,
-            workerPath: `/notes?role=worker&termWs=${termWs}`,
-            debugOverlay: Boolean(opts.debugOverlay),
-            narration,
-          });
-        } finally {
-          await termServer.close();
-        }
+        await runCollab({
+          mode,
+          baseURL,
+          artifactDir: artifactsDir,
+          scenario: collabScenario,
+          ffmpegPath,
+          headless,
+          recordMode: record,
+          display: opts.display,
+          displaySize: opts.displaySize,
+          screenIndex: opts.screenIndex ? parseInt(String(opts.screenIndex), 10) : undefined,
+          bossPath: `/notes?role=boss`,
+          workerPath: `/notes?role=worker`,
+          viewportWidth: 460,
+          debugOverlay: Boolean(opts.debugOverlay),
+          narration,
+        });
         return;
       }
 
