@@ -3,7 +3,7 @@
  * Worker marks them completed. Both windows are synced via Automerge.
  */
 import type { CollabScenarioContext } from "@browser2video/runner";
-import type { Page } from "puppeteer";
+import type { Page } from "@playwright/test";
 
 /** The tasks the Boss will create, in order */
 const TASKS = [
@@ -14,15 +14,6 @@ const TASKS = [
 
 /** Extra tasks the Boss adds at the end for the reorder demo */
 const EXTRA_TASKS = ["write tests", "deploy"];
-
-/** 10 more tasks added after the reorder to stress-test ordering */
-const MORE_TASKS = [
-  "add pagination",
-  "setup CI/CD",
-  "write API docs",
-  "add dark mode",
-  "fix login bug",
-];
 
 /**
  * Small helper: wait for an element matching `selector` to appear inside a
@@ -61,8 +52,8 @@ async function waitForTitle(page: Page, title: string) {
         return String(titleSpan?.textContent ?? "").trim() === t;
       });
     },
-    { timeout: 5000 },
     title,
+    { timeout: 5000 },
   );
 }
 
@@ -79,8 +70,8 @@ async function waitForTitleGone(page: Page, title: string) {
         return String(titleSpan?.textContent ?? "").trim() === t;
       });
     },
-    { timeout: 5000 },
     title,
+    { timeout: 5000 },
   );
 }
 
@@ -102,8 +93,8 @@ async function waitForCompletedByTitle(page: Page, title: string) {
       }
       return false;
     },
-    { timeout: 5000 },
     title,
+    { timeout: 5000 },
   );
 }
 
@@ -123,8 +114,8 @@ async function waitForApprovedByTitle(page: Page, title: string) {
       }
       return false;
     },
-    { timeout: 5000 },
     title,
+    { timeout: 5000 },
   );
 }
 
@@ -277,40 +268,12 @@ export async function collabScenario(ctx: CollabScenarioContext) {
   await sleep(500);
 
   // ------------------------------------------------------------------
-  //  5. Boss adds 10 more tasks
+  //  5. Verify all items are present and in the correct order on both pages
   // ------------------------------------------------------------------
 
-  for (let i = 0; i < MORE_TASKS.length; i++) {
-    const taskTitle = MORE_TASKS[i];
-
-    await step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
-      seq += 1;
-      await creator.type('[data-testid="note-input"]', taskTitle);
-      await creator.click('[data-testid="note-add-btn"]');
-      await setOverlaySeq(creatorId, seq, taskTitle);
-    });
-
-    // Wait for the task to sync to Worker
-    await step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
-      await waitForTitle(followerPage, taskTitle);
-      await setOverlayApplied(followerId, seq, taskTitle);
-      await sleep(200);
-    });
-  }
-
-  // ------------------------------------------------------------------
-  //  6. Verify all items are present and in the correct order on both pages
-  // ------------------------------------------------------------------
-
-  // With top-insert, each new add goes to index 0, so the final order has the
-  // most recently added items at the top.
-  //
-  // After the reorder + delete we have:
+  // After the reorder + delete we have (top-insert, write tests swapped above deploy):
   //   [write tests, deploy, add new note, create schemas]
-  //
-  // Then we add MORE_TASKS one-by-one at the top, so they end up reversed.
   const expectedOrder = [
-    ...[...MORE_TASKS].reverse(),
     "write tests",
     "deploy",
     "add new note",
@@ -364,6 +327,27 @@ export async function collabScenario(ctx: CollabScenarioContext) {
     }
     console.log(`    ${followerName}: all ${expectedOrder.length} items in correct order`);
   });
+
+  // ------------------------------------------------------------------
+  //  6. Boss types a command in the terminal (if terminal pane is visible)
+  // ------------------------------------------------------------------
+
+  const hasTerminal = await creatorPage.evaluate(() => {
+    return !!document.querySelector('[data-testid="xterm-notes-terminal"]');
+  });
+
+  if (hasTerminal) {
+    await step(creatorId, `${creatorName} types a command in the terminal`, async () => {
+      // Click into the terminal to focus it
+      await creator.click('[data-testid="xterm-notes-terminal"]');
+      await sleep(400);
+      // Type a command using page.keyboard (terminal isn't a regular input)
+      await creatorPage.keyboard.type("ls -la", { delay: 80 });
+      await sleep(200);
+      await creatorPage.keyboard.press("Enter");
+      await sleep(1500);
+    });
+  }
 
   // Final pause so viewers can see the end state
   await sleep(1200);

@@ -47,3 +47,5 @@ tmp/
 
 # E2E artifacts
 artifacts/
+test-results/
+videos/

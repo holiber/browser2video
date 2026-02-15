@@ -6,6 +6,12 @@
   --radius: 0.625rem;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
+  /* Kanban board specific */
+  --kanban-bg-card: #141414;
+  --kanban-bg-column: #111111;
+  --kanban-bg-hover: #1a1a1a;
+  --kanban-bg-drop: #1e293b;
+  --kanban-accent: #3b82f6;
   --card: oklch(0.145 0 0);
   --card-foreground: oklch(0.985 0 0);
   --popover: oklch(0.145 0 0);

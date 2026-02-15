@@ -2,12 +2,7 @@
  * @description Core scenario runner engine with Actor (human/fast modes),
  * cursor overlay injection, video recorder, and WebVTT subtitle generator.
  */
-import puppeteer, {
-  type Browser,
-  type Page,
-  type ScreenRecorder,
-  type ElementHandle,
-} from "puppeteer";
+import { chromium, type Browser, type BrowserContext, type Page, type ElementHandle } from "playwright";
 import path from "path";
 import fs from "fs";
 import { execFileSync } from "child_process";
@@ -344,13 +339,13 @@ export class Actor {
 
   /** Navigate and re-inject cursor overlay */
   async goto(url: string) {
-    await this.page.goto(url, { waitUntil: "networkidle0" });
+    await this.page.goto(url, { waitUntil: "networkidle" });
     await this.injectCursor();
   }
 
   /** Wait for an element to appear */
   async waitFor(selector: string, timeout = 3000) {
-    await this.page.waitForSelector(selector, { visible: true, timeout });
+    await this.page.waitForSelector(selector, { state: "visible", timeout });
   }
 
   /** Move cursor smoothly to an element center (human) or no-op (fast) */
@@ -358,7 +353,7 @@ export class Actor {
     selector: string,
   ): Promise<{ x: number; y: number; el: ElementHandle }> {
     const el = (await this.page.waitForSelector(selector, {
-      visible: true,
+      state: "visible",
       timeout: 3000,
     }))!;
     // Scroll element into view (smooth in human mode so it looks natural on video)
@@ -445,7 +440,7 @@ export class Actor {
 
     // Wait for the popover/content to appear and find the option
     const optionSelector = `[role="option"]`;
-    await this.page.waitForSelector(optionSelector, { visible: true, timeout: 3000 });
+    await this.page.waitForSelector(optionSelector, { state: "visible", timeout: 3000 });
     await sleep(pickMs(this.delays.selectOptionMs));
 
     // Find the option with matching text
@@ -541,14 +536,14 @@ export class Actor {
     fromSelector: string,
     toSelector: string,
   ) {
-    const fromEl = (await this.page.waitForSelector(fromSelector, { visible: true, timeout: 3000 }))!;
+    const fromEl = (await this.page.waitForSelector(fromSelector, { state: "visible", timeout: 3000 }))!;
     const fromBox = (await fromEl.boundingBox())!;
     const from = {
       x: Math.round(fromBox.x + fromBox.width / 2),
       y: Math.round(fromBox.y + fromBox.height / 2),
     };
 
-    const toEl = (await this.page.waitForSelector(toSelector, { visible: true, timeout: 3000 }))!;
+    const toEl = (await this.page.waitForSelector(toSelector, { state: "visible", timeout: 3000 }))!;
     const toBox = (await toEl.boundingBox())!;
     const to = {
       x: Math.round(toBox.x + toBox.width / 2),
@@ -595,7 +590,7 @@ export class Actor {
 
   /** Drag an element by a pixel offset (useful for repositioning nodes) */
   async dragByOffset(selector: string, dx: number, dy: number) {
-    const el = (await this.page.waitForSelector(selector, { visible: true, timeout: 3000 }))!;
+    const el = (await this.page.waitForSelector(selector, { state: "visible", timeout: 3000 }))!;
     const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
     await el.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
     await sleep(pickMs(this.delays.afterScrollIntoViewMs));
@@ -655,7 +650,7 @@ export class Actor {
     points: Array<{ x: number; y: number }>,
   ) {
     const canvas = (await this.page.waitForSelector(canvasSelector, {
-      visible: true,
+      state: "visible",
       timeout: 3000,
     }))!;
     const box = (await canvas.boundingBox())!;
@@ -746,24 +741,34 @@ export interface RunnerOptions {
   executablePath?: string;
   /** Narration options (TTS voice-over + sound effects) */
   narration?: NarrationOptions;
+  /** Open Chrome DevTools automatically (forces headed mode) */
+  devtools?: boolean;
+  /** macOS only (avfoundation): capture screen index for screen recording */
+  screenIndex?: number;
+  /** Linux only (x11grab): X11 DISPLAY for screen recording */
+  display?: string;
+  /** Linux only (x11grab): capture size for screen recording, e.g. "1920x1080" */
+  displaySize?: string;
 }
 
 export async function run(opts: RunnerOptions): Promise<RunResult> {
   const { mode, baseURL, artifactDir, scenario, ffmpegPath } = opts;
-  const recordMode: RecordMode = opts.recordMode ?? "screencast";
-  if (recordMode === "screen") {
-    throw new Error('recordMode="screen" is not supported in single-page runner. Use "screencast" or "none".');
-  }
+  const wantsDevtools = opts.devtools ?? false;
+  let recordMode: RecordMode = opts.recordMode ?? "screencast";
+
+  // Screen recording on headless is impossible — fall back to screencast
+  const requestedHeadless = opts.headless ?? (mode === "fast");
+  if (requestedHeadless && recordMode === "screen") recordMode = "screencast";
 
   fs.mkdirSync(artifactDir, { recursive: true });
 
-  const rawVideoPath = recordMode === "none" ? undefined : path.join(artifactDir, "run.raw.webm");
+  const rawVideoPath = recordMode === "screencast" ? path.join(artifactDir, "run.raw.webm") : undefined;
   const videoPath = recordMode === "none" ? undefined : path.join(artifactDir, "run.mp4");
   const subtitlesPath = path.join(artifactDir, "captions.vtt");
   const metadataPath = path.join(artifactDir, "run.json");
 
-  // Determine headless mode
-  const headless = opts.headless ?? (mode === "fast");
+  // Determine headless mode — devtools forces headed
+  const headless = wantsDevtools ? false : requestedHeadless;
 
   console.log(`\n  Mode:      ${mode}`);
   console.log(`  Headless:  ${headless}`);
@@ -772,33 +777,58 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
   console.log(`  Artifacts: ${artifactDir}\n`);
 
   // Launch browser
-  const launchOptions: Parameters<typeof puppeteer.launch>[0] = {
-    headless,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-gpu",
-      "--hide-scrollbars",
-      "--disable-extensions",
-      "--disable-sync",
-      "--no-first-run",
-      "--disable-background-networking",
-    ],
-    defaultViewport: { width: 1280, height: 720 },
-  };
-  if (opts.userDataDir) {
-    launchOptions.userDataDir = opts.userDataDir;
-  }
-  if (opts.executablePath) {
-    launchOptions.executablePath = opts.executablePath;
-  }
-  const browser: Browser = await puppeteer.launch(launchOptions);
+  const launchArgs = [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-gpu",
+    "--hide-scrollbars",
+    "--disable-extensions",
+    "--disable-sync",
+    "--no-first-run",
+    "--disable-background-networking",
+    ...(wantsDevtools ? ["--auto-open-devtools-for-tabs"] : []),
+  ];
 
-  const page = await browser.newPage();
+  const isScreencast = recordMode === "screencast" && !!rawVideoPath;
+  const isScreenRecording = recordMode === "screen" && !!videoPath;
+  const contextOptions: {
+    viewport: { width: number; height: number };
+    recordVideo?: { dir: string; size: { width: number; height: number } };
+  } = {
+    viewport: { width: 1280, height: 720 },
+  };
+  if (isScreencast) {
+    contextOptions.recordVideo = {
+      dir: path.dirname(rawVideoPath!),
+      size: { width: 1280, height: 720 },
+    };
+  }
+
+  let browser: Browser | null = null;
+  let context: BrowserContext;
+
+  if (opts.userDataDir) {
+    // Persistent context reuses cookies/sessions from a user data directory
+    context = await chromium.launchPersistentContext(opts.userDataDir, {
+      headless,
+      args: launchArgs,
+      ...contextOptions,
+      ...(opts.executablePath ? { executablePath: opts.executablePath } : {}),
+    });
+  } else {
+    browser = await chromium.launch({
+      headless,
+      args: launchArgs,
+      ...(opts.executablePath ? { executablePath: opts.executablePath } : {}),
+    });
+    context = await browser.newContext(contextOptions);
+  }
+
+  const page: Page = context.pages()[0] ?? await context.newPage();
 
   // Hide default cursor so our overlay is the only one visible
   if (mode === "human") {
-    await page.evaluateOnNewDocument(`
+    await page.addInitScript(`
       document.addEventListener('DOMContentLoaded', () => {
         const s = document.createElement('style');
         s.textContent = '* { cursor: none !important; }';
@@ -809,7 +839,7 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
 
   // Fast mode: reduce UI animations for determinism and speed.
   if (mode === "fast") {
-    await page.evaluateOnNewDocument(`
+    await page.addInitScript(`
       document.addEventListener('DOMContentLoaded', () => {
         const s = document.createElement('style');
         s.textContent = \`
@@ -832,23 +862,22 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
     await page.goto(`${baseURL}/`, { waitUntil: "domcontentloaded" });
   }
 
-  // Start video recording (WebM first, convert to MP4 after)
+  // Video recording
   const resolvedFfmpeg = ffmpegPath ?? "ffmpeg";
-  let recorder: ScreenRecorder | undefined;
-  if (recordMode === "screencast" && videoPath) {
-    try {
-      recorder = await page.screencast({
-        path: rawVideoPath!,
-        fps: 60,
-        speed: 1,
-        quality: 20,
-        ffmpegPath: resolvedFfmpeg,
-      } as any);
-      console.log("  Recording started (WebM @ 60fps)");
-    } catch (err) {
-      console.error("  Error: screencast failed. Ensure ffmpeg is installed.");
-      console.error("  ", (err as Error).message);
-    }
+  let screenRecorder: { stop: () => Promise<void> } | undefined;
+
+  if (isScreenRecording) {
+    const { startScreenCapture } = await import("./screen-capture.js");
+    screenRecorder = await startScreenCapture({
+      ffmpeg: resolvedFfmpeg,
+      outputPath: videoPath!,
+      fps: 30,
+      screenIndex: opts.screenIndex,
+      display: opts.display,
+      displaySize: opts.displaySize,
+    });
+  } else if (isScreencast) {
+    console.log("  Recording started (video)");
   } else {
     console.log("  Recording disabled");
   }
@@ -909,24 +938,13 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
     // Tail-capture: allow final UI updates to render before stopping recording.
     // Deterministic (no randomness), and 0ms in fast mode.
     const tailCaptureMs = mode === "human" ? 300 : 0;
-    if (recorder && tailCaptureMs > 0) {
+    if ((isScreencast || isScreenRecording) && tailCaptureMs > 0) {
       try {
         await sleep(tailCaptureMs);
       } catch { /* ignore */ }
     }
 
-    // Stop recording (flushes remaining frames and waits for ffmpeg).
-    // IMPORTANT: don't stop the CDP screencast before recorder.stop(), or we can
-    // truncate the last frames and "miss the last steps" in the final MP4.
-    if (recorder) await recorder.stop();
-
-    // Stop CDP screencast after recording is finalized.
-    try {
-      await (page.mainFrame() as any).client.send("Page.stopScreencast");
-    } catch { /* ignore */ }
-
     // Show processing overlay so the user sees feedback instead of a frozen page.
-    // This happens AFTER recording stops so it's never captured in the output.
     try {
       await page.evaluate(`(() => {
         const overlay = document.createElement('div');
@@ -936,28 +954,41 @@ export async function run(opts: RunnerOptions): Promise<RunResult> {
       })()`);
     } catch { /* page may already be gone on error path */ }
 
-    // Close browser immediately after recording stops
-    await browser.close();
-
-    // Fix video framerate: Puppeteer's ScreenRecorder has a bug where
-    // `-framerate N` is placed AFTER `-i pipe:0` in the ffmpeg command.
-    // For image2pipe, -framerate is an input option and must come BEFORE -i.
-    // Because of this, ffmpeg defaults to 25fps input, making the video
-    // ~2.4x slower than real-time when 60fps is requested.
-    // Re-encode with correct 60fps timestamps using setpts filter.
-    if (recorder && rawVideoPath && videoPath) {
+    // Stop screen recording (if active)
+    if (screenRecorder) {
       try {
-        console.log("\n  Finalizing MP4 (60fps)...");
+        await screenRecorder.stop();
+        if (videoPath) console.log(`  Video saved: ${videoPath}`);
+      } catch (e) {
+        console.error("  Error stopping screen recording:", (e as Error).message);
+      }
+    }
+
+    // Finalize screencast video: close page so Playwright flushes the recording
+    if (isScreencast) {
+      try {
+        await page.close();
+        const video = page.video();
+        if (video) await video.saveAs(rawVideoPath!);
+      } catch (e) {
+        console.error("  Error saving video:", (e as Error).message);
+      }
+    }
+
+    // Close browser
+    await context.close();
+    if (browser) await browser.close();
+
+    // Convert raw WebM to MP4 (screencast path only)
+    if (isScreencast && rawVideoPath && videoPath) {
+      try {
+        console.log("\n  Finalizing MP4...");
         execFileSync(
           resolvedFfmpeg,
           [
           "-y",
           "-i",
           rawVideoPath,
-          "-vf", "setpts=N/60/TB",
-          "-r", "60",
-          "-vsync",
-          "cfr",
           "-c:v",
           "libx264",
           "-preset",

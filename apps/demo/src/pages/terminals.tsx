@@ -1,0 +1,63 @@
+/**
+ * @description Terminals page with a 2x2 grid of xterm.js panes connected to real PTYs.
+ * Top-left: mc, Top-right: htop (or top), Bottom-left: opencode, Bottom-right: shell.
+ * Requires ?termWs=<wsBaseUrl> query param to connect to the terminal WS server.
+ */
+import { XtermPane } from "@/components/xterm-pane";
+
+function getTermWsFromURL(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const raw = String(params.get("termWs") ?? "").trim();
+  if (!raw) return null;
+  return raw.replace(/\/$/, "");
+}
+
+export default function TerminalsPage() {
+  const termWs = getTermWsFromURL();
+
+  if (!termWs) {
+    return (
+      <div
+        className="flex min-h-[calc(100vh-3rem)] items-center justify-center text-muted-foreground"
+        data-testid="terminals-page"
+      >
+        <p className="text-sm">
+          No terminal server configured. Pass <code className="rounded bg-muted px-1.5 py-0.5 text-xs">?termWs=ws://...</code> to connect.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className="grid h-[calc(100vh-3rem)] grid-cols-2 grid-rows-2 gap-1 p-1"
+      data-testid="terminals-page"
+    >
+      <XtermPane
+        title="Midnight Commander"
+        wsUrl={`${termWs}/term/mc`}
+        testId="xterm-term1"
+        className="min-h-0"
+      />
+      <XtermPane
+        title="htop"
+        wsUrl={`${termWs}/term/htop`}
+        testId="xterm-term2"
+        className="min-h-0"
+      />
+      <XtermPane
+        title="opencode"
+        wsUrl={`${termWs}/term/opencode`}
+        testId="xterm-term3"
+        className="min-h-0"
+      />
+      <XtermPane
+        title="Shell"
+        wsUrl={`${termWs}/term/shell`}
+        testId="xterm-term4"
+        className="min-h-0"
+      />
+    </div>
+  );
+}

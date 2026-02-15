@@ -1,6 +1,6 @@
 /**
  * @description WebSocket <-> PTY bridge for rendering real terminals inside xterm.js.
- * Supports general-purpose shell sessions (/term/shell) and direct TUI launches (/term/mc, /term/htop).
+ * Supports general-purpose shell sessions (/term/shell) and direct TUI launches (/term/mc, /term/htop, /term/opencode).
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -15,7 +15,7 @@ export type TerminalServer = {
   close: () => Promise<void>;
 };
 
-type AppKind = "shell" | "mc" | "htop";
+type AppKind = "shell" | "mc" | "htop" | "opencode";
 
 function safeLocale(): string {
   return (
@@ -71,11 +71,16 @@ function spawnPty(app: AppKind, initialCols: number, initialRows: number) {
     });
   }
 
-  // Direct TUI launch (mc / htop)
-  const script =
-    app === "mc"
-      ? "command -v mc >/dev/null 2>&1 || { echo __B2V_MISSING_MC__; exit 127; }; mc; echo __B2V_MC_EXITED__"
-      : "command -v htop >/dev/null 2>&1 || { echo __B2V_MISSING_HTOP__; exit 127; }; htop; echo __B2V_HTOP_EXITED__";
+  // Direct TUI launch (mc / htop / opencode)
+  let script: string;
+  if (app === "mc") {
+    script = "command -v mc >/dev/null 2>&1 || { echo __B2V_MISSING_MC__; exit 127; }; mc; echo __B2V_MC_EXITED__";
+  } else if (app === "htop") {
+    script = "command -v htop >/dev/null 2>&1 || { echo 'htop not found, falling back to top'; top; exit 0; }; htop; echo __B2V_HTOP_EXITED__";
+  } else {
+    // opencode
+    script = "command -v opencode >/dev/null 2>&1 || { echo __B2V_MISSING_OPENCODE__; echo 'opencode is not installed. Install it from https://github.com/opencode-ai/opencode'; exit 127; }; opencode; echo __B2V_OPENCODE_EXITED__";
+  }
 
   return pty.spawn("bash", ["-lc", script], {
     name: "xterm-256color",
@@ -196,6 +201,7 @@ export async function startTerminalWsServer(): Promise<TerminalServer> {
       if (pathname === "/term/shell") app = "shell";
       if (pathname === "/term/mc") app = "mc";
       if (pathname === "/term/htop") app = "htop";
+      if (pathname === "/term/opencode") app = "opencode";
       if (!app) {
         socket.destroy();
         return;

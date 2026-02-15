@@ -5,9 +5,6 @@
  */
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from "react";
 import { motion, Reorder, AnimatePresence } from "framer-motion";
-import { Terminal } from "xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import "xterm/css/xterm.css";
 import {
   GripVertical,
   Plus,
@@ -22,6 +19,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { XtermPane } from "@/components/xterm-pane";
+import { ConsolePanel } from "@/components/console-panel";
 
 /** Motion-enhanced shadcn Button for whileTap animations */
 const MotionButton = motion.create(Button);
@@ -51,20 +50,25 @@ interface NotesDoc {
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function getTermWsFromURL(): string | null {
-  if (typeof window === "undefined") return null;
-  const params = new URLSearchParams(window.location.search);
-  const raw = String(params.get("termWs") ?? "").trim();
-  if (!raw) return null;
-  return raw.replace(/\/$/, "");
-}
-
 function getRoleFromURL(): "boss" | "worker" | null {
   const params = new URLSearchParams(window.location.search);
   const role = params.get("role");
   if (role === "boss" || role === "worker") return role;
   return null;
 }
+
+function getTermWsFromURL(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  const raw = params.get("termWs");
+  if (!raw) return null;
+  return raw.replace(/\/+$/, "");
+}
+
+function getShowConsoleFromURL(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("showConsole") === "true";
+}
+
 
 let taskCounter = 0;
 
@@ -248,181 +252,11 @@ function TaskItem({
 }
 
 /* ------------------------------------------------------------------ */
-/*  Xterm.js pane                                                      */
-/* ------------------------------------------------------------------ */
-
-function XtermPane(props: {
-  title: string;
-  wsUrl: string;
-  testId: string;
-  className?: string;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const termRef = useRef<Terminal | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    let stopped = false;
-    el.dataset.b2vWsState = "connecting";
-
-    const term = new Terminal({
-      convertEol: false,
-      cursorBlink: true,
-      fontFamily:
-        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-      fontSize: 13,
-      lineHeight: 1.15,
-      disableStdin: false,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(el);
-
-    // Focus-guard: first click on an unfocused terminal focuses it without
-    // forwarding a mouse event into the PTY (which would cause TUI apps like
-    // htop/mc to interpret the click as a UI action, e.g. pressing "Quit").
-    // Once focused, subsequent clicks pass through normally for TUI mouse interaction.
-    const focusGuard = (e: MouseEvent) => {
-      const textarea = el.querySelector(".xterm-helper-textarea") as HTMLElement;
-      if (textarea && document.activeElement !== textarea) {
-        e.stopPropagation();
-        e.preventDefault();
-        textarea.focus();
-      }
-    };
-    el.addEventListener("mousedown", focusGuard, { capture: true });
-
-    termRef.current = term;
-    fitRef.current = fit;
-
-    const encoder = new TextEncoder();
-
-    function sendResize() {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(
-        JSON.stringify({
-          type: "resize",
-          cols: term.cols,
-          rows: term.rows,
-        }),
-      );
-    }
-
-    let roRaf = 0;
-    const ro = new ResizeObserver(() => {
-      if (roRaf) cancelAnimationFrame(roRaf);
-      roRaf = requestAnimationFrame(() => {
-        try {
-          fit.fit();
-        } catch {
-          // ignore transient layout errors
-        }
-        sendResize();
-      });
-    });
-    ro.observe(el);
-
-    requestAnimationFrame(() => {
-      try {
-        fit.fit();
-      } catch {
-        // ignore
-      }
-      sendResize();
-    });
-
-    const ws = new WebSocket(props.wsUrl);
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      if (stopped) return;
-      el.dataset.b2vWsState = "open";
-      sendResize();
-      term.focus();
-    };
-
-    ws.onmessage = (ev) => {
-      if (stopped) return;
-      const data: any = (ev as any).data;
-      if (typeof data === "string") return;
-      if (data instanceof ArrayBuffer) {
-        try { term.write(new Uint8Array(data)); } catch { /* ignore after dispose */ }
-        return;
-      }
-      if (typeof Blob !== "undefined" && data instanceof Blob) {
-        void data.arrayBuffer().then((ab) => {
-          if (stopped) return;
-          try { term.write(new Uint8Array(ab)); } catch { /* ignore */ }
-        });
-      }
-    };
-
-    ws.onerror = () => {
-      if (stopped) return;
-      el.dataset.b2vWsState = "error";
-    };
-
-    ws.onclose = (e) => {
-      if (stopped) return;
-      el.dataset.b2vWsState = `closed:${(e as any)?.code ?? "?"}`;
-    };
-
-    const disp = term.onData((data) => {
-      if (stopped) return;
-      const sock = wsRef.current;
-      if (!sock || sock.readyState !== WebSocket.OPEN) return;
-      sock.send(encoder.encode(data));
-    });
-
-    return () => {
-      stopped = true;
-      el.removeEventListener("mousedown", focusGuard, { capture: true });
-      disp.dispose();
-      ro.disconnect();
-      if (roRaf) cancelAnimationFrame(roRaf);
-      try {
-        ws.close();
-      } catch {
-        // ignore
-      }
-      wsRef.current = null;
-      try {
-        term.dispose();
-      } catch {
-        // ignore
-      }
-      termRef.current = null;
-      fitRef.current = null;
-    };
-  }, [props.wsUrl]);
-
-  return (
-    <div className={props.className}>
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-xs font-semibold text-muted-foreground">{props.title}</div>
-      </div>
-      <div
-        ref={containerRef}
-        data-testid={props.testId}
-        className="h-full w-full rounded-md border bg-black/90 p-2"
-      />
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /*  Notes list (needs a docUrl to use useDocument)                     */
 /* ------------------------------------------------------------------ */
 
-function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
+function NotesList({ docUrl, termWs, showConsole }: { docUrl: AutomergeUrl; termWs: string | null; showConsole: boolean }) {
   const role = getRoleFromURL();
-  const termWs = getTermWsFromURL();
   const [doc, changeDoc] = useDocument<NotesDoc>(docUrl, { suspense: true });
   const [inputValue, setInputValue] = useState("");
 
@@ -435,34 +269,46 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
       // Insert newest tasks at the top of the list
       d.tasks.unshift({ id: nextTaskId(), title, completed: false, approved: false });
     });
+    console.log(`Task created: "${title}"`);
     setInputValue("");
   }, [inputValue, changeDoc]);
 
   const toggleTask = useCallback(
     (index: number) => {
+      const task = doc?.tasks[index];
+      const willComplete = task ? !task.completed : true;
       changeDoc((d) => {
         d.tasks[index].completed = !d.tasks[index].completed;
       });
+      if (task) {
+        console.log(`Task ${willComplete ? "completed" : "uncompleted"}: "${task.title}"`);
+      }
     },
-    [changeDoc],
+    [changeDoc, doc],
   );
 
   const deleteTask = useCallback(
     (index: number) => {
+      const task = doc?.tasks[index];
       changeDoc((d) => {
         d.tasks.splice(index, 1);
       });
+      if (task) {
+        console.log(`Task deleted: "${task.title}"`);
+      }
     },
-    [changeDoc],
+    [changeDoc, doc],
   );
 
   const renameTask = useCallback(
     (index: number, title: string) => {
+      const oldTitle = doc?.tasks[index]?.title;
       changeDoc((d) => {
         d.tasks[index].title = title;
       });
+      console.log(`Task renamed: "${oldTitle}" → "${title}"`);
     },
-    [changeDoc],
+    [changeDoc, doc],
   );
 
   const handleReorder = useCallback(
@@ -486,6 +332,7 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
           const t = taskMap.get(id);
           if (t) d.tasks.push(t);
         }
+        console.log(`Tasks reordered: [${ids.map((id) => taskMap.get(id)?.title).join(", ")}]`);
       });
     },
     [changeDoc],
@@ -501,118 +348,125 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
   // Build a mutable copy for Reorder (Automerge docs are readonly)
   const tasks: Task[] = doc?.tasks ? [...doc.tasks].map((t) => ({ ...t })) : [];
 
-  const webApp = (
-    <>
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">Implement notes app</h1>
-          {role && (
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
-                role === "boss"
-                  ? "bg-amber-500/15 text-amber-400"
-                  : "bg-blue-500/15 text-blue-400"
-              }`}
-              data-testid="role-badge"
-            >
-              {role === "boss" ? <Crown className="h-3 w-3" /> : <Wrench className="h-3 w-3" />}
-              {role === "boss" ? "Boss" : "Worker"}
-            </span>
-          )}
-        </div>
-
-        {/* Sync indicator */}
-        <div
-          className="inline-flex items-center gap-1.5 text-xs text-green-500"
-          data-testid="sync-indicator"
-        >
-          <Wifi className="h-3.5 w-3.5" />
-          Synced
-        </div>
-      </div>
-
-      {/* Add task input */}
-      <Card>
-        <CardContent className="flex gap-2 pt-4">
-          <Input
-            placeholder="Add a new task…"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleInputKeyDown}
-            data-testid="note-input"
-          />
-          <MotionButton
-            onClick={addTask}
-            data-testid="note-add-btn"
-            className="gap-1.5"
-            whileTap={{ scale: 0.92 }}
-            transition={{ type: "spring", duration: 0.2, bounce: 0.5 }}
-          >
-            <Plus className="h-4 w-4" />
-            Add
-          </MotionButton>
-        </CardContent>
-      </Card>
-
-      {/* Task list */}
-      <Card>
-        <CardContent className="pt-4 overflow-hidden">
-          {tasks.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">No tasks yet. Add one above!</p>
-          ) : (
-            <Reorder.Group
-              axis="y"
-              values={tasks}
-              onReorder={handleReorder}
-              className="space-y-2"
-              data-testid="notes-list"
-            >
-              <AnimatePresence initial={false}>
-                {tasks.map((task, idx) => (
-                  <TaskItem
-                    key={task.id}
-                    task={task}
-                    index={idx}
-                    onToggle={toggleTask}
-                    onDelete={deleteTask}
-                    onRename={renameTask}
-                  />
-                ))}
-              </AnimatePresence>
-            </Reorder.Group>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Stats */}
-      {tasks.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="text-center text-xs text-muted-foreground"
-        >
-          {tasks.filter((t) => t.completed).length} of {tasks.length} completed
-        </motion.div>
-      )}
-    </>
-  );
+  const hasBelowPanel = !!termWs || showConsole;
 
   return (
-    <div
-      className={termWs ? "mx-auto max-w-6xl space-y-3 p-3" : "mx-auto max-w-md space-y-3 p-3"}
-      data-testid="notes-page"
-    >
-      {termWs ? (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>{webApp}</div>
-            <XtermPane title="Terminal 1" wsUrl={`${termWs}/term/shell`} testId="xterm-term1" className="h-[520px]" />
+    <div className={hasBelowPanel ? "flex flex-col h-[calc(100vh-3rem)]" : ""} data-testid="notes-root">
+      <div
+        className={`mx-auto max-w-md space-y-3 p-3 ${hasBelowPanel ? "flex-1 min-h-0 overflow-y-auto" : ""}`}
+        data-testid="notes-page"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight">Implement notes app</h1>
+            {role && (
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
+                  role === "boss"
+                    ? "bg-amber-500/15 text-amber-400"
+                    : "bg-blue-500/15 text-blue-400"
+                }`}
+                data-testid="role-badge"
+              >
+                {role === "boss" ? <Crown className="h-3 w-3" /> : <Wrench className="h-3 w-3" />}
+                {role === "boss" ? "Boss" : "Worker"}
+              </span>
+            )}
           </div>
-          <XtermPane title="Terminal 2" wsUrl={`${termWs}/term/shell`} testId="xterm-term2" className="h-[260px]" />
+
+          {/* Sync indicator */}
+          <div
+            className="inline-flex items-center gap-1.5 text-xs text-green-500"
+            data-testid="sync-indicator"
+          >
+            <Wifi className="h-3.5 w-3.5" />
+            Synced
+          </div>
         </div>
-      ) : (
-        webApp
+
+        {/* Add task input */}
+        <Card>
+          <CardContent className="flex gap-2 pt-4">
+            <Input
+              placeholder="Add a new task…"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={handleInputKeyDown}
+              data-testid="note-input"
+            />
+            <MotionButton
+              onClick={addTask}
+              data-testid="note-add-btn"
+              className="gap-1.5"
+              whileTap={{ scale: 0.92 }}
+              transition={{ type: "spring", duration: 0.2, bounce: 0.5 }}
+            >
+              <Plus className="h-4 w-4" />
+              Add
+            </MotionButton>
+          </CardContent>
+        </Card>
+
+        {/* Task list */}
+        <Card>
+          <CardContent className="pt-4 overflow-hidden">
+            {tasks.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">No tasks yet. Add one above!</p>
+            ) : (
+              <Reorder.Group
+                axis="y"
+                values={tasks}
+                onReorder={handleReorder}
+                className="space-y-2"
+                data-testid="notes-list"
+              >
+                <AnimatePresence initial={false}>
+                  {tasks.map((task, idx) => (
+                    <TaskItem
+                      key={task.id}
+                      task={task}
+                      index={idx}
+                      onToggle={toggleTask}
+                      onDelete={deleteTask}
+                      onRename={renameTask}
+                    />
+                  ))}
+                </AnimatePresence>
+              </Reorder.Group>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Stats */}
+        {tasks.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="text-center text-xs text-muted-foreground"
+          >
+            {tasks.filter((t) => t.completed).length} of {tasks.length} completed
+          </motion.div>
+        )}
+      </div>
+
+      {/* Optional terminal pane */}
+      {termWs && (
+        <XtermPane
+          title="Terminal"
+          wsUrl={`${termWs}/term/shell`}
+          testId="xterm-notes-terminal"
+          className="h-[200px] shrink-0 border-t"
+        />
+      )}
+
+      {/* Optional DevTools-style console panel */}
+      {showConsole && (
+        <ConsolePanel
+          testId="console-panel"
+          className="shrink-0 border-t border-[#3c3c3c]"
+          style={{ height: "40%" }}
+        />
       )}
     </div>
   );
@@ -624,6 +478,8 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
 
 export default function NotesPage() {
   const docUrl = useNotesDoc();
+  const termWs = getTermWsFromURL();
+  const showConsole = getShowConsoleFromURL();
 
   if (!docUrl) {
     return (
@@ -633,5 +489,5 @@ export default function NotesPage() {
     );
   }
 
-  return <NotesList docUrl={docUrl} />;
+  return <NotesList docUrl={docUrl} termWs={termWs} showConsole={showConsole} />;
 }

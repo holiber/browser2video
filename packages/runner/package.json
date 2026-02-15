@@ -21,7 +21,7 @@
     "@automerge/automerge-repo-network-websocket": "^2.5.1",
     "@automerge/automerge-repo-sync-server": "^0.2.8",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
-    "puppeteer": "^24.0.0",
+    "playwright": "^1.50.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {

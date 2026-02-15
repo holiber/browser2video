@@ -17,7 +17,7 @@ This repo is a small monorepo for recording repeatable browser automation “pro
 
 ## Modes
 
-The `Actor` class wraps Puppeteer interactions and applies a **delay profile**:
+The `Actor` class wraps Playwright interactions and applies a **delay profile**:
 
 - **human**
   - Smooth cursor motion + cursor overlay
@@ -37,7 +37,7 @@ Recording is selected via `recordMode`:
   - No video
   - Still writes `captions.vtt` + `run.json` for step timing/proofs
 - `screencast`
-  - Uses Puppeteer CDP screencast (`page.screencast`) to a raw WebM
+  - Uses Playwright `recordVideo` context option to capture a raw WebM
   - Finalizes to `run.mp4` with ffmpeg (`libx264`, `yuv420p`, `+faststart`)
 - `screen` (collab)
   - Uses ffmpeg screen grab for a single clock (reduces drift)
