@@ -28,6 +28,7 @@ export const config: ScenarioConfig = {
       id: "reviewer",
       type: "terminal",
       label: "Reviewer",
+      viewport: { width: 500 },
       command: (info) =>
         `cd ${JSON.stringify(process.cwd())} && npx tsx packages/runner/src/reviewer-cli.ts --ws ${JSON.stringify(info.syncWsUrl ?? "")} --doc ${JSON.stringify(info.docUrl ?? "")} --log ${JSON.stringify(path.join(process.cwd(), "artifacts", "reviewer.log"))}`,
     },
@@ -45,10 +46,10 @@ const TASKS = [
 /** Extra tasks the Boss adds at the end for the reorder demo */
 const EXTRA_TASKS = ["write tests", "deploy"];
 
-/**
- * Small helper: wait for an element matching `selector` to appear inside a
- * page managed by an Actor. Uses page.waitForSelector under the hood.
- */
+// ---------------------------------------------------------------------------
+//  DOM helpers
+// ---------------------------------------------------------------------------
+
 async function getIndexByTitle(page: Page, title: string): Promise<number> {
   return await page.evaluate((t: string) => {
     const doc = (globalThis as any).document;
@@ -146,6 +147,10 @@ async function waitForApprovedByTitle(page: Page, title: string) {
   );
 }
 
+// ---------------------------------------------------------------------------
+//  Scenario
+// ---------------------------------------------------------------------------
+
 export default async function scenario(ctx: ScenarioContext) {
   const creatorId = "boss";
   const followerId = "worker";
@@ -174,20 +179,20 @@ export default async function scenario(ctx: ScenarioContext) {
     }, [s, title] as [number, string]);
   }
 
-  // Pages are already navigated by the runner (bossPath / workerPath).
-  // Verify they loaded correctly.
+  // Pages are already navigated by the runner.
   await ctx.step("all", "Verify both pages are ready", async () => {
     await creator.waitFor('[data-testid="notes-page"]');
     await follower.waitFor('[data-testid="notes-page"]');
   });
 
   // ------------------------------------------------------------------
-  //  Boss creates tasks one by one, Worker marks each completed
+  //  1. Boss creates tasks, Worker completes each, Reviewer approves
   // ------------------------------------------------------------------
 
   for (let i = 0; i < TASKS.length; i++) {
     const taskTitle = TASKS[i];
 
+    // Boss creates the task
     await ctx.step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
       seq += 1;
       await creator.type('[data-testid="note-input"]', taskTitle);
@@ -195,40 +200,40 @@ export default async function scenario(ctx: ScenarioContext) {
       await setOverlaySeq(creatorId, seq, taskTitle);
     });
 
-    // Wait for the task to sync to Worker's page
+    // Worker sees the task
     await ctx.step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
       await waitForTitle(followerPage, taskTitle);
       await setOverlayApplied(followerId, seq, taskTitle);
     });
 
-    if (taskTitle === "add new note") {
-      await ctx.step("all", 'Reviewer approves "add new note"', async () => {
-        await ctx.terminal("reviewer").send('APPROVE "add new note"');
-      });
-
-      await ctx.step(creatorId, `${creatorName} sees "add new note" approved`, async () => {
-        await waitForApprovedByTitle(creatorPage, "add new note");
-      });
-
-      await ctx.step(followerId, `${followerName} sees "add new note" approved`, async () => {
-        await waitForApprovedByTitle(followerPage, "add new note");
-      });
-    }
-
+    // Worker marks the task completed
     await ctx.step(followerId, `${followerName} marks "${taskTitle}" completed`, async () => {
       const idx = await getIndexByTitle(followerPage, taskTitle);
       if (idx < 0) throw new Error(`${followerName}: could not find task "${taskTitle}" to complete`);
       await follower.click(`[data-testid="note-check-${idx}"]`);
     });
 
-    // Wait for the completion to sync back to Boss
+    // Boss sees the task completed
     await ctx.step(creatorId, `${creatorName} sees "${taskTitle}" completed`, async () => {
       await waitForCompletedByTitle(creatorPage, taskTitle);
+    });
+
+    // Reviewer approves the completed task — verify on both windows
+    await ctx.step("all", `Reviewer approves "${taskTitle}"`, async () => {
+      await ctx.terminal("reviewer").send(`APPROVE "${taskTitle}"`);
+    });
+
+    await ctx.step(creatorId, `${creatorName} sees "${taskTitle}" approved`, async () => {
+      await waitForApprovedByTitle(creatorPage, taskTitle);
+    });
+
+    await ctx.step(followerId, `${followerName} sees "${taskTitle}" approved`, async () => {
+      await waitForApprovedByTitle(followerPage, taskTitle);
     });
   }
 
   // ------------------------------------------------------------------
-  //  3. Boss adds extra tasks
+  //  2. Boss adds extra tasks
   // ------------------------------------------------------------------
 
   for (let i = 0; i < EXTRA_TASKS.length; i++) {
@@ -241,7 +246,6 @@ export default async function scenario(ctx: ScenarioContext) {
       await setOverlaySeq(creatorId, seq, taskTitle);
     });
 
-    // Wait for the task to sync to Worker
     await ctx.step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
       await waitForTitle(followerPage, taskTitle);
       await setOverlayApplied(followerId, seq, taskTitle);
@@ -249,17 +253,9 @@ export default async function scenario(ctx: ScenarioContext) {
   }
 
   // ------------------------------------------------------------------
-  //  4. Boss rearranges uncompleted todos
+  //  3. Boss rearranges: move "write tests" above "deploy"
   // ------------------------------------------------------------------
 
-  // With top-insert, after adding write tests then deploy, the list head is:
-  //   0: deploy
-  //   1: write tests
-  //   2: edit note
-  //   3: add new note
-  //   4: create schemas
-  //
-  // Reorder demo: swap so write tests becomes above deploy.
   await ctx.step(creatorId, `${creatorName} moves "write tests" above "deploy"`, async () => {
     const idxWriteTests = await getIndexByTitle(creatorPage, "write tests");
     const idxDeploy = await getIndexByTitle(creatorPage, "deploy");
@@ -273,7 +269,23 @@ export default async function scenario(ctx: ScenarioContext) {
   });
 
   // ------------------------------------------------------------------
-  //  4b. Boss deletes "edit note" (index 2, a completed item)
+  //  4. Worker rearranges: move "deploy" above "write tests"
+  // ------------------------------------------------------------------
+
+  await ctx.step(followerId, `${followerName} moves "deploy" above "write tests"`, async () => {
+    const idxDeploy = await getIndexByTitle(followerPage, "deploy");
+    const idxWriteTests = await getIndexByTitle(followerPage, "write tests");
+    if (idxDeploy < 0 || idxWriteTests < 0) {
+      throw new Error(`Worker: could not find reorder items (deploy=${idxDeploy}, write tests=${idxWriteTests})`);
+    }
+    await follower.drag(
+      `[data-testid="note-item-${idxDeploy}"]`,
+      `[data-testid="note-item-${idxWriteTests}"]`,
+    );
+  });
+
+  // ------------------------------------------------------------------
+  //  5. Boss deletes "edit note"
   // ------------------------------------------------------------------
 
   await ctx.step(creatorId, `${creatorName} deletes "edit note"`, async () => {
@@ -287,19 +299,17 @@ export default async function scenario(ctx: ScenarioContext) {
   });
 
   // ------------------------------------------------------------------
-  //  5. Verify all items are present and in the correct order on both pages
+  //  6. Verify final order on both windows
   // ------------------------------------------------------------------
 
-  // After the reorder + delete we have (top-insert, write tests swapped above deploy):
-  //   [write tests, deploy, add new note, create schemas]
   const expectedOrder = [
-    "write tests",
     "deploy",
+    "write tests",
     "add new note",
     "create schemas",
   ];
 
-  await ctx.step("all", `Verify all items are in the right order (${creatorName})`, async () => {
+  await ctx.step("all", `Verify final order (${creatorName})`, async () => {
     const creatorOrder = await creatorPage.evaluate(() => {
       const doc = (globalThis as any).document;
       const items = doc.querySelectorAll('[data-testid^="note-title-"]');
@@ -323,7 +333,7 @@ export default async function scenario(ctx: ScenarioContext) {
     console.log(`    ${creatorName}: all ${expectedOrder.length} items in correct order`);
   });
 
-  await ctx.step("all", `Verify all items are in the right order (${followerName})`, async () => {
+  await ctx.step("all", `Verify final order (${followerName})`, async () => {
     const followerOrder = await followerPage.evaluate(() => {
       const doc = (globalThis as any).document;
       const items = doc.querySelectorAll('[data-testid^="note-title-"]');
@@ -346,5 +356,4 @@ export default async function scenario(ctx: ScenarioContext) {
     }
     console.log(`    ${followerName}: all ${expectedOrder.length} items in correct order`);
   });
-
 }

@@ -560,16 +560,19 @@ export async function run(
       try { await sleep(tailCaptureMs); } catch { /* ignore */ }
     }
 
-    // Show processing overlay
-    for (const page of panePages.values()) {
-      try {
-        await page.evaluate(`(() => {
-          const o = document.createElement('div');
-          o.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);';
-          o.innerHTML = '<div style="color:#fff;font-size:1.5rem;font-family:system-ui">Finishing\\u2026</div>';
-          document.body.appendChild(o);
-        })()`);
-      } catch { /* page may be gone */ }
+    // Show processing overlay (screen recording only — screencast would
+    // capture the overlay as the last frames of the video)
+    if (isScreenRecording) {
+      for (const page of panePages.values()) {
+        try {
+          await page.evaluate(`(() => {
+            const o = document.createElement('div');
+            o.style.cssText = 'position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);';
+            o.innerHTML = '<div style="color:#fff;font-size:1.5rem;font-family:system-ui">Finishing\\u2026</div>';
+            document.body.appendChild(o);
+          })()`);
+        } catch { /* page may be gone */ }
+      }
     }
 
     // Stop screen recorder
