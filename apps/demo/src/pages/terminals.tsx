@@ -5,12 +5,17 @@
  */
 import { XtermPane } from "@/components/xterm-pane";
 
+/** Default port used by the standalone terminal server in dev mode */
+const DEV_TERM_PORT = 9800;
+
 function getTermWsFromURL(): string | null {
   if (typeof window === "undefined") return null;
   const params = new URLSearchParams(window.location.search);
   const raw = String(params.get("termWs") ?? "").trim();
-  if (!raw) return null;
-  return raw.replace(/\/$/, "");
+  if (raw) return raw.replace(/\/$/, "");
+  // In dev mode, fall back to the well-known dev terminal server port
+  if (import.meta.env.DEV) return `ws://127.0.0.1:${DEV_TERM_PORT}`;
+  return null;
 }
 
 export default function TerminalsPage() {

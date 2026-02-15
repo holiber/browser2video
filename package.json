@@ -6,6 +6,8 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "dev": "pnpm -C apps/demo dev",
+    "dev:terminals": "npx tsx tests/scenarios/terminal/terminal-ws-server.ts 9800",
+    "dev:full": "pnpm dev:terminals & pnpm dev",
     "build": "pnpm -r --filter '!browser2video-website' build",
     "build:all": "pnpm -r build",
     "preview": "pnpm -C apps/demo preview",

@@ -102,7 +102,7 @@ function isResizeMessage(v: unknown): v is { type: "resize"; cols: number; rows:
   );
 }
 
-export async function startTerminalWsServer(): Promise<TerminalServer> {
+export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   ensureNodePtySpawnHelperExecutable();
 
   const server = http.createServer((_req, res) => {
@@ -216,7 +216,7 @@ export async function startTerminalWsServer(): Promise<TerminalServer> {
     }
   });
 
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
   const addr = server.address();
   if (!addr || typeof addr === "string") {
     throw new Error("Failed to bind terminal WS server");
@@ -238,4 +238,23 @@ export async function startTerminalWsServer(): Promise<TerminalServer> {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+//  CLI entry point: `tsx tests/scenarios/terminal/terminal-ws-server.ts [port]`
+// ---------------------------------------------------------------------------
+const isDirectRun =
+  process.argv[1] &&
+  (process.argv[1].endsWith("terminal-ws-server.ts") ||
+    process.argv[1].endsWith("terminal-ws-server.js"));
+
+if (isDirectRun) {
+  const port = parseInt(process.argv[2] ?? "9800", 10);
+  startTerminalWsServer(port).then((s) => {
+    console.log(`Terminal WS server listening on ${s.baseWsUrl}`);
+    process.on("SIGINT", async () => {
+      await s.close();
+      process.exit(0);
+    });
+  });
 }
