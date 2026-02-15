@@ -28,7 +28,7 @@ Single-browser demo (**human mode**, screencast; includes scrolling + drag + dra
 
 [![Basic UI demo](https://github.com/holiber/browser2video/releases/download/examples-v3/basic-ui-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/basic-ui-demo.mp4)
 
-Docs site: `https://holiber.github.io/browser2video/`
+**[Documentation](https://holiber.github.io/browser2video/)** | **[Auto-generated scenario videos](https://holiber.github.io/browser2video/videos/)**
 
 Artifacts are saved to `artifacts/<scenario>-<timestamp>/`:
 - `run.mp4` (when recording enabled)
@@ -66,8 +66,11 @@ B2V_DOCKER_PLATFORM=linux/amd64 pnpm e2e:collab:docker
 
 ## CI
 
-GitHub Actions runs a \(3 scenarios × 2 modes\) matrix on Ubuntu and uploads artifacts:
-- `.github/workflows/ci.yml`
+GitHub Actions runs two jobs on every PR and push to `main`:
+- **test-fast** — all scenarios headless, no recording
+- **test-human** — all scenarios in human mode with screencast recording
+
+After merge to `main`, a deploy workflow records all scenarios and publishes videos to the [GH Pages video gallery](https://holiber.github.io/browser2video/videos/).
 
 ## MCP server (for agents)
 
@@ -90,7 +93,7 @@ apps/demo/            Vite + React demo app (target under test)
 packages/runner/      Runner library (modes, recording backends, window layout)
 packages/cli/         `b2v` CLI
 packages/mcp/         MCP server (stdio)
-tests/scenarios/      Scenario definitions (basic-ui, collab, github)
+tests/scenarios/      Scenario definitions (basic-ui, collab, github, kanban, tui-terminals, console-logs)
 ```
 
 ## Architecture

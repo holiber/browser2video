@@ -1,10 +1,6 @@
 /**
- * @description Scenario bundle for CI and local runs.
+ * @description Scenario utilities re-export.
+ * Individual scenario files are loaded dynamically by the CLI — no specific
+ * scenario functions are exported here.
  */
-export { basicUiScenario } from "./basic-ui.scenario.js";
-export { collabScenario } from "./collab.scenario.js";
-export { githubScenario } from "./github.scenario.js";
-export { kanbanScenario } from "./kanban.scenario.js";
-export { tuiTerminalsScenario } from "./tui-terminals.scenario.js";
-export { consoleLogsScenario } from "./console-logs.scenario.js";
 export { startTerminalWsServer } from "./terminal/terminal-ws-server.js";

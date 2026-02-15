@@ -1,14 +1,7 @@
+/**
+ * @description E2E test for kanban scenario using scenarioTest helper.
+ */
 import { test } from "@playwright/test";
-import { run } from "@browser2video/runner";
-import { kanbanScenario } from "./kanban.scenario.js";
+import { scenarioTest } from "@browser2video/runner";
 
-test("kanban scenario", async () => {
-  await run({
-    mode: "fast",
-    baseURL: process.env.BASE_URL ?? "http://localhost:5173",
-    scenario: kanbanScenario,
-    artifactDir: `test-results/kanban-${Date.now()}`,
-    recordMode: "none",
-    headless: true,
-  });
-});
+scenarioTest(test, "kanban", import("./kanban.scenario.js"));

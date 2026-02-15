@@ -1,14 +1,7 @@
+/**
+ * @description E2E test for basic-ui scenario using scenarioTest helper.
+ */
 import { test } from "@playwright/test";
-import { run } from "@browser2video/runner";
-import { basicUiScenario } from "./basic-ui.scenario.js";
+import { scenarioTest } from "@browser2video/runner";
 
-test("basic-ui scenario", async () => {
-  await run({
-    mode: "fast",
-    baseURL: process.env.BASE_URL ?? "http://localhost:5173",
-    scenario: basicUiScenario,
-    artifactDir: `test-results/basic-ui-${Date.now()}`,
-    recordMode: "none",
-    headless: true,
-  });
-});
+scenarioTest(test, "basic-ui", import("./basic-ui.scenario.js"));

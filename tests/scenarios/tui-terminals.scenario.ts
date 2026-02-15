@@ -2,10 +2,15 @@
  * @description Scenario showing interactive shell terminals with TUI apps (htop, mc)
  * running inside in-browser xterm panes connected to real PTYs.
  * Demonstrates keyboard and mouse interaction within TUIs.
- * 2x2 grid: mc (term1), htop (term2), opencode (term3), shell (term4).
+ * Layout: mc (top-left), htop (bottom-left), shell (right column, 2 rows).
  */
-import type { ScenarioContext } from "@browser2video/runner";
+import type { ScenarioConfig, ScenarioContext } from "@browser2video/runner";
 import { startTerminalWsServer } from "./terminal/terminal-ws-server.js";
+
+export const config: ScenarioConfig = {
+  server: { type: "vite", root: "apps/demo" },
+  panes: [{ id: "main", type: "browser", path: "/terminals" }],
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -129,12 +134,14 @@ async function clickInTerminal(page: any, testId: string, relX: number, relY: nu
   await sleep(60);
 }
 
-export async function tuiTerminalsScenario(ctx: ScenarioContext) {
-  const { step, actor, page, baseURL } = ctx;
+export default async function scenario(ctx: ScenarioContext) {
+  const actor = ctx.actor("main");
+  const page = ctx.page("main");
+  const { baseURL } = ctx;
   const srv = await startTerminalWsServer();
 
   try {
-    await step("Open terminals page", async () => {
+    await ctx.step("main", "Open terminals page", async () => {
       const url = `${baseURL}/terminals?termWs=${encodeURIComponent(srv.baseWsUrl)}`;
       await actor.goto(url);
       await actor.waitFor('[data-testid="terminals-page"]');
@@ -143,7 +150,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await actor.waitFor('[data-testid="xterm-term4"] .xterm');
     });
 
-    await step("Wait for terminal connections", async () => {
+    await ctx.step("main", "Wait for terminal connections", async () => {
       await waitForWsOpen(page, '[data-testid="xterm-term1"]');
       await waitForWsOpen(page, '[data-testid="xterm-term2"]');
       await waitForWsOpen(page, '[data-testid="xterm-term4"]');
@@ -152,12 +159,12 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
     // mc and htop are launched automatically by the terminal server,
     // so we just wait for their output to appear.
 
-    await step("Wait for mc to render", async () => {
+    await ctx.step("main", "Wait for mc to render", async () => {
       await waitForXtermText(page, '[data-testid="xterm-term1"]', ["1Help"], 20000);
       await sleep(800);
     });
 
-    await step("Wait for htop to render", async () => {
+    await ctx.step("main", "Wait for htop to render", async () => {
       await waitForXtermText(page, '[data-testid="xterm-term2"]', ["CPU"], 20000);
       await sleep(1000);
     });
@@ -166,7 +173,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
     //  mc — keyboard & mouse interaction
     // ================================================================
 
-    await step("Navigate mc with keyboard (left panel)", async () => {
+    await ctx.step("main", "Navigate mc with keyboard (left panel)", async () => {
       await focusTerminal(page, "xterm-term1");
       for (let i = 0; i < 4; i++) {
         await page.keyboard.press("ArrowDown");
@@ -178,7 +185,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await sleep(300);
     });
 
-    await step("Switch to right panel (Tab)", async () => {
+    await ctx.step("main", "Switch to right panel (Tab)", async () => {
       await focusTerminal(page, "xterm-term1");
       await page.keyboard.press("Tab");
       await sleep(500);
@@ -188,12 +195,12 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       }
     });
 
-    await step("Switch back to left panel (Tab)", async () => {
+    await ctx.step("main", "Switch back to left panel (Tab)", async () => {
       await page.keyboard.press("Tab");
       await sleep(400);
     });
 
-    await step("Click files in left panel", async () => {
+    await ctx.step("main", "Click files in left panel", async () => {
       await focusTerminal(page, "xterm-term1");
       await clickInTerminal(page, "xterm-term1", 0.20, 0.14);
       await sleep(400);
@@ -205,7 +212,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await sleep(400);
     });
 
-    await step("Click files in right panel", async () => {
+    await ctx.step("main", "Click files in right panel", async () => {
       await clickInTerminal(page, "xterm-term1", 0.70, 0.14);
       await sleep(400);
       await clickInTerminal(page, "xterm-term1", 0.70, 0.22);
@@ -214,14 +221,14 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await sleep(400);
     });
 
-    await step("Open directory with Enter", async () => {
+    await ctx.step("main", "Open directory with Enter", async () => {
       await clickInTerminal(page, "xterm-term1", 0.70, 0.10);
       await sleep(300);
       await page.keyboard.press("Enter");
       await sleep(800);
     });
 
-    await step("Navigate back in right panel", async () => {
+    await ctx.step("main", "Navigate back in right panel", async () => {
       // Select ".." to go up a directory
       await clickInTerminal(page, "xterm-term1", 0.70, 0.10);
       await sleep(300);
@@ -229,7 +236,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await sleep(600);
     });
 
-    await step("Click back to left panel and browse", async () => {
+    await ctx.step("main", "Click back to left panel and browse", async () => {
       await clickInTerminal(page, "xterm-term1", 0.20, 0.18);
       await sleep(400);
       await page.keyboard.press("ArrowDown");
@@ -240,7 +247,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await sleep(300);
     });
 
-    await step("View file with F3 in mc", async () => {
+    await ctx.step("main", "View file with F3 in mc", async () => {
       await focusTerminal(page, "xterm-term1");
       await page.keyboard.press("F3");
       await sleep(1200);
@@ -259,28 +266,28 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
     //  Shell (term4) — ls, la, vim
     // ================================================================
 
-    await step("Wait for shell prompt", async () => {
+    await ctx.step("main", "Wait for shell prompt", async () => {
       await waitForPrompt(page, "xterm-term4");
     });
 
-    await step("Run ls in shell", async () => {
+    await ctx.step("main", "Run ls in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "ls\n", { delay: 60 });
       await sleep(600);
       await waitForPrompt(page, "xterm-term4");
     });
 
-    await step("Run ls -la in shell", async () => {
+    await ctx.step("main", "Run ls -la in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "ls -la\n", { delay: 60 });
       await sleep(800);
       await waitForPrompt(page, "xterm-term4");
     });
 
-    await step("Launch vim in shell", async () => {
+    await ctx.step("main", "Launch vim in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "vim\n", { delay: 60 });
       await sleep(1200);
     });
 
-    await step("Type text in vim (insert mode)", async () => {
+    await ctx.step("main", "Type text in vim (insert mode)", async () => {
       // Enter insert mode
       await focusTerminal(page, "xterm-term4");
       await page.keyboard.press("i");
@@ -298,7 +305,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await sleep(500);
     });
 
-    await step("Exit vim without saving", async () => {
+    await ctx.step("main", "Exit vim without saving", async () => {
       // Escape to normal mode
       await page.keyboard.press("Escape");
       await sleep(400);
@@ -312,7 +319,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
     //  Quit TUIs
     // ================================================================
 
-    await step("Quit mc", async () => {
+    await ctx.step("main", "Quit mc", async () => {
       await focusTerminal(page, "xterm-term1");
       await page.keyboard.press("F10");
       await sleep(500);
@@ -320,7 +327,7 @@ export async function tuiTerminalsScenario(ctx: ScenarioContext) {
       await sleep(1000);
     });
 
-    await step("Quit htop", async () => {
+    await ctx.step("main", "Quit htop", async () => {
       await typeInTerminal(page, "xterm-term2", "q");
       await sleep(1000);
     });

@@ -5,12 +5,17 @@
  */
 import { XtermPane } from "@/components/xterm-pane";
 
+/** Default port used by the standalone terminal server in dev mode */
+const DEV_TERM_PORT = 9800;
+
 function getTermWsFromURL(): string | null {
   if (typeof window === "undefined") return null;
   const params = new URLSearchParams(window.location.search);
   const raw = String(params.get("termWs") ?? "").trim();
-  if (!raw) return null;
-  return raw.replace(/\/$/, "");
+  if (raw) return raw.replace(/\/$/, "");
+  // In dev mode, fall back to the well-known dev terminal server port
+  if (import.meta.env.DEV) return `ws://127.0.0.1:${DEV_TERM_PORT}`;
+  return null;
 }
 
 export default function TerminalsPage() {
@@ -31,9 +36,10 @@ export default function TerminalsPage() {
 
   return (
     <div
-      className="grid h-[calc(100vh-3rem)] grid-cols-2 grid-rows-2 gap-1 p-1"
+      className="grid h-[calc(100vh-3rem)] grid-cols-[1fr_1fr] grid-rows-2 gap-1 p-1"
       data-testid="terminals-page"
     >
+      {/* Left column: mc (top) + htop (bottom) */}
       <XtermPane
         title="Midnight Commander"
         wsUrl={`${termWs}/term/mc`}
@@ -46,17 +52,13 @@ export default function TerminalsPage() {
         testId="xterm-term2"
         className="min-h-0"
       />
-      <XtermPane
-        title="opencode"
-        wsUrl={`${termWs}/term/opencode`}
-        testId="xterm-term3"
-        className="min-h-0"
-      />
+
+      {/* Right column: shell spanning both rows */}
       <XtermPane
         title="Shell"
         wsUrl={`${termWs}/term/shell`}
         testId="xterm-term4"
-        className="min-h-0"
+        className="min-h-0 row-span-2 col-start-2 row-start-1"
       />
     </div>
   );
