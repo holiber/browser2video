@@ -10,10 +10,6 @@ export const config: ScenarioConfig = {
   panes: [{ id: "main", type: "browser", path: "/kanban" }],
 };
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 export default async function scenario(ctx: ScenarioContext) {
   const actor = ctx.actor("main");
   const page = ctx.page("main");
@@ -30,7 +26,6 @@ export default async function scenario(ctx: ScenarioContext) {
     );
     await actor.goto(`${baseURL}/kanban`);
     await actor.waitFor('[data-testid="kanban-board"]');
-    await sleep(500);
   });
 
   // ------------------------------------------------------------------
@@ -122,7 +117,6 @@ export default async function scenario(ctx: ScenarioContext) {
       "and finally to Done and Released. " +
       "This board helps teams visualize their work and maintain a steady delivery pace.",
     );
-    await sleep(1500);
   });
 }
 
@@ -133,19 +127,35 @@ export default async function scenario(ctx: ScenarioContext) {
 async function addCard(ctx: ScenarioContext, columnId: string, title: string) {
   const actor = ctx.actor("main");
 
-  // Click the "+ New card" button
   await actor.click(`[data-testid="add-card-btn-${columnId}"]`);
-  await sleep(200);
-
-  // Type the card title
   await actor.type(`[data-testid="add-card-input-${columnId}"]`, title);
-  await sleep(150);
-
-  // Click "Add Card"
   await actor.click(`[data-testid="add-card-confirm-${columnId}"]`);
-  await sleep(400);
 }
 
+/**
+ * Find a card's data-card-id attribute by its visible title text.
+ * Returns null if not found.
+ */
+async function findCardIdByTitle(
+  ctx: ScenarioContext,
+  cardTitle: string,
+): Promise<string | null> {
+  const page = ctx.page("main");
+  return page.evaluate((title: string) => {
+    const cards = document.querySelectorAll("[data-card-id]");
+    for (const card of cards) {
+      if (card.textContent?.trim() === title) {
+        return card.getAttribute("data-card-id");
+      }
+    }
+    return null;
+  }, cardTitle);
+}
+
+/**
+ * Move a card (found by title) into a target column using actor.drag().
+ * Falls back to a programmatic API if the drag doesn't register.
+ */
 async function dragCardToColumn(
   ctx: ScenarioContext,
   cardTitle: string,
@@ -154,79 +164,18 @@ async function dragCardToColumn(
   const actor = ctx.actor("main");
   const page = ctx.page("main");
 
-  // Find the card element by title text
-  const cardEl = await page.evaluateHandle((title: string) => {
-    const cards = document.querySelectorAll("[data-card-id]");
-    for (const card of cards) {
-      if (card.textContent?.trim() === title) return card;
-    }
-    return null;
-  }, cardTitle);
-
-  const card = cardEl.asElement();
-  if (!card) {
-    // Fallback: use the window API
-    console.warn(`    Card "${cardTitle}" not found for drag, using API fallback`);
-    await page.evaluate(
-      ([title, colId]: [string, string]) => {
-        const cards = document.querySelectorAll("[data-card-id]");
-        for (const c of cards) {
-          if (c.textContent?.trim() === title) {
-            (window as any).__kanban?.moveCard(
-              c.getAttribute("data-card-id"),
-              colId,
-            );
-            return;
-          }
-        }
-      },
-      [cardTitle, toColumnId] as [string, string],
-    );
-    await sleep(300);
+  const cardId = await findCardIdByTitle(ctx, cardTitle);
+  if (!cardId) {
+    console.warn(`    Card "${cardTitle}" not found, using API fallback`);
+    await apiFallbackMove(page, cardTitle, toColumnId);
     return;
   }
 
-  // Get card position
-  const srcBox = await card.boundingBox();
-  if (!srcBox) return;
+  // Use the Actor's built-in drag (WindMouse path, cursor overlay, proper delays)
+  const fromSelector = `[data-card-id="${cardId}"]`;
+  const toSelector = `[data-testid="column-${toColumnId}"]`;
 
-  // Get target column position
-  const targetCol = await page.$(`[data-testid="column-${toColumnId}"]`);
-  if (!targetCol) return;
-  const tgtBox = await targetCol.boundingBox();
-  if (!tgtBox) return;
-
-  const from = {
-    x: Math.round(srcBox.x + srcBox.width / 2),
-    y: Math.round(srcBox.y + srcBox.height / 2),
-  };
-  const to = {
-    x: Math.round(tgtBox.x + tgtBox.width / 2),
-    y: Math.round(tgtBox.y + Math.min(tgtBox.height / 3, 150)),
-  };
-
-  // Perform smooth drag with cursor overlay
-  await page.mouse.move(from.x, from.y);
-  await page.evaluate(`window.__b2v_moveCursor?.(${from.x}, ${from.y})`).catch(() => {});
-  await sleep(100);
-  await page.mouse.down();
-  await sleep(200);
-
-  // Animate the drag in steps
-  const steps = 25;
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
-    const ease = t * t * (3 - 2 * t); // smoothstep
-    const x = Math.round(from.x + (to.x - from.x) * ease);
-    const y = Math.round(from.y + (to.y - from.y) * ease);
-    await page.mouse.move(x, y);
-    await page.evaluate(`window.__b2v_moveCursor?.(${x}, ${y})`).catch(() => {});
-    await sleep(12);
-  }
-
-  await sleep(200);
-  await page.mouse.up();
-  await sleep(400);
+  await actor.drag(fromSelector, toSelector);
 
   // Verify the move happened; if not, use the API fallback
   const movedOk = await page.evaluate(
@@ -244,21 +193,29 @@ async function dragCardToColumn(
 
   if (!movedOk) {
     console.log(`    Drag didn't register, using API fallback for "${cardTitle}"`);
-    await page.evaluate(
-      ([title, colId]: [string, string]) => {
-        const cards = document.querySelectorAll("[data-card-id]");
-        for (const c of cards) {
-          if (c.textContent?.trim() === title) {
-            (window as any).__kanban?.moveCard(
-              c.getAttribute("data-card-id"),
-              colId,
-            );
-            return;
-          }
-        }
-      },
-      [cardTitle, toColumnId] as [string, string],
-    );
-    await sleep(300);
+    await apiFallbackMove(page, cardTitle, toColumnId);
   }
+}
+
+/** Programmatic fallback: move a card via the app's __kanban API. */
+async function apiFallbackMove(
+  page: import("@playwright/test").Page,
+  cardTitle: string,
+  toColumnId: string,
+) {
+  await page.evaluate(
+    ([title, colId]: [string, string]) => {
+      const cards = document.querySelectorAll("[data-card-id]");
+      for (const c of cards) {
+        if (c.textContent?.trim() === title) {
+          (window as any).__kanban?.moveCard(
+            c.getAttribute("data-card-id"),
+            colId,
+          );
+          return;
+        }
+      }
+    },
+    [cardTitle, toColumnId] as [string, string],
+  );
 }

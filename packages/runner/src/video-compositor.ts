@@ -3,7 +3,7 @@
  * Supports row (hstack), grid (xstack), and auto layouts.
  */
 import { execFileSync, spawnSync } from "child_process";
-import { probeDurationSeconds, probeFrameCount } from "./screen-capture.js";
+import { probeDurationSeconds } from "./screen-capture.js";
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -37,7 +37,7 @@ export interface ComposeOptions {
  * - 4+ inputs (grid / auto): xstack with calculated layout.
  */
 export function composeVideos(opts: ComposeOptions): void {
-  const { inputs, outputPath, ffmpeg, targetDurationSec } = opts;
+  const { inputs, outputPath, ffmpeg } = opts;
   const layout = opts.layout ?? "auto";
 
   if (inputs.length === 0) throw new Error("composeVideos: no inputs");
@@ -70,32 +70,15 @@ export function composeVideos(opts: ComposeOptions): void {
     if (scale !== 1) console.log(`  Video scale: ${scale}x (${actualW}px actual vs ${cssVp}px CSS)`);
   }
 
-  // Probe durations and frame counts
-  const durations = inputs.map((p) => probeDurationSeconds(p, ffmpeg));
-  const target = targetDurationSec && targetDurationSec > 0 ? targetDurationSec : 0;
-  const frameCounts = target > 0 ? inputs.map((p) => probeFrameCount(p, ffmpeg)) : inputs.map(() => 0);
-
-  // Build per-input filter chains
-  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  // Build per-input filter chains — use PTS-STARTPTS to preserve real-world
+  // time alignment between panes (frame-count normalization breaks sync).
   const streamLabels: string[] = [];
   const filterParts: string[] = [];
 
   for (let i = 0; i < inputs.length; i++) {
     const label = `s${i}`;
     streamLabels.push(`[${label}]`);
-
-    let setpts: string;
-    if (target > 0 && frameCounts[i] > 0) {
-      const spf = target / frameCounts[i];
-      setpts = `N*${spf.toFixed(9)}/TB`;
-    } else if (target > 0 && durations[i] > 0.1) {
-      const factor = clamp(target / durations[i], 0.25, 4);
-      setpts = factor !== 1 ? `(PTS-STARTPTS)*${factor.toFixed(6)}` : "PTS-STARTPTS";
-    } else {
-      setpts = "PTS-STARTPTS";
-    }
-
-    filterParts.push(`[${i}:v]setpts=${setpts},fps=60${cropFilter}[${label}]`);
+    filterParts.push(`[${i}:v]setpts=PTS-STARTPTS,fps=60${cropFilter}[${label}]`);
   }
 
   // Build stack filter
