@@ -26,6 +26,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
+      "node-pty",
       "puppeteer",
       "@ffmpeg-installer/darwin-arm64",
       "@ffmpeg-installer/linux-x64",

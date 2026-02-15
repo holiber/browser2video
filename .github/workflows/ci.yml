@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [basic-ui, collab, github, kanban]
+        scenario: [basic-ui, collab, github, kanban, tui-terminals]
         mode: [human, fast]
     steps:
       - name: Checkout
@@ -28,10 +28,10 @@ jobs:
         with:
           version: 10.29.3
 
-      - name: Install system deps (xvfb, xterm, ffmpeg)
+      - name: Install system deps (xvfb, xterm, ffmpeg, mc, htop)
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xterm ffmpeg
+          sudo apt-get install -y xvfb xterm ffmpeg mc htop
 
       - name: Install deps
         run: pnpm install --frozen-lockfile
