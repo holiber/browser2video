@@ -7,9 +7,9 @@ import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { createServer, type ViteDevServer } from "vite";
 import { run, runCollab, type Mode, type NarrationOptions } from "@browser2video/runner";
-import { basicUiScenario, collabScenario, githubScenario, kanbanScenario } from "@browser2video/scenarios";
+import { basicUiScenario, collabScenario, githubScenario, kanbanScenario, tuiTerminalsScenario } from "@browser2video/scenarios";
 
-type ScenarioName = "basic-ui" | "collab" | "github" | "kanban";
+type ScenarioName = "basic-ui" | "collab" | "github" | "kanban" | "tui-terminals";
 type RecordMode = "none" | "screencast" | "screen";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -102,7 +102,7 @@ program
   .command("list-scenarios")
   .description("List built-in scenarios.")
   .action(() => {
-    console.log(["basic-ui", "collab", "github", "kanban"].join("\n"));
+    console.log(["basic-ui", "collab", "github", "kanban", "tui-terminals"].join("\n"));
   });
 
 program
@@ -179,7 +179,7 @@ program
       ? (scenarioKind === "single" || scenarioKind === "collab" ? demoRoot : null)
       : scenario === "kanban"
         ? kanbanDemoRoot
-        : (scenario === "basic-ui" || scenario === "collab")
+        : (scenario === "basic-ui" || scenario === "collab" || scenario === "tui-terminals")
           ? demoRoot
           : null;
 
@@ -246,6 +246,7 @@ program
       const scenarioFn =
         scenario === "github" ? githubScenario :
         scenario === "kanban" ? kanbanScenario :
+        scenario === "tui-terminals" ? tuiTerminalsScenario :
         basicUiScenario;
       await run({
         mode,
