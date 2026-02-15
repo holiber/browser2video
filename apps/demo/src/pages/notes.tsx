@@ -5,6 +5,9 @@
  */
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from "react";
 import { motion, Reorder, AnimatePresence } from "framer-motion";
+import { Terminal } from "xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "xterm/css/xterm.css";
 import {
   GripVertical,
   Plus,
@@ -47,6 +50,14 @@ interface NotesDoc {
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
+
+function getTermWsFromURL(): string | null {
+  if (typeof window === "undefined") return null;
+  const params = new URLSearchParams(window.location.search);
+  const raw = String(params.get("termWs") ?? "").trim();
+  if (!raw) return null;
+  return raw.replace(/\/$/, "");
+}
 
 function getRoleFromURL(): "boss" | "worker" | null {
   const params = new URLSearchParams(window.location.search);
@@ -237,11 +248,181 @@ function TaskItem({
 }
 
 /* ------------------------------------------------------------------ */
+/*  Xterm.js pane                                                      */
+/* ------------------------------------------------------------------ */
+
+function XtermPane(props: {
+  title: string;
+  wsUrl: string;
+  testId: string;
+  className?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    let stopped = false;
+    el.dataset.b2vWsState = "connecting";
+
+    const term = new Terminal({
+      convertEol: false,
+      cursorBlink: true,
+      fontFamily:
+        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontSize: 13,
+      lineHeight: 1.15,
+      disableStdin: false,
+    });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
+
+    // Focus-guard: first click on an unfocused terminal focuses it without
+    // forwarding a mouse event into the PTY (which would cause TUI apps like
+    // htop/mc to interpret the click as a UI action, e.g. pressing "Quit").
+    // Once focused, subsequent clicks pass through normally for TUI mouse interaction.
+    const focusGuard = (e: MouseEvent) => {
+      const textarea = el.querySelector(".xterm-helper-textarea") as HTMLElement;
+      if (textarea && document.activeElement !== textarea) {
+        e.stopPropagation();
+        e.preventDefault();
+        textarea.focus();
+      }
+    };
+    el.addEventListener("mousedown", focusGuard, { capture: true });
+
+    termRef.current = term;
+    fitRef.current = fit;
+
+    const encoder = new TextEncoder();
+
+    function sendResize() {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(
+        JSON.stringify({
+          type: "resize",
+          cols: term.cols,
+          rows: term.rows,
+        }),
+      );
+    }
+
+    let roRaf = 0;
+    const ro = new ResizeObserver(() => {
+      if (roRaf) cancelAnimationFrame(roRaf);
+      roRaf = requestAnimationFrame(() => {
+        try {
+          fit.fit();
+        } catch {
+          // ignore transient layout errors
+        }
+        sendResize();
+      });
+    });
+    ro.observe(el);
+
+    requestAnimationFrame(() => {
+      try {
+        fit.fit();
+      } catch {
+        // ignore
+      }
+      sendResize();
+    });
+
+    const ws = new WebSocket(props.wsUrl);
+    ws.binaryType = "arraybuffer";
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      if (stopped) return;
+      el.dataset.b2vWsState = "open";
+      sendResize();
+      term.focus();
+    };
+
+    ws.onmessage = (ev) => {
+      if (stopped) return;
+      const data: any = (ev as any).data;
+      if (typeof data === "string") return;
+      if (data instanceof ArrayBuffer) {
+        try { term.write(new Uint8Array(data)); } catch { /* ignore after dispose */ }
+        return;
+      }
+      if (typeof Blob !== "undefined" && data instanceof Blob) {
+        void data.arrayBuffer().then((ab) => {
+          if (stopped) return;
+          try { term.write(new Uint8Array(ab)); } catch { /* ignore */ }
+        });
+      }
+    };
+
+    ws.onerror = () => {
+      if (stopped) return;
+      el.dataset.b2vWsState = "error";
+    };
+
+    ws.onclose = (e) => {
+      if (stopped) return;
+      el.dataset.b2vWsState = `closed:${(e as any)?.code ?? "?"}`;
+    };
+
+    const disp = term.onData((data) => {
+      if (stopped) return;
+      const sock = wsRef.current;
+      if (!sock || sock.readyState !== WebSocket.OPEN) return;
+      sock.send(encoder.encode(data));
+    });
+
+    return () => {
+      stopped = true;
+      el.removeEventListener("mousedown", focusGuard, { capture: true });
+      disp.dispose();
+      ro.disconnect();
+      if (roRaf) cancelAnimationFrame(roRaf);
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      wsRef.current = null;
+      try {
+        term.dispose();
+      } catch {
+        // ignore
+      }
+      termRef.current = null;
+      fitRef.current = null;
+    };
+  }, [props.wsUrl]);
+
+  return (
+    <div className={props.className}>
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-xs font-semibold text-muted-foreground">{props.title}</div>
+      </div>
+      <div
+        ref={containerRef}
+        data-testid={props.testId}
+        className="h-full w-full rounded-md border bg-black/90 p-2"
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Notes list (needs a docUrl to use useDocument)                     */
 /* ------------------------------------------------------------------ */
 
 function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
   const role = getRoleFromURL();
+  const termWs = getTermWsFromURL();
   const [doc, changeDoc] = useDocument<NotesDoc>(docUrl, { suspense: true });
   const [inputValue, setInputValue] = useState("");
 
@@ -320,17 +501,12 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
   // Build a mutable copy for Reorder (Automerge docs are readonly)
   const tasks: Task[] = doc?.tasks ? [...doc.tasks].map((t) => ({ ...t })) : [];
 
-  return (
-    <div
-      className="mx-auto max-w-md space-y-3 p-3"
-      data-testid="notes-page"
-    >
+  const webApp = (
+    <>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold tracking-tight">
-            Implement notes app
-          </h1>
+          <h1 className="text-2xl font-bold tracking-tight">Implement notes app</h1>
           {role && (
             <span
               className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
@@ -340,11 +516,7 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
               }`}
               data-testid="role-badge"
             >
-              {role === "boss" ? (
-                <Crown className="h-3 w-3" />
-              ) : (
-                <Wrench className="h-3 w-3" />
-              )}
+              {role === "boss" ? <Crown className="h-3 w-3" /> : <Wrench className="h-3 w-3" />}
               {role === "boss" ? "Boss" : "Worker"}
             </span>
           )}
@@ -387,9 +559,7 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
       <Card>
         <CardContent className="pt-4 overflow-hidden">
           {tasks.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              No tasks yet. Add one above!
-            </p>
+            <p className="py-8 text-center text-sm text-muted-foreground">No tasks yet. Add one above!</p>
           ) : (
             <Reorder.Group
               axis="y"
@@ -424,6 +594,25 @@ function NotesList({ docUrl }: { docUrl: AutomergeUrl }) {
         >
           {tasks.filter((t) => t.completed).length} of {tasks.length} completed
         </motion.div>
+      )}
+    </>
+  );
+
+  return (
+    <div
+      className={termWs ? "mx-auto max-w-6xl space-y-3 p-3" : "mx-auto max-w-md space-y-3 p-3"}
+      data-testid="notes-page"
+    >
+      {termWs ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>{webApp}</div>
+            <XtermPane title="Terminal 1" wsUrl={`${termWs}/term/shell`} testId="xterm-term1" className="h-[520px]" />
+          </div>
+          <XtermPane title="Terminal 2" wsUrl={`${termWs}/term/shell`} testId="xterm-term2" className="h-[260px]" />
+        </div>
+      ) : (
+        webApp
       )}
     </div>
   );
