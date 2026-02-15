@@ -36,21 +36,38 @@ export function XtermPane(props: {
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(el);
+
+    // Defer term.open() until the container has non-zero dimensions.
+    // xterm's internal renderer reads `dimensions` on open, which is undefined
+    // when the element has 0×0 size (e.g. 4 terminals mounting simultaneously
+    // in a CSS grid before layout).
+    let opened = false;
+    function openWhenReady() {
+      if (opened || stopped) return;
+      if (el!.offsetWidth > 0 && el!.offsetHeight > 0) {
+        opened = true;
+        term.open(el!);
+        installFocusGuard();
+        try { fit.fit(); } catch { /* ignore */ }
+        sendResize();
+      }
+    }
 
     // Focus-guard: first click on an unfocused terminal focuses it without
     // forwarding a mouse event into the PTY (which would cause TUI apps like
     // htop/mc to interpret the click as a UI action, e.g. pressing "Quit").
     // Once focused, subsequent clicks pass through normally for TUI mouse interaction.
+    function installFocusGuard() {
+      el!.addEventListener("mousedown", focusGuard, { capture: true });
+    }
     const focusGuard = (e: MouseEvent) => {
-      const textarea = el.querySelector(".xterm-helper-textarea") as HTMLElement;
+      const textarea = el!.querySelector(".xterm-helper-textarea") as HTMLElement;
       if (textarea && document.activeElement !== textarea) {
         e.stopPropagation();
         e.preventDefault();
         textarea.focus();
       }
     };
-    el.addEventListener("mousedown", focusGuard, { capture: true });
 
     termRef.current = term;
     fitRef.current = fit;
@@ -69,28 +86,31 @@ export function XtermPane(props: {
       );
     }
 
+    function safeFit() {
+      if (!opened || el!.offsetWidth <= 0 || el!.offsetHeight <= 0) return;
+      fit.fit();
+      sendResize();
+    }
+
     let roRaf = 0;
     const ro = new ResizeObserver(() => {
       if (roRaf) cancelAnimationFrame(roRaf);
       roRaf = requestAnimationFrame(() => {
+        if (!opened) {
+          openWhenReady();
+          return;
+        }
         try {
-          fit.fit();
+          safeFit();
         } catch {
           // ignore transient layout errors
         }
-        sendResize();
       });
     });
     ro.observe(el);
 
-    requestAnimationFrame(() => {
-      try {
-        fit.fit();
-      } catch {
-        // ignore
-      }
-      sendResize();
-    });
+    // Also try opening on next animation frame (layout may already be done)
+    requestAnimationFrame(() => openWhenReady());
 
     const ws = new WebSocket(props.wsUrl);
     ws.binaryType = "arraybuffer";
@@ -138,7 +158,7 @@ export function XtermPane(props: {
 
     return () => {
       stopped = true;
-      el.removeEventListener("mousedown", focusGuard, { capture: true });
+      if (opened) el.removeEventListener("mousedown", focusGuard, { capture: true });
       disp.dispose();
       ro.disconnect();
       if (roRaf) cancelAnimationFrame(roRaf);
