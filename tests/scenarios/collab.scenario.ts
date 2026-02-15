@@ -49,10 +49,6 @@ const EXTRA_TASKS = ["write tests", "deploy"];
  * Small helper: wait for an element matching `selector` to appear inside a
  * page managed by an Actor. Uses page.waitForSelector under the hood.
  */
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 async function getIndexByTitle(page: Page, title: string): Promise<number> {
   return await page.evaluate((t: string) => {
     const doc = (globalThis as any).document;
@@ -195,7 +191,6 @@ export default async function scenario(ctx: ScenarioContext) {
     await ctx.step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
       seq += 1;
       await creator.type('[data-testid="note-input"]', taskTitle);
-      await sleep(160);
       await creator.click('[data-testid="note-add-btn"]');
       await setOverlaySeq(creatorId, seq, taskTitle);
     });
@@ -204,24 +199,19 @@ export default async function scenario(ctx: ScenarioContext) {
     await ctx.step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
       await waitForTitle(followerPage, taskTitle);
       await setOverlayApplied(followerId, seq, taskTitle);
-      // Small visual pause so viewers can see the sync
-      await sleep(300);
     });
 
     if (taskTitle === "add new note") {
       await ctx.step("all", 'Reviewer approves "add new note"', async () => {
         await ctx.terminal("reviewer").send('APPROVE "add new note"');
-        await sleep(300);
       });
 
       await ctx.step(creatorId, `${creatorName} sees "add new note" approved`, async () => {
         await waitForApprovedByTitle(creatorPage, "add new note");
-        await sleep(200);
       });
 
       await ctx.step(followerId, `${followerName} sees "add new note" approved`, async () => {
         await waitForApprovedByTitle(followerPage, "add new note");
-        await sleep(200);
       });
     }
 
@@ -234,7 +224,6 @@ export default async function scenario(ctx: ScenarioContext) {
     // Wait for the completion to sync back to Boss
     await ctx.step(creatorId, `${creatorName} sees "${taskTitle}" completed`, async () => {
       await waitForCompletedByTitle(creatorPage, taskTitle);
-      await sleep(300);
     });
   }
 
@@ -248,7 +237,6 @@ export default async function scenario(ctx: ScenarioContext) {
     await ctx.step(creatorId, `${creatorName} adds task: "${taskTitle}"`, async () => {
       seq += 1;
       await creator.type('[data-testid="note-input"]', taskTitle);
-      await sleep(160);
       await creator.click('[data-testid="note-add-btn"]');
       await setOverlaySeq(creatorId, seq, taskTitle);
     });
@@ -257,7 +245,6 @@ export default async function scenario(ctx: ScenarioContext) {
     await ctx.step(followerId, `${followerName} sees "${taskTitle}" appear`, async () => {
       await waitForTitle(followerPage, taskTitle);
       await setOverlayApplied(followerId, seq, taskTitle);
-      await sleep(300);
     });
   }
 
@@ -285,8 +272,6 @@ export default async function scenario(ctx: ScenarioContext) {
     );
   });
 
-  await sleep(800);
-
   // ------------------------------------------------------------------
   //  4b. Boss deletes "edit note" (index 2, a completed item)
   // ------------------------------------------------------------------
@@ -299,10 +284,7 @@ export default async function scenario(ctx: ScenarioContext) {
 
   await ctx.step(followerId, `${followerName} sees "edit note" disappear`, async () => {
     await waitForTitleGone(followerPage, "edit note");
-    await sleep(300);
   });
-
-  await sleep(500);
 
   // ------------------------------------------------------------------
   //  5. Verify all items are present and in the correct order on both pages
@@ -365,6 +347,4 @@ export default async function scenario(ctx: ScenarioContext) {
     console.log(`    ${followerName}: all ${expectedOrder.length} items in correct order`);
   });
 
-  // Final pause so viewers can see the end state
-  await sleep(1200);
 }

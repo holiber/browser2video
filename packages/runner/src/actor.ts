@@ -21,6 +21,7 @@ export const DEFAULT_DELAYS: Record<Mode, ActorDelays> = {
     beforeTypeMs: [55, 55],
     keyDelayMs: [35, 35],
     keyBoundaryPauseMs: [30, 30],
+    afterTypeMs: [150, 150],
     selectOpenMs: [120, 120],
     selectOptionMs: [70, 70],
     afterDragMs: [120, 120],
@@ -35,6 +36,7 @@ export const DEFAULT_DELAYS: Record<Mode, ActorDelays> = {
     beforeTypeMs: [0, 0],
     keyDelayMs: [0, 0],
     keyBoundaryPauseMs: [0, 0],
+    afterTypeMs: [0, 0],
     selectOpenMs: [0, 0],
     selectOptionMs: [0, 0],
     afterDragMs: [0, 0],
@@ -366,6 +368,8 @@ export class Actor {
         await sleep(pickMs(this.delays.keyBoundaryPauseMs));
       }
     }
+
+    await sleep(pickMs(this.delays.afterTypeMs));
   }
 
   /** Open a select dropdown and pick a value. */
