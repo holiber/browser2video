@@ -18,7 +18,23 @@ Record smooth browser automation videos (MP4 @ 60fps) with subtitles, narration,
 
 ```bash
 pnpm install
+cp .env.example .env  # optional: enables narration if you add OPENAI_API_KEY
 node tests/scenarios/basic-ui.test.ts
+```
+
+## Install / npx (published package)
+
+Requirements:
+
+- **Node.js** >= 22
+- **ffmpeg** in `PATH` (for video composition / audio mixing)
+
+Run commands from your scenario project directory (your current working directory is used to resolve files):
+
+```bash
+npx -y browser2video list
+npx -y browser2video doctor
+npx -y browser2video run tests/scenarios/basic-ui.test.ts --mode human --headed
 ```
 
 ## Video examples
@@ -70,9 +86,8 @@ In-page console panel showing live log output during CRUD operations on a notes 
 ## CLI
 
 ```bash
-pnpm b2v run tests/scenarios/basic-ui.test.ts --mode human --record screencast --headed
-pnpm b2v run tests/scenarios/collab.test.ts   --mode human --record screen --headed --display-size 2560x720
-pnpm b2v run tests/scenarios/kanban.test.ts   --narrate --voice onyx --realtime-audio
+pnpm b2v run tests/scenarios/basic-ui.test.ts --mode human --headed
+pnpm b2v run tests/scenarios/collab.test.ts   --mode human --headed
 pnpm b2v run tests/scenarios/kanban.test.ts   --narrate --voice onyx --realtime-audio
 ```
 
@@ -104,8 +119,8 @@ Add to `.cursor/mcp.json`:
 {
   "mcpServers": {
     "browser2video": {
-      "command": "node",
-      "args": ["packages/browser2video/mcp-server.ts"],
+      "command": "npx",
+      "args": ["-y", "--package", "browser2video", "b2v-mcp"],
       "env": {}
     }
   }
@@ -124,9 +139,8 @@ Add to `.cursor/mcp.json`:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `scenarioFile` | string | required | Path to test file |
+| `scenarioFile` | string | required | Path to scenario file (relative to current working directory or absolute) |
 | `mode` | `"human"` \| `"fast"` | `"human"` | Execution speed |
-| `record` | `"screencast"` \| `"screen"` \| `"none"` | `"screencast"` | Recording mode |
 | `voice` | string | `"ash"` | TTS voice (alloy, ash, coral, echo, fable, nova, onyx, sage, shimmer) |
 | `language` | string | - | Auto-translate narration (e.g. `"ru"`, `"es"`, `"de"`) |
 | `realtimeAudio` | boolean | `false` | Play audio through speakers during execution |

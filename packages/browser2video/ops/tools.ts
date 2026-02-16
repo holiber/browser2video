@@ -10,7 +10,7 @@ import { ModeSchema } from "../schemas/common.ts";
 // Shared input schema for the "run" tool — the single source of truth
 // for CLI flags, MCP inputSchema, and docs parameter tables.
 export const RunInputSchema = z.object({
-  scenarioFile: z.string().describe("Path to a *.test.ts scenario file (relative to repo root or absolute)."),
+  scenarioFile: z.string().describe("Path to a *.test.ts or *.scenario.ts file (relative to current working directory or absolute)."),
   mode: ModeSchema.default("human").describe("Execution speed mode."),
   voice: z.string().optional().describe("OpenAI TTS voice: alloy | ash | coral | echo | fable | nova | onyx | sage | shimmer."),
   language: z.string().optional().describe("Auto-translate narration to this language (e.g. 'ru', 'es', 'de', 'fr')."),

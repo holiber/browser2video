@@ -5,8 +5,12 @@
  */
 import { XtermPane } from "@/components/xterm-pane";
 
-/** Default port used by the standalone terminal server in dev mode */
-const DEV_TERM_PORT = 9800;
+/** Default port used by the standalone terminal server in dev mode. */
+const DEV_TERM_PORT = (() => {
+  const raw = String(import.meta.env.VITE_B2V_TERMINAL_WS_PORT ?? "").trim();
+  const n = raw ? Number(raw) : Number.NaN;
+  return Number.isFinite(n) && n > 0 ? n : 9800;
+})();
 
 function getTermWsFromURL(): string | null {
   if (typeof window === "undefined") return null;

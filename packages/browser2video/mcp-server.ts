@@ -7,71 +7,26 @@
  */
 import path from "node:path";
 import fs from "node:fs";
-import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runTool, listTool, doctorTool } from "./ops/tools.ts";
+import { RunInputSchema, runTool, listTool, doctorTool } from "./ops/tools.ts";
+import { defaultScenariosDir, listScenarioFiles, runScenarioAsNodeTs } from "./runner.ts";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../..");
-const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
+const cwd = process.cwd();
+const defaultDir = defaultScenariosDir(cwd);
 
-/**
- * Run a test file as a subprocess via `node` (native TS support).
- * Passes narration and other config via B2V_* environment variables.
- * Parses artifact directory and video path from stdout.
- */
-function runTestFile(
-  filePath: string,
-  opts: {
-    mode?: string;
-    voice?: string;
-    language?: string;
-    realtimeAudio?: boolean;
-    narrationSpeed?: number;
-  },
-): Promise<{ stdout: string; stderr: string; artifactsDir?: string; videoPath?: string }> {
-  const abs = path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(repoRoot, filePath);
-
-  if (!fs.existsSync(abs)) {
-    throw new Error(`Test file not found: ${abs}`);
+function tryGetFfmpegVersion(): string | null {
+  try {
+    const ver = execFileSync("ffmpeg", ["-version"], { stdio: "pipe" })
+      .toString("utf-8")
+      .split("\n")[0]
+      ?.trim();
+    return ver || null;
+  } catch {
+    return null;
   }
-
-  const env: Record<string, string> = { ...process.env as Record<string, string> };
-
-  if (opts.mode) env.B2V_MODE = opts.mode;
-  if (opts.voice) env.B2V_VOICE = opts.voice;
-  if (opts.language) env.B2V_NARRATION_LANGUAGE = opts.language;
-  if (opts.narrationSpeed) env.B2V_NARRATION_SPEED = String(opts.narrationSpeed);
-  if (opts.realtimeAudio) env.B2V_REALTIME_AUDIO = "true";
-
-  return new Promise((resolve, reject) => {
-    const proc = execFile(process.execPath, [abs], { cwd: repoRoot, env, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) {
-        reject(new Error(`Test process exited with code ${err.code}:\n${stderr}\n${stdout}`));
-        return;
-      }
-
-      const output = stdout.toString();
-
-      // Parse artifacts dir from output: "  Artifacts: <path>"
-      const artifactMatch = output.match(/Artifacts:\s+(.+)/);
-      const artifactsDir = artifactMatch?.[1]?.trim();
-
-      // Parse video path from output: "  Video saved: <path>"
-      const videoMatch = output.match(/Video saved:\s+(.+)/);
-      const videoPath = videoMatch?.[1]?.trim();
-
-      resolve({ stdout: output, stderr: stderr.toString(), artifactsDir, videoPath });
-    });
-
-    // Forward subprocess stderr to MCP server stderr for live logging
-    proc.stderr?.pipe(process.stderr);
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -93,12 +48,12 @@ server.registerTool(
       dir: z.string().optional().describe("Directory to scan (default: tests/scenarios)."),
     },
   },
-  async () => {
-    const files = fs.existsSync(defaultScenariosDir)
-      ? fs.readdirSync(defaultScenariosDir)
-          .filter((f) => f.endsWith(".test.ts"))
-          .sort()
-      : [];
+  async (input?: { dir?: string }) => {
+    const dirRaw = String(input?.dir ?? "").trim();
+    const dir = dirRaw
+      ? (path.isAbsolute(dirRaw) ? dirRaw : path.resolve(cwd, dirRaw))
+      : defaultDir;
+    const files = listScenarioFiles(dir);
     return {
       content: [{ type: "text" as const, text: JSON.stringify({ scenarios: files }) }],
     };
@@ -116,6 +71,7 @@ server.registerTool(
     const out = {
       platform: `${process.platform} ${process.arch}`,
       node: process.version,
+      ffmpeg: tryGetFfmpegVersion() ?? "not found in PATH",
     };
     return {
       content: [{ type: "text" as const, text: JSON.stringify(out) }],
@@ -129,14 +85,7 @@ server.registerTool(
   {
     title: runTool.summary,
     description: runTool.description,
-    inputSchema: {
-      scenarioFile: z.string().describe("Path to a *.test.ts scenario file."),
-      mode: z.enum(["human", "fast"]).default("human").describe("Execution speed mode."),
-      voice: z.string().optional().describe("OpenAI TTS voice."),
-      language: z.string().optional().describe("Auto-translate narration language."),
-      realtimeAudio: z.boolean().optional().describe("Play narration in realtime."),
-      narrationSpeed: z.number().min(0.25).max(4).optional().describe("Narration speed 0.25-4.0."),
-    },
+    inputSchema: RunInputSchema.shape,
   },
   async (input: {
     scenarioFile: string;
@@ -146,15 +95,34 @@ server.registerTool(
     realtimeAudio?: boolean;
     narrationSpeed?: number;
   }) => {
-    const result = await runTestFile(input.scenarioFile, {
-      mode: input.mode,
-      voice: input.voice,
-      language: input.language,
-      realtimeAudio: input.realtimeAudio,
-      narrationSpeed: input.narrationSpeed,
+    const env: Record<string, string | undefined> = {
+      B2V_MODE: input.mode,
+      B2V_VOICE: input.voice,
+      B2V_NARRATION_LANGUAGE: input.language,
+      B2V_NARRATION_SPEED: input.narrationSpeed !== undefined ? String(input.narrationSpeed) : undefined,
+      B2V_REALTIME_AUDIO: input.realtimeAudio ? "true" : undefined,
+    };
+
+    const result = await runScenarioAsNodeTs({
+      scenarioFile: input.scenarioFile,
+      cwd,
+      env,
+      streamOutput: false,
     });
 
-    const artifactsDir = result.artifactsDir;
+    if (result.code !== 0) {
+      throw new Error(`Scenario process exited with code ${result.code}:\n${result.stderr}\n${result.stdout}`);
+    }
+
+    const output = result.stdout.toString();
+
+    // Parse artifacts dir from output: "  Artifacts: <path>"
+    const artifactMatch = output.match(/Artifacts:\s+(.+)/);
+    const artifactsDir = artifactMatch?.[1]?.trim();
+
+    // Parse video path from output: "  Video saved: <path>"
+    const videoMatch = output.match(/Video saved:\s+(.+)/);
+    const videoPath = videoMatch?.[1]?.trim();
 
     // Look for common output files in the artifacts dir
     let subtitlesPath: string | undefined;
@@ -179,11 +147,11 @@ server.registerTool(
 
     const out = {
       artifactsDir,
-      videoPath: result.videoPath,
+      videoPath,
       subtitlesPath,
       metadataPath,
       durationMs,
-      stdout: result.stdout,
+      stdout: output,
     };
 
     return {

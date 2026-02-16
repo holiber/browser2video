@@ -230,7 +230,7 @@ const isDirectRun =
     process.argv[1].endsWith("terminal-ws-server.js"));
 
 if (isDirectRun) {
-  const port = parseInt(process.argv[2] ?? "9800", 10);
+  const port = parseInt(process.argv[2] ?? process.env.B2V_TERMINAL_WS_PORT ?? "9800", 10);
   startTerminalWsServer(port).then((s) => {
     console.log(`Terminal WS server listening on ${s.baseWsUrl}`);
     process.on("SIGINT", async () => {

@@ -12,11 +12,12 @@ Record browser automation scenarios as production-quality narrated videos.
 
 ### b2v_run
 
-Run a `*.test.ts` scenario file with video recording and optional TTS narration.
+Run a `*.test.ts` / `*.scenario.ts` scenario file with optional TTS narration.
+Video recording is controlled by the scenario code (via `createSession({ record: ... })`) and/or `B2V_RECORD`.
 
 **Parameters:**
 
-- `scenarioFile` (string, required) — Path to a `*.test.ts` scenario file (relative to repo root or absolute).
+- `scenarioFile` (string, required) — Path to a `*.test.ts` / `*.scenario.ts` file (relative to current working directory or absolute).
 - `mode` (string, optional) — Execution speed mode: `"human"` (default, with realistic delays) or `"fast"` (instant).
 - `voice` (string, optional) — OpenAI TTS voice: alloy, ash (default), coral, echo, fable, nova, onyx, sage, shimmer.
 - `language` (string, optional) — Auto-translate narration to this language (e.g. `"ru"`, `"es"`, `"de"`, `"fr"`).
@@ -28,8 +29,8 @@ Run a `*.test.ts` scenario file with video recording and optional TTS narration.
 **Example:**
 
 ```bash
-b2v run tests/scenarios/basic-ui.test.ts
-b2v run tests/scenarios/kanban.test.ts --language ru --voice ash
+npx -y browser2video run tests/scenarios/basic-ui.test.ts
+npx -y browser2video run tests/scenarios/kanban.test.ts --language ru --voice ash
 ```
 
 ### b2v_list_scenarios
@@ -46,7 +47,7 @@ List available `*.test.ts` scenario files in the scenarios directory.
 
 Print environment diagnostics: Node.js version, ffmpeg availability, and platform-specific notes.
 
-**Returns:** `platform`, `node`.
+**Returns:** `platform`, `node`, `ffmpeg`.
 
 ## Scenario authoring
 

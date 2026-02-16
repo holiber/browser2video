@@ -161,7 +161,9 @@ export class Session {
     this.record = opts.record
       ?? (process.env.B2V_RECORD !== undefined ? process.env.B2V_RECORD !== "false" : !underPW);
 
-    this.headed = opts.headed ?? (this.mode === "human");
+    const headedEnv = process.env.B2V_HEADED;
+    this.headed = opts.headed
+      ?? (headedEnv !== undefined ? headedEnv !== "false" : this.mode === "human");
 
     this.artifactDir = opts.outputDir
       ?? path.resolve("artifacts", `${resolveCallerFilename()}-${timestamp()}`);
@@ -182,7 +184,7 @@ export class Session {
     loadDotenv();
 
     // Auto-enable narration when OPENAI_API_KEY is present and not explicitly configured
-    if (!this.narrationOpts && process.env.OPENAI_API_KEY) {
+    if (!this.narrationOpts && (process.env.B2V_NARRATE === "true" || process.env.OPENAI_API_KEY)) {
       this.narrationOpts = { enabled: true };
     }
 

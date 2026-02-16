@@ -6,52 +6,27 @@ on:
     branches: [ main ]
 
 jobs:
-  # ── Fast-mode tests: run all scenarios headless, no recording ──
-  test-fast:
+  # ── Fast-mode tests inside Docker (tests containerized environment) ──
+  test-fast-docker:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js (LTS)
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
+      - name: Build Docker image
+        run: docker build -t b2v-test .
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.29.3
-
-      - name: Install system deps
+      - name: Run all scenario tests (fast mode, Docker)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb xterm ffmpeg mc htop vim
+          docker run --rm \
+            --ipc=host \
+            -e B2V_MODE=fast \
+            b2v-test \
+            xvfb-run -a --server-args="-screen 0 1920x1080x24" \
+              npx playwright test --reporter=list
 
-      - name: Install deps
-        run: pnpm install --frozen-lockfile
-
-      - name: Typecheck workspace
-        run: pnpm typecheck
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Run all scenario tests (fast mode)
-        run: |
-          xvfb-run -a --server-args="-screen 0 2560x720x24" \
-            npx playwright test --reporter=list
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-fast
-          path: test-results/
-          if-no-files-found: ignore
-
-  # ── Human-mode: run scenarios with video recording ──
+  # ── Human-mode: run scenarios directly with video recording ──
   test-human:
     runs-on: ubuntu-latest
     timeout-minutes: 30

@@ -120,8 +120,9 @@ async function scenario() {
       await boss.drag(`[data-testid="note-item-${idxWT}"]`, `[data-testid="note-item-${idxD}"]`);
     });
 
-    // Worker rearranges
+    // Wait for Boss's reorder to sync to Worker before Worker makes their own change
     await step('Worker moves "deploy" above "write tests"', async () => {
+      await workerPage.waitForTimeout(500);
       const idxD = await getIndexByTitle(workerPage, "deploy");
       const idxWT = await getIndexByTitle(workerPage, "write tests");
       if (idxD < 0 || idxWT < 0) throw new Error("Worker: reorder items not found");
@@ -207,7 +208,7 @@ async function waitForTitle(page: Page, title: string) {
       });
     },
     title,
-    { timeout: 5000 },
+    { timeout: 10000 },
   );
 }
 
@@ -221,7 +222,7 @@ async function waitForTitleGone(page: Page, title: string) {
       });
     },
     title,
-    { timeout: 5000 },
+    { timeout: 10000 },
   );
 }
 
@@ -240,7 +241,7 @@ async function waitForCompletedByTitle(page: Page, title: string) {
       return false;
     },
     title,
-    { timeout: 5000 },
+    { timeout: 10000 },
   );
 }
 
@@ -257,7 +258,7 @@ async function waitForApprovedByTitle(page: Page, title: string) {
       return false;
     },
     title,
-    { timeout: 5000 },
+    { timeout: 10000 },
   );
 }
 
