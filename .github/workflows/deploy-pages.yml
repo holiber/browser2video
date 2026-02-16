@@ -53,17 +53,22 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
-          scenarios=(basic-ui collab kanban tui-terminals console-logs)
+          scenarios=(basic-ui collab kanban tui-terminals console-logs github github-mobile)
           for s in "${scenarios[@]}"; do
             echo "════════════════════════════════════════"
             echo " Recording: $s"
             echo "════════════════════════════════════════"
-            pnpm b2v run --scenario "$s" \
-              --mode human \
-              --record screencast \
-              --artifacts "videos/$s" \
-              --headless \
+            npx tsx tests/scenarios/$s.test.ts \
               || echo "⚠ Scenario $s failed (non-fatal)"
+          done
+
+          # Flatten artifact dirs: copy run.mp4 and captions.vtt into videos/<name>/
+          mkdir -p videos
+          for dir in artifacts/*.test-*; do
+            name=$(basename "$dir" | sed 's/\.test-.*//')
+            mkdir -p "videos/$name"
+            cp "$dir"/run.mp4 "videos/$name/run.mp4" 2>/dev/null || true
+            cp "$dir"/captions.vtt "videos/$name/captions.vtt" 2>/dev/null || true
           done
 
       - name: Upload recorded videos
@@ -137,7 +142,7 @@ jobs:
             <p class="subtitle">Auto-generated from the latest <code>main</code> branch. Each video shows a scenario running in human mode.</p>
             <div class="grid" id="grid"></div>
             <script>
-              const scenarios = ['basic-ui','collab','kanban','tui-terminals','console-logs'];
+              const scenarios = ['basic-ui','collab','kanban','tui-terminals','console-logs','github','github-mobile'];
               const grid = document.getElementById('grid');
               scenarios.forEach(s => {
                 const mp4 = s + '/run.mp4';
