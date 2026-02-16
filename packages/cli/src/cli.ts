@@ -183,13 +183,18 @@ function addRunOptions<T>(yarg: Argv<T>) {
     })
     .option("voice", {
       type: "string",
-      default: "nova",
-      describe: "OpenAI TTS voice: alloy | echo | fable | onyx | nova | shimmer",
+      default: "cedar",
+      describe: "OpenAI TTS voice: alloy | ash | ballad | cedar | coral | echo | fable | onyx | nova | sage | shimmer",
     })
     .option("narrate-speed", {
       type: "number",
       default: 1.0,
       describe: "Narration speed 0.25-4.0",
+    })
+    .option("realtime-audio", {
+      type: "boolean",
+      default: false,
+      describe: "Play narration through speakers in realtime",
     });
 }
 
@@ -243,6 +248,7 @@ cli.command(
           enabled: true,
           voice: argv.voice as string,
           speed: argv.narrateSpeed as number,
+          realtime: Boolean(argv.realtimeAudio),
         }
       : undefined;
 

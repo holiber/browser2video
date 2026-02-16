@@ -6,7 +6,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { execFileSync, execSync } from "child_process";
+import { execFileSync, execSync, spawn as spawnProcess } from "child_process";
 
 // ---------------------------------------------------------------------------
 //  Types
@@ -24,6 +24,10 @@ export interface NarrationOptions {
   apiKey?: string;
   /** Cache directory for TTS audio files (default: .cache/tts) */
   cacheDir?: string;
+  /** Play audio through speakers in realtime while the scenario runs (default: false). */
+  realtime?: boolean;
+  /** Auto-translate narration text to this language before TTS (e.g. "ru", "es", "de"). */
+  language?: string;
 }
 
 export interface AudioEvent {
@@ -53,6 +57,8 @@ export interface EffectOptions {
 export interface AudioDirectorAPI {
   speak(text: string, opts?: SpeakOptions): Promise<void>;
   effect(name: string, opts?: EffectOptions): Promise<void>;
+  /** Pre-generate TTS audio so a subsequent speak() starts instantly. */
+  warmup(text: string, opts?: SpeakOptions): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,6 +71,7 @@ class TTSEngine {
   private defaultVoice: string;
   private defaultSpeed: number;
   private model: string;
+  private language?: string;
 
   constructor(opts: {
     apiKey: string;
@@ -72,26 +79,80 @@ class TTSEngine {
     voice: string;
     speed: number;
     model: string;
+    language?: string;
   }) {
     this.apiKey = opts.apiKey;
     this.cacheDir = opts.cacheDir;
     this.defaultVoice = opts.voice;
     this.defaultSpeed = opts.speed;
     this.model = opts.model;
+    this.language = opts.language;
     fs.mkdirSync(this.cacheDir, { recursive: true });
   }
 
-  private cacheKey(text: string, voice: string, speed: number): string {
+  private cacheKey(text: string, voice: string, speed: number, lang?: string): string {
+    const langPart = lang ? `:${lang}` : "";
     const hash = crypto
       .createHash("sha256")
-      .update(`${this.model}:${voice}:${speed}:${text}`)
+      .update(`${this.model}:${voice}:${speed}${langPart}:${text}`)
       .digest("hex")
       .slice(0, 16);
     return hash;
   }
 
   /**
+   * Translate text to the configured language using OpenAI Chat API.
+   * Results are cached to disk alongside TTS audio.
+   */
+  private async translate(text: string): Promise<string> {
+    if (!this.language) return text;
+
+    const cacheFile = path.join(
+      this.cacheDir,
+      `tr_${crypto.createHash("sha256").update(`${this.language}:${text}`).digest("hex").slice(0, 16)}.txt`,
+    );
+
+    if (fs.existsSync(cacheFile)) {
+      return fs.readFileSync(cacheFile, "utf-8");
+    }
+
+    console.log(`    [TTS] Translating to ${this.language}: "${text.slice(0, 50)}${text.length > 50 ? "..." : ""}"`);
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `Translate the following text to ${this.language}. Respond with ONLY the translation, no explanations or extra text.`,
+          },
+          { role: "user", content: text },
+        ],
+        temperature: 0.3,
+      }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text().catch(() => "");
+      console.warn(`    [TTS] Translation failed (${response.status}), using original text: ${errBody}`);
+      return text;
+    }
+
+    const data = (await response.json()) as any;
+    const translated: string = data.choices?.[0]?.message?.content?.trim() ?? text;
+
+    fs.writeFileSync(cacheFile, translated, "utf-8");
+    console.log(`    [TTS] Translated: "${translated.slice(0, 60)}${translated.length > 60 ? "..." : ""}"`);
+    return translated;
+  }
+
+  /**
    * Generate TTS audio for the given text.
+   * If a language is configured, the text is auto-translated first.
    * Returns the path to the MP3 file and its duration in ms.
    */
   async generate(
@@ -101,7 +162,11 @@ class TTSEngine {
   ): Promise<{ audioPath: string; durationMs: number }> {
     const voice = opts?.voice ?? this.defaultVoice;
     const speed = opts?.speed ?? this.defaultSpeed;
-    const key = this.cacheKey(text, voice, speed);
+
+    // Translate if language is set
+    const ttsText = this.language ? await this.translate(text) : text;
+
+    const key = this.cacheKey(text, voice, speed, this.language);
     const audioPath = path.join(this.cacheDir, `${key}.mp3`);
 
     // Check cache
@@ -111,7 +176,7 @@ class TTSEngine {
     }
 
     // Call OpenAI TTS API
-    console.log(`    [TTS] Generating: "${text.slice(0, 60)}${text.length > 60 ? "..." : ""}"`);
+    console.log(`    [TTS] Generating: "${ttsText.slice(0, 60)}${ttsText.length > 60 ? "..." : ""}"`);
     const response = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -121,7 +186,7 @@ class TTSEngine {
       body: JSON.stringify({
         model: this.model,
         voice,
-        input: text,
+        input: ttsText,
         speed,
         response_format: "mp3",
       }),
@@ -192,6 +257,33 @@ function resolveFfprobe(ffmpegPath?: string): string {
 }
 
 // ---------------------------------------------------------------------------
+//  Realtime audio playback
+// ---------------------------------------------------------------------------
+
+/** Play an audio file through system speakers (fire-and-forget). */
+function playAudioFile(audioPath: string, ffmpegPath?: string): void {
+  // Try platform-native players first, fall back to ffplay (bundled with ffmpeg)
+  const isMac = process.platform === "darwin";
+  const player = isMac ? "afplay" : undefined;
+
+  if (player) {
+    const proc = spawnProcess(player, [audioPath], { stdio: "ignore", detached: true });
+    proc.unref();
+    return;
+  }
+
+  // ffplay fallback (cross-platform, co-located with ffmpeg)
+  const ffplayPath = ffmpegPath
+    ? path.join(path.dirname(ffmpegPath), `ffplay${path.extname(ffmpegPath)}`)
+    : "ffplay";
+  const proc = spawnProcess(ffplayPath, ["-nodisp", "-autoexit", "-loglevel", "quiet", audioPath], {
+    stdio: "ignore",
+    detached: true,
+  });
+  proc.unref();
+}
+
+// ---------------------------------------------------------------------------
 //  AudioDirector — collects audio events during scenario execution
 // ---------------------------------------------------------------------------
 
@@ -200,18 +292,26 @@ export class AudioDirector implements AudioDirectorAPI {
   private tts: TTSEngine;
   private videoStartTime: number;
   private ffmpegPath?: string;
+  private realtime: boolean;
 
   constructor(opts: {
     tts: TTSEngine;
     videoStartTime: number;
     ffmpegPath?: string;
+    realtime?: boolean;
   }) {
     this.tts = opts.tts;
     this.videoStartTime = opts.videoStartTime;
     this.ffmpegPath = opts.ffmpegPath;
+    this.realtime = opts.realtime ?? false;
   }
 
-  /** Narrate text. Generates TTS and pauses for speech duration. */
+  /** Pre-generate TTS audio so a subsequent speak() starts instantly. */
+  async warmup(text: string, opts?: SpeakOptions): Promise<void> {
+    await this.tts.generate(text, opts, this.ffmpegPath);
+  }
+
+  /** Narrate text. Generates TTS, optionally plays in realtime, and pauses for speech duration. */
   async speak(text: string, opts?: SpeakOptions): Promise<void> {
     const startMs = Date.now() - this.videoStartTime;
     const { audioPath, durationMs } = await this.tts.generate(
@@ -228,6 +328,11 @@ export class AudioDirector implements AudioDirectorAPI {
       label: text,
       volume: 1.0,
     });
+
+    // Play through speakers in realtime if enabled
+    if (this.realtime) {
+      playAudioFile(audioPath, this.ffmpegPath);
+    }
 
     // Pause so the video stays in sync with narration.
     // Add a small buffer (200ms) for natural pacing.
@@ -268,6 +373,7 @@ export class AudioDirector implements AudioDirectorAPI {
 // ---------------------------------------------------------------------------
 
 export class NoopAudioDirector implements AudioDirectorAPI {
+  async warmup(_text: string, _opts?: SpeakOptions): Promise<void> {}
   async speak(_text: string, _opts?: SpeakOptions): Promise<void> {}
   async effect(_name: string, _opts?: EffectOptions): Promise<void> {}
 }
@@ -417,14 +523,16 @@ export function createAudioDirector(opts: {
   const tts = new TTSEngine({
     apiKey,
     cacheDir: narr.cacheDir ?? path.resolve(".cache/tts"),
-    voice: narr.voice ?? "nova",
+    voice: narr.voice ?? "cedar",
     speed: narr.speed ?? 1.0,
     model: narr.model ?? "tts-1",
+    language: narr.language,
   });
 
   return new AudioDirector({
     tts,
     videoStartTime: opts.videoStartTime,
     ffmpegPath: opts.ffmpegPath,
+    realtime: narr.realtime,
   });
 }

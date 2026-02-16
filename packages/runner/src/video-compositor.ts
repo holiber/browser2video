@@ -28,6 +28,12 @@ export interface ComposeOptions {
   /** Optional CSS crop rectangle (used with cssViewportW). */
   cssCrop?: { x: number; y: number; w: number; h: number };
   cssViewportW?: number;
+  /**
+   * Per-input time offset in ms relative to the earliest stream.
+   * Used to pad the beginning of later-starting streams with `tpad`
+   * so that PTS-STARTPTS alignment preserves real wall-clock sync.
+   */
+  startOffsets?: number[];
 }
 
 /**
@@ -70,15 +76,17 @@ export function composeVideos(opts: ComposeOptions): void {
     if (scale !== 1) console.log(`  Video scale: ${scale}x (${actualW}px actual vs ${cssVp}px CSS)`);
   }
 
-  // Build per-input filter chains — use PTS-STARTPTS to preserve real-world
-  // time alignment between panes (frame-count normalization breaks sync).
+  // Build per-input filter chains — use tpad + PTS-STARTPTS to preserve
+  // real-world time alignment between panes that started at different wall-clock times.
   const streamLabels: string[] = [];
   const filterParts: string[] = [];
 
   for (let i = 0; i < inputs.length; i++) {
     const label = `s${i}`;
     streamLabels.push(`[${label}]`);
-    filterParts.push(`[${i}:v]setpts=PTS-STARTPTS,fps=60${cropFilter}[${label}]`);
+    const offsetMs = opts.startOffsets?.[i] ?? 0;
+    const tpadFilter = offsetMs > 0 ? `tpad=start_duration=${offsetMs}ms,` : "";
+    filterParts.push(`[${i}:v]${tpadFilter}setpts=PTS-STARTPTS,fps=60${cropFilter}[${label}]`);
   }
 
   // Build stack filter

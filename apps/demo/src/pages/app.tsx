@@ -222,24 +222,24 @@ function DragAndDrop() {
 // so that nodeTypes object reference stays stable across renders.
 function FlowNode({ data }: NodeProps) {
   const icon =
-    data.icon === "database" ? <Database className="h-4 w-4 text-blue-400" /> :
-    data.icon === "zap" ? <Zap className="h-4 w-4 text-yellow-400" /> :
-    data.icon === "monitor" ? <Monitor className="h-4 w-4 text-green-400" /> :
+    data.icon === "database" ? <Database className="h-5 w-5 text-blue-400" /> :
+    data.icon === "zap" ? <Zap className="h-5 w-5 text-yellow-400" /> :
+    data.icon === "monitor" ? <Monitor className="h-5 w-5 text-green-400" /> :
     null;
 
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2.5 shadow-md min-w-[130px]">
+    <div className="flex items-center gap-3 rounded-xl border-2 border-border bg-card px-6 py-4 shadow-lg min-w-[180px]">
       <Handle
         type="target"
         position={Position.Left}
-        style={{ width: 14, height: 14, background: "#60a5fa", border: "2px solid #1e293b" }}
+        style={{ width: 16, height: 16, background: "#60a5fa", border: "2px solid #1e293b" }}
       />
       {icon}
-      <span className="text-sm font-medium">{data.label as string}</span>
+      <span className="text-base font-semibold">{data.label as string}</span>
       <Handle
         type="source"
         position={Position.Right}
-        style={{ width: 14, height: 14, background: "#60a5fa", border: "2px solid #1e293b" }}
+        style={{ width: 16, height: 16, background: "#60a5fa", border: "2px solid #1e293b" }}
       />
     </div>
   );
@@ -251,19 +251,19 @@ const INITIAL_FLOW_NODES = [
   {
     id: "source",
     type: "custom" as const,
-    position: { x: 40, y: 40 },
+    position: { x: 20, y: 30 },
     data: { label: "Data Source", icon: "database" },
   },
   {
     id: "transform",
     type: "custom" as const,
-    position: { x: 310, y: 120 },
+    position: { x: 280, y: 130 },
     data: { label: "Transform", icon: "zap" },
   },
   {
     id: "output",
     type: "custom" as const,
-    position: { x: 580, y: 40 },
+    position: { x: 540, y: 30 },
     data: { label: "Output", icon: "monitor" },
   },
 ];

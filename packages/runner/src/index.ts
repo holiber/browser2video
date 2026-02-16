@@ -6,8 +6,9 @@
  * import { createSession } from "@browser2video/runner";
  *
  * const session = await createSession();
+ * const { step } = session;
  * const { page, actor } = await session.openPage({ url: "https://example.com" });
- * await session.step("Do something", () => actor.click("button"));
+ * await step("Do something", () => actor.click("button"));
  * await session.finish();
  * ```
  */
