@@ -3,7 +3,7 @@
  * Supports row (hstack), grid (xstack), and auto layouts.
  */
 import { execFileSync, spawnSync } from "child_process";
-import { probeDurationSeconds } from "./screen-capture.js";
+import { probeDurationSeconds } from "./screen-capture.ts";
 
 // ---------------------------------------------------------------------------
 //  Helpers

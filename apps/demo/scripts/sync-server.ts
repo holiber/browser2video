@@ -1,6 +1,6 @@
 /**
  * @description Automerge sync server management.
- * Extracted from the former collab-runner for reuse by the unified runner.
+ * Used by the collab scenario to start a WebSocket sync server.
  */
 import path from "path";
 import fs from "fs";

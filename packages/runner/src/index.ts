@@ -14,14 +14,13 @@
  */
 
 // Session API (primary)
-export { createSession, Session } from "./session.js";
+export { createSession, Session } from "./session.ts";
 
 // Actor (cursor, clicks, typing, scrolling, drawing)
-export { Actor, generateWebVTT } from "./actor.js";
+export { Actor, generateWebVTT } from "./actor.ts";
 
 // Standalone helpers for complex scenarios
-export { startServer, type ManagedServer } from "./server-manager.js";
-export { startSyncServer } from "./sync-server.js";
+export { startServer, type ManagedServer } from "./server-manager.ts";
 
 // Playwright re-export (escape hatch for advanced usage)
 export { chromium, firefox, webkit } from "playwright";
@@ -41,11 +40,11 @@ export type {
   ActorDelays,
   LayoutConfig,
   ServerConfig,
-} from "./types.js";
+} from "./types.ts";
 
 // Narration
-export type { NarrationOptions, AudioDirectorAPI, AudioEvent } from "./narrator.js";
+export type { NarrationOptions, AudioDirectorAPI, AudioEvent } from "./narrator.ts";
 
 // Shared utilities (less common, but available)
-export { composeVideos } from "./video-compositor.js";
-export { startScreenCapture, tryParseDisplaySize } from "./screen-capture.js";
+export { composeVideos } from "./video-compositor.ts";
+export { startScreenCapture, tryParseDisplaySize } from "./screen-capture.ts";

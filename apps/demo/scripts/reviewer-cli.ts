@@ -58,7 +58,7 @@ function parseQuoted1(cmd: string): string | null {
 }
 
 function parseQuoted2(cmd: string): [string, string] | null {
-  const m = cmd.match(/\"([^\"]+)\"\\s+\"([^\"]+)\"/);
+  const m = cmd.match(/\"([^\"]+)\"\s+\"([^\"]+)\"/);
   return m ? [m[1], m[2]] : null;
 }
 
@@ -233,4 +233,3 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
-

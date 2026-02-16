@@ -2,7 +2,7 @@
 /**
  * @description Browser2Video CLI — yargs-based command parser.
  * Commands: run <file>, list [dir], doctor.
- * Test files (*.test.ts) are executed as subprocesses via `npx tsx`.
+ * Schemas for run options come from @browser2video/lib (single source of truth).
  */
 import path from "path";
 import fs from "fs";
@@ -10,7 +10,7 @@ import { execFile } from "child_process";
 import { fileURLToPath } from "url";
 import yargs, { type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
-
+import { RunInputSchema } from "@browser2video/lib";
 
 // ---------------------------------------------------------------------------
 //  Paths
@@ -25,7 +25,7 @@ const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
 // ---------------------------------------------------------------------------
 
 /**
- * Run a test file as a subprocess via `npx tsx`.
+ * Run a test file as a subprocess via `node` (native TS support).
  * CLI options are passed as B2V_* environment variables.
  */
 function runTestFile(
@@ -42,8 +42,8 @@ function runTestFile(
 
   return new Promise((resolve) => {
     const proc = execFile(
-      "npx",
-      ["tsx", abs],
+      process.execPath,
+      [abs],
       {
         cwd: repoRoot,
         env: { ...process.env, ...env },
@@ -61,17 +61,24 @@ function runTestFile(
 }
 
 // ---------------------------------------------------------------------------
-//  Shared CLI options (used by `run`)
+//  Shared CLI options (derived from RunInputSchema)
 // ---------------------------------------------------------------------------
 
+/**
+ * Add run-related options to a yargs command.
+ * Options and descriptions are derived from the RunInputSchema in @browser2video/lib.
+ */
 function addRunOptions<T>(yarg: Argv<T>) {
+  // Extract descriptions from the Zod schema at the field level
+  const shape = RunInputSchema.shape;
+
   return yarg
     .option("mode", {
       alias: "m",
       type: "string",
       choices: ["human", "fast"] as const,
       default: "human" as const,
-      describe: "Execution speed mode",
+      describe: shape.mode._def.description ?? "Execution speed mode",
     })
     .option("headed", {
       type: "boolean",
@@ -87,22 +94,22 @@ function addRunOptions<T>(yarg: Argv<T>) {
     })
     .option("voice", {
       type: "string",
-      default: "cedar",
-      describe: "OpenAI TTS voice: alloy | ash | ballad | cedar | coral | echo | fable | onyx | nova | sage | shimmer",
+      default: "ash",
+      describe: shape.voice._def.description ?? "OpenAI TTS voice",
     })
     .option("narrate-speed", {
       type: "number",
       default: 1.0,
-      describe: "Narration speed 0.25-4.0",
+      describe: shape.narrationSpeed._def.innerType._def.description ?? "Narration speed 0.25-4.0",
     })
     .option("realtime-audio", {
       type: "boolean",
       default: false,
-      describe: "Play narration through speakers in realtime",
+      describe: shape.realtimeAudio._def.innerType._def.description ?? "Play narration in realtime",
     })
     .option("language", {
       type: "string",
-      describe: "Auto-translate narration to this language (e.g. ru, es, de)",
+      describe: shape.language._def.innerType._def.description ?? "Auto-translate narration language",
     });
 }
 

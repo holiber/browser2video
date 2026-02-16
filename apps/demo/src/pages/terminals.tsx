@@ -42,13 +42,13 @@ export default function TerminalsPage() {
       {/* Left column: mc (top) + htop (bottom) */}
       <XtermPane
         title="Midnight Commander"
-        wsUrl={`${termWs}/term/mc`}
+        wsUrl={`${termWs}/term?cmd=mc`}
         testId="xterm-term1"
         className="min-h-0"
       />
       <XtermPane
         title="htop"
-        wsUrl={`${termWs}/term/htop`}
+        wsUrl={`${termWs}/term?cmd=htop`}
         testId="xterm-term2"
         className="min-h-0"
       />
@@ -56,7 +56,7 @@ export default function TerminalsPage() {
       {/* Right column: shell spanning both rows */}
       <XtermPane
         title="Shell"
-        wsUrl={`${termWs}/term/shell`}
+        wsUrl={`${termWs}/term`}
         testId="xterm-term4"
         className="min-h-0 row-span-2 col-start-2 row-start-1"
       />

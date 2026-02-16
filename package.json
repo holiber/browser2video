@@ -6,27 +6,25 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "dev": "pnpm -C apps/demo dev",
-    "dev:terminals": "npx tsx tests/scenarios/terminal/terminal-ws-server.ts 9800",
+    "dev:terminals": "node packages/lib/src/terminal-ws-server.ts 9800",
     "dev:full": "pnpm dev:terminals & pnpm dev",
-    "build": "pnpm -r --filter '!browser2video-website' build",
-    "build:all": "pnpm -r build",
+    "typecheck": "pnpm -r --filter '!browser2video-website' typecheck",
     "preview": "pnpm -C apps/demo preview",
     "demo": "pnpm -C apps/demo dev",
-    "test": "pnpm build && npx playwright test",
-    "test:ui": "pnpm build && npx playwright test --ui",
+    "test": "npx playwright test",
+    "test:ui": "npx playwright test --ui",
     "test:fast": "npx playwright test --reporter=list",
-    "run:basic-ui": "npx tsx tests/scenarios/basic-ui.test.ts",
-    "run:collab": "npx tsx tests/scenarios/collab.test.ts",
-    "run:kanban": "npx tsx tests/scenarios/kanban.test.ts",
-    "run:github": "npx tsx tests/scenarios/github.test.ts",
-    "run:github-mobile": "npx tsx tests/scenarios/github-mobile.test.ts",
-    "run:tui-terminals": "npx tsx tests/scenarios/tui-terminals.test.ts",
-    "run:console-logs": "npx tsx tests/scenarios/console-logs.test.ts"
+    "run:basic-ui": "node tests/scenarios/basic-ui.test.ts",
+    "run:collab": "node tests/scenarios/collab.test.ts",
+    "run:kanban": "node tests/scenarios/kanban.test.ts",
+    "run:github-mobile": "node tests/scenarios/github-mobile.test.ts",
+    "run:tui-terminals": "node tests/scenarios/tui-terminals.test.ts",
+    "run:console-logs": "node tests/scenarios/console-logs.test.ts",
+    "gen:docs": "node scripts/gen-docs.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",
     "@types/node": "^22.0.0",
-    "tsx": "^4.19.0",
     "typescript": "~5.7.0"
   },
   "pnpm": {

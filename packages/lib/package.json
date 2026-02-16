@@ -1,21 +1,22 @@
 {
-  "name": "@browser2video/mcp",
+  "name": "@browser2video/lib",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "b2v-mcp": "./src/server.ts"
+  "exports": {
+    ".": "./src/index.ts",
+    "./terminal": "./src/terminal-ws-server.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@browser2video/lib": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.0",
     "typescript": "~5.7.0"
   }
 }

@@ -3,7 +3,8 @@
  * Worker marks them completed. Both windows are synced via Automerge.
  */
 import { fileURLToPath } from "url";
-import { createSession, startServer, startSyncServer, type Page } from "@browser2video/runner";
+import { createSession, startServer, type Page } from "@browser2video/runner";
+import { startSyncServer } from "../../apps/demo/scripts/sync-server.ts";
 import path from "path";
 
 async function scenario() {
@@ -46,7 +47,7 @@ async function scenario() {
   await worker.goto(workerUrl.toString());
 
   // Reviewer terminal (open after both browser panes so it doesn't delay them)
-  const reviewerCmd = `cd ${JSON.stringify(process.cwd())} && npx tsx packages/runner/src/reviewer-cli.ts --ws ${JSON.stringify(sync.wsUrl)} --doc ${JSON.stringify(docUrl)} --log ${JSON.stringify(path.join(process.cwd(), "artifacts", "reviewer.log"))}`;
+  const reviewerCmd = `cd ${JSON.stringify(process.cwd())} && node apps/demo/scripts/reviewer-cli.ts --ws ${JSON.stringify(sync.wsUrl)} --doc ${JSON.stringify(docUrl)} --log ${JSON.stringify(path.join(process.cwd(), "artifacts", "reviewer.log"))}`;
   const { terminal: reviewer } = await session.openTerminal({
     command: reviewerCmd,
     viewport: { width: 500, height: 720 },

@@ -8,52 +8,25 @@ import path from "path";
 import crypto from "crypto";
 import { execFileSync, execSync, spawn as spawnProcess } from "child_process";
 
+// Re-export types from lib (single source of truth)
+export type {
+  NarrationOptions,
+  AudioEvent,
+  SpeakOptions,
+  EffectOptions,
+} from "@browser2video/lib";
+
+import type {
+  NarrationOptions,
+  AudioEvent,
+  SpeakOptions,
+  EffectOptions,
+} from "@browser2video/lib";
+
 // ---------------------------------------------------------------------------
-//  Types
+//  AudioDirectorAPI — interface exposed to scenarios via session.audio
 // ---------------------------------------------------------------------------
 
-export interface NarrationOptions {
-  enabled: boolean;
-  /** OpenAI TTS voice: alloy | echo | fable | onyx | nova | shimmer */
-  voice?: string;
-  /** Speech speed 0.25-4.0 (default: 1.0) */
-  speed?: number;
-  /** OpenAI TTS model: tts-1 | tts-1-hd */
-  model?: string;
-  /** OpenAI API key (defaults to OPENAI_API_KEY env var) */
-  apiKey?: string;
-  /** Cache directory for TTS audio files (default: .cache/tts) */
-  cacheDir?: string;
-  /** Play audio through speakers in realtime while the scenario runs (default: false). */
-  realtime?: boolean;
-  /** Auto-translate narration text to this language before TTS (e.g. "ru", "es", "de"). */
-  language?: string;
-}
-
-export interface AudioEvent {
-  type: "speak" | "effect";
-  /** Offset from video start in milliseconds */
-  startMs: number;
-  /** Duration in milliseconds */
-  durationMs: number;
-  /** Path to the audio file */
-  audioPath: string;
-  /** Original text (for speak events) or effect name */
-  label: string;
-  /** Volume multiplier 0-1 (default: 1.0) */
-  volume: number;
-}
-
-export interface SpeakOptions {
-  voice?: string;
-  speed?: number;
-}
-
-export interface EffectOptions {
-  volume?: number;
-}
-
-/** Interface exposed to scenarios via ctx.audio */
 export interface AudioDirectorAPI {
   speak(text: string, opts?: SpeakOptions): Promise<void>;
   effect(name: string, opts?: EffectOptions): Promise<void>;
@@ -335,8 +308,8 @@ export class AudioDirector implements AudioDirectorAPI {
     }
 
     // Pause so the video stays in sync with narration.
-    // Add a small buffer (200ms) for natural pacing.
-    await new Promise((r) => setTimeout(r, durationMs + 200));
+    // Add a small buffer (50ms) for natural pacing.
+    await new Promise((r) => setTimeout(r, durationMs + 50));
   }
 
   /** Play a sound effect at the current timestamp. */
@@ -523,7 +496,7 @@ export function createAudioDirector(opts: {
   const tts = new TTSEngine({
     apiKey,
     cacheDir: narr.cacheDir ?? path.resolve(".cache/tts"),
-    voice: narr.voice ?? "cedar",
+    voice: narr.voice ?? "ash",
     speed: narr.speed ?? 1.0,
     model: narr.model ?? "tts-1",
     language: narr.language,

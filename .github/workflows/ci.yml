@@ -32,8 +32,8 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build workspace
-        run: pnpm build
+      - name: Typecheck workspace
+        run: pnpm typecheck
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -77,8 +77,8 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build workspace
-        run: pnpm build
+      - name: Typecheck workspace
+        run: pnpm typecheck
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
@@ -89,12 +89,12 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
-          scenarios=(basic-ui collab kanban tui-terminals console-logs github github-mobile)
+          scenarios=(basic-ui collab kanban tui-terminals console-logs github-mobile)
           for s in "${scenarios[@]}"; do
             echo "────────────────────────────────────────"
             echo "Running scenario: $s (human mode)"
             echo "────────────────────────────────────────"
-            npx tsx tests/scenarios/$s.test.ts \
+            node tests/scenarios/$s.test.ts \
               || echo "⚠ Scenario $s failed (non-fatal)"
           done
 

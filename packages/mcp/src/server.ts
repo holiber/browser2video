@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * @description Browser2Video MCP server (stdio).
- * Runs *.test.ts scenario files as subprocesses via `npx tsx`,
+ * Runs *.test.ts scenario files as subprocesses via `node` (native TS),
  * passing narration config through B2V_* environment variables.
+ * Tool names and descriptions come from @browser2video/lib (single source of truth).
  */
 import path from "node:path";
 import fs from "node:fs";
@@ -10,14 +11,15 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import * as z from "zod";
+import { z } from "zod";
+import { runTool, listTool, doctorTool } from "@browser2video/lib";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "../../..");
 const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
 
 /**
- * Run a test file as a subprocess via `npx tsx`.
+ * Run a test file as a subprocess via `node` (native TS support).
  * Passes narration and other config via B2V_* environment variables.
  * Parses artifact directory and video path from stdout.
  */
@@ -48,7 +50,7 @@ function runTestFile(
   if (opts.realtimeAudio) env.B2V_REALTIME_AUDIO = "true";
 
   return new Promise((resolve, reject) => {
-    const proc = execFile("npx", ["tsx", abs], { cwd: repoRoot, env, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const proc = execFile(process.execPath, [abs], { cwd: repoRoot, env, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(`Test process exited with code ${err.code}:\n${stderr}\n${stdout}`));
         return;
@@ -73,7 +75,7 @@ function runTestFile(
 }
 
 // ---------------------------------------------------------------------------
-//  MCP Server
+//  MCP Server — tool names/descriptions from @browser2video/lib
 // ---------------------------------------------------------------------------
 
 const server = new McpServer(
@@ -81,14 +83,15 @@ const server = new McpServer(
   { capabilities: { logging: {} } as any },
 );
 
+// b2v_list_scenarios
 server.registerTool(
-  "b2v_list_scenarios",
+  listTool.name,
   {
-    title: "List scenarios",
-    description: "List available *.test.ts scenario files in the scenarios directory.",
-    outputSchema: z.object({
-      scenarios: z.array(z.string()),
-    }),
+    title: listTool.summary,
+    description: listTool.description,
+    inputSchema: {
+      dir: z.string().optional().describe("Directory to scan (default: tests/scenarios)."),
+    },
   },
   async () => {
     const files = fs.existsSync(defaultScenariosDir)
@@ -96,23 +99,18 @@ server.registerTool(
           .filter((f) => f.endsWith(".test.ts"))
           .sort()
       : [];
-    const out = { scenarios: files };
     return {
-      content: [{ type: "text", text: JSON.stringify(out) }],
-      structuredContent: out,
+      content: [{ type: "text" as const, text: JSON.stringify({ scenarios: files }) }],
     };
   },
 );
 
+// b2v_doctor
 server.registerTool(
-  "b2v_doctor",
+  doctorTool.name,
   {
-    title: "Doctor",
-    description: "Print environment diagnostics and common fixes.",
-    outputSchema: z.object({
-      platform: z.string(),
-      node: z.string(),
-    }),
+    title: doctorTool.summary,
+    description: doctorTool.description,
   },
   async () => {
     const out = {
@@ -120,37 +118,34 @@ server.registerTool(
       node: process.version,
     };
     return {
-      content: [{ type: "text", text: JSON.stringify(out) }],
-      structuredContent: out,
+      content: [{ type: "text" as const, text: JSON.stringify(out) }],
     };
   },
 );
 
+// b2v_run — input schema uses same field names and descriptions as lib's RunInputSchema
 server.registerTool(
-  "b2v_run",
+  runTool.name,
   {
-    title: "Run scenario",
-    description:
-      "Run a *.test.ts scenario file with video recording and optional narration. " +
-      "Supports auto-translation of narration to any language.",
-    inputSchema: z.object({
-      scenarioFile: z.string().describe("Path to a *.test.ts file (relative to repo root or absolute)"),
-      mode: z.enum(["human", "fast"]).default("human").describe("Execution speed"),
-      voice: z.string().optional().describe("TTS voice: alloy | ash | ballad | cedar | coral | echo | fable | onyx | nova | sage | shimmer"),
-      language: z.string().optional().describe("Auto-translate narration to this language (e.g. 'ru', 'es', 'de', 'fr')"),
-      realtimeAudio: z.boolean().optional().describe("Play narration through speakers in realtime"),
-      narrationSpeed: z.number().optional().describe("Narration speed 0.25-4.0"),
-    }),
-    outputSchema: z.object({
-      artifactsDir: z.string().optional(),
-      videoPath: z.string().optional(),
-      subtitlesPath: z.string().optional(),
-      metadataPath: z.string().optional(),
-      durationMs: z.number().optional(),
-      stdout: z.string().optional(),
-    }),
+    title: runTool.summary,
+    description: runTool.description,
+    inputSchema: {
+      scenarioFile: z.string().describe("Path to a *.test.ts scenario file."),
+      mode: z.enum(["human", "fast"]).default("human").describe("Execution speed mode."),
+      voice: z.string().optional().describe("OpenAI TTS voice."),
+      language: z.string().optional().describe("Auto-translate narration language."),
+      realtimeAudio: z.boolean().optional().describe("Play narration in realtime."),
+      narrationSpeed: z.number().min(0.25).max(4).optional().describe("Narration speed 0.25-4.0."),
+    },
   },
-  async (input) => {
+  async (input: {
+    scenarioFile: string;
+    mode?: string;
+    voice?: string;
+    language?: string;
+    realtimeAudio?: boolean;
+    narrationSpeed?: number;
+  }) => {
     const result = await runTestFile(input.scenarioFile, {
       mode: input.mode,
       voice: input.voice,
@@ -192,8 +187,7 @@ server.registerTool(
     };
 
     return {
-      content: [{ type: "text", text: JSON.stringify(out) }],
-      structuredContent: out,
+      content: [{ type: "text" as const, text: JSON.stringify(out) }],
     };
   },
 );

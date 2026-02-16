@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "browser2video": {
-      "command": "npx",
-      "args": ["tsx", "packages/mcp/src/server.ts"],
+      "command": "node",
+      "args": ["packages/mcp/src/server.ts"],
       "env": {}
     }
   }

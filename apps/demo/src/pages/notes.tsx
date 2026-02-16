@@ -454,7 +454,7 @@ function NotesList({ docUrl, termWs, showConsole }: { docUrl: AutomergeUrl; term
       {termWs && (
         <XtermPane
           title="Terminal"
-          wsUrl={`${termWs}/term/shell`}
+          wsUrl={`${termWs}/term`}
           testId="xterm-notes-terminal"
           className="h-[200px] shrink-0 border-t"
         />

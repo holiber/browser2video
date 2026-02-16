@@ -4,7 +4,7 @@
  * and drawing.  Shared by the unified runner.
  */
 import type { Page, ElementHandle, Locator } from "playwright";
-import type { Mode, ActorDelays, DelayRange } from "./types.js";
+import type { Mode, ActorDelays, DelayRange } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 //  Delay defaults & helpers
@@ -12,7 +12,7 @@ import type { Mode, ActorDelays, DelayRange } from "./types.js";
 
 export const DEFAULT_DELAYS: Record<Mode, ActorDelays> = {
   human: {
-    breatheMs: [300, 300],
+    breatheMs: [150, 150],
     afterScrollIntoViewMs: [350, 350],
     mouseMoveStepMs: [3, 3],
     clickEffectMs: [25, 25],

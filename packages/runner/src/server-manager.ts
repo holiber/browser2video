@@ -2,7 +2,7 @@
  * @description Start / stop web servers based on ServerConfig.
  * Supports Vite, custom commands, static file servers, etc.
  */
-import type { ServerConfig } from "./types.js";
+import type { ServerConfig } from "./types.ts";
 import { spawn, type ChildProcess } from "child_process";
 import { createRequire } from "module";
 import net from "net";

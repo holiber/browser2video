@@ -18,7 +18,7 @@ Record smooth browser automation videos (MP4 @ 60fps) with subtitles, narration,
 
 ```bash
 pnpm install
-npx tsx tests/scenarios/basic-ui.test.ts
+node tests/scenarios/basic-ui.test.ts
 ```
 
 ## Video examples
@@ -83,7 +83,7 @@ pnpm b2v run tests/scenarios/kanban.test.ts \
 Narration language can be set via environment variable:
 
 ```bash
-B2V_NARRATION_LANGUAGE=ru npx tsx tests/scenarios/kanban.test.ts
+B2V_NARRATION_LANGUAGE=ru node tests/scenarios/kanban.test.ts
 ```
 
 ## MCP server (for AI agents)
@@ -98,8 +98,8 @@ Add to `.cursor/mcp.json`:
 {
   "mcpServers": {
     "browser2video": {
-      "command": "npx",
-      "args": ["tsx", "packages/mcp/src/server.ts"],
+      "command": "node",
+      "args": ["packages/mcp/src/server.ts"],
       "env": {}
     }
   }

@@ -4,7 +4,7 @@
  */
 import { fileURLToPath } from "url";
 import { createSession, startServer } from "@browser2video/runner";
-import { startTerminalWsServer } from "./terminal/terminal-ws-server.js";
+import { startTerminalWsServer } from "@browser2video/lib/terminal";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -157,30 +157,39 @@ async function scenario() {
 
     await step("Click files in left panel", async () => {
       await focusTerminal(page, "xterm-term1");
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.14); await sleep(400);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.22); await sleep(400);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.30); await sleep(400);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.18); await sleep(400);
+      await sleep(300);
+      await clickInTerminal(page, "xterm-term1", 0.20, 0.20); await sleep(500);
+      await clickInTerminal(page, "xterm-term1", 0.20, 0.28); await sleep(500);
+      await clickInTerminal(page, "xterm-term1", 0.20, 0.36); await sleep(500);
+      await clickInTerminal(page, "xterm-term1", 0.20, 0.24); await sleep(500);
     });
 
     await step("Click files in right panel", async () => {
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.14); await sleep(400);
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.22); await sleep(400);
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.30); await sleep(400);
+      await focusTerminal(page, "xterm-term1");
+      await sleep(300);
+      await clickInTerminal(page, "xterm-term1", 0.70, 0.20); await sleep(500);
+      await clickInTerminal(page, "xterm-term1", 0.70, 0.28); await sleep(500);
+      await clickInTerminal(page, "xterm-term1", 0.70, 0.36); await sleep(500);
     });
 
     await step("Open directory with Enter", async () => {
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.10); await sleep(300);
+      await focusTerminal(page, "xterm-term1");
+      await sleep(300);
+      await clickInTerminal(page, "xterm-term1", 0.70, 0.16); await sleep(400);
       await page.keyboard.press("Enter"); await sleep(800);
     });
 
     await step("Navigate back in right panel", async () => {
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.10); await sleep(300);
+      await focusTerminal(page, "xterm-term1");
+      await sleep(300);
+      await clickInTerminal(page, "xterm-term1", 0.70, 0.16); await sleep(400);
       await page.keyboard.press("Enter"); await sleep(600);
     });
 
     await step("Click back to left panel and browse", async () => {
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.18); await sleep(400);
+      await focusTerminal(page, "xterm-term1");
+      await sleep(300);
+      await clickInTerminal(page, "xterm-term1", 0.20, 0.24); await sleep(500);
       await page.keyboard.press("ArrowDown"); await sleep(250);
       await page.keyboard.press("ArrowDown"); await sleep(250);
       await page.keyboard.press("ArrowDown"); await sleep(300);

@@ -66,10 +66,11 @@ Two browser windows sharing a real-time synced todo list, with a terminal review
   <summary>Show code</summary>
 
 ```ts
-import { createSession, startServer, startSyncServer } from "@browser2video/runner";
+import { createSession, startServer } from "@browser2video/runner";
+import { startSyncServer } from "../../apps/demo/scripts/sync-server.js";
 
 const server = await startServer({ type: "vite", root: "apps/demo" });
-const sync = await startSyncServer();
+const sync = await startSyncServer({ artifactDir: "artifacts/collab-sync" });
 const session = await createSession({ layout: "row" });
 const { step } = session;
 
@@ -86,7 +87,7 @@ const worker = await session.openPage({
 });
 
 const { terminal } = await session.openTerminal({
-  command: "node packages/runner/src/reviewer-cli.js",
+  command: "node apps/demo/scripts/reviewer-cli.ts",
   viewport: { width: 460, height: 720 },
   label: "Reviewer",
 });

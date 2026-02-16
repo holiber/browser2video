@@ -19,17 +19,17 @@ import type {
   Mode,
   LayoutConfig,
   ActorDelays,
-} from "./types.js";
+} from "./types.ts";
 
-import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.js";
-import { composeVideos } from "./video-compositor.js";
+import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
+import { composeVideos } from "./video-compositor.ts";
 import {
   type AudioDirectorAPI,
   type AudioEvent,
   createAudioDirector,
   mixAudioIntoVideo,
   type NarrationOptions,
-} from "./narrator.js";
+} from "./narrator.ts";
 
 // ---------------------------------------------------------------------------
 //  Helpers

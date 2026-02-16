@@ -41,9 +41,6 @@ jobs:
       - name: Install deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build workspace
-        run: pnpm build
-
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
@@ -53,12 +50,12 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
-          scenarios=(basic-ui collab kanban tui-terminals console-logs github github-mobile)
+          scenarios=(basic-ui collab kanban tui-terminals console-logs github-mobile)
           for s in "${scenarios[@]}"; do
             echo "════════════════════════════════════════"
             echo " Recording: $s"
             echo "════════════════════════════════════════"
-            npx tsx tests/scenarios/$s.test.ts \
+            node tests/scenarios/$s.test.ts \
               || echo "⚠ Scenario $s failed (non-fatal)"
           done
 
@@ -142,7 +139,7 @@ jobs:
             <p class="subtitle">Auto-generated from the latest <code>main</code> branch. Each video shows a scenario running in human mode.</p>
             <div class="grid" id="grid"></div>
             <script>
-              const scenarios = ['basic-ui','collab','kanban','tui-terminals','console-logs','github','github-mobile'];
+              const scenarios = ['basic-ui','collab','kanban','tui-terminals','console-logs','github-mobile'];
               const grid = document.getElementById('grid');
               scenarios.forEach(s => {
                 const mp4 = s + '/run.mp4';

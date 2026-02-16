@@ -4,21 +4,16 @@
   "private": true,
   "type": "module",
   "bin": {
-    "b2v": "./dist/cli.js"
+    "b2v": "./src/cli.ts"
   },
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+    ".": "./src/index.ts"
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@browser2video/lib": "workspace:*",
     "yargs": "^17.7.2"
   },
   "devDependencies": {

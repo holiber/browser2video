@@ -1,6 +1,7 @@
 /**
  * @description WebSocket <-> PTY bridge for rendering real terminals inside xterm.js.
- * Supports general-purpose shell sessions (/term/shell) and direct TUI launches (/term/mc, /term/htop, /term/opencode).
+ * Generic command support: connect to /term?cmd=<command> to launch any CLI app,
+ * or /term (no cmd) for an interactive shell session.
  */
 import http from "node:http";
 import fs from "node:fs";
@@ -15,8 +16,6 @@ export type TerminalServer = {
   close: () => Promise<void>;
 };
 
-type AppKind = "shell" | "mc" | "htop" | "opencode";
-
 function safeLocale(): string {
   return (
     process.env.LC_ALL ??
@@ -26,8 +25,6 @@ function safeLocale(): string {
 }
 
 function ensureNodePtySpawnHelperExecutable() {
-  // node-pty prebuilds ship spawn-helper without +x sometimes (macOS),
-  // which causes "posix_spawnp failed" at runtime.
   try {
     const require = createRequire(import.meta.url);
     const unixTerminalPath = require.resolve("node-pty/lib/unixTerminal.js");
@@ -49,7 +46,7 @@ function ensureNodePtySpawnHelperExecutable() {
   }
 }
 
-function spawnPty(app: AppKind, initialCols: number, initialRows: number) {
+function spawnPty(cmd: string | undefined, initialCols: number, initialRows: number) {
   const locale = safeLocale();
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
@@ -59,8 +56,8 @@ function spawnPty(app: AppKind, initialCols: number, initialRows: number) {
     LC_ALL: locale,
   };
 
-  if (app === "shell") {
-    // General-purpose interactive shell with a clean prompt for reliable detection
+  if (!cmd) {
+    // Interactive shell with a clean prompt for reliable detection
     env.PS1 = "\\$ ";
     return pty.spawn("bash", ["--norc", "--noprofile", "-i"], {
       name: "xterm-256color",
@@ -71,18 +68,8 @@ function spawnPty(app: AppKind, initialCols: number, initialRows: number) {
     });
   }
 
-  // Direct TUI launch (mc / htop / opencode)
-  let script: string;
-  if (app === "mc") {
-    script = "command -v mc >/dev/null 2>&1 || { echo __B2V_MISSING_MC__; exit 127; }; mc; echo __B2V_MC_EXITED__";
-  } else if (app === "htop") {
-    script = "command -v htop >/dev/null 2>&1 || { echo 'htop not found, falling back to top'; top; exit 0; }; htop; echo __B2V_HTOP_EXITED__";
-  } else {
-    // opencode
-    script = "command -v opencode >/dev/null 2>&1 || { echo __B2V_MISSING_OPENCODE__; echo 'opencode is not installed. Install it from https://github.com/opencode-ai/opencode'; exit 127; }; opencode; echo __B2V_OPENCODE_EXITED__";
-  }
-
-  return pty.spawn("bash", ["-lc", script], {
+  // Launch any command via bash -lc wrapper
+  return pty.spawn("bash", ["-lc", cmd], {
     name: "xterm-256color",
     cols: initialCols,
     rows: initialRows,
@@ -115,15 +102,15 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8");
 
-  function handleTerminalWs(ws: WebSocket, app: AppKind) {
+  function handleTerminalWs(ws: WebSocket, cmd: string | undefined) {
+    const label = cmd ?? "shell";
     try {
-      ws.send(encoder.encode(`[b2v] connected: ${app}\r\n`));
+      ws.send(encoder.encode(`[b2v] connected: ${label}\r\n`));
     } catch {
       // ignore
     }
 
-    // Default size; client will immediately send resize after fit.
-    const p = spawnPty(app, 120, 30);
+    const p = spawnPty(cmd, 120, 30);
 
     p.onData((data: string) => {
       try {
@@ -135,7 +122,6 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
 
     ws.on("message", (msg: any, isBinary?: boolean) => {
       try {
-        // In Node/ws, string messages often arrive as Buffer with isBinary=false.
         if (isBinary === false) {
           const text =
             typeof msg === "string"
@@ -155,13 +141,11 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
           return;
         }
 
-        // Binary stdin (xterm onData)
         if (msg instanceof ArrayBuffer) {
           p.write(decoder.decode(new Uint8Array(msg)));
           return;
         }
 
-        // ws on Node typically delivers Buffer
         if (Buffer.isBuffer(msg)) {
           p.write(decoder.decode(msg));
           return;
@@ -195,21 +179,18 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   server.on("upgrade", (req, socket, head) => {
     try {
       const u = new URL(req.url ?? "/", "http://localhost");
-      const pathname = u.pathname;
-
-      let app: AppKind | null = null;
-      if (pathname === "/term/shell") app = "shell";
-      if (pathname === "/term/mc") app = "mc";
-      if (pathname === "/term/htop") app = "htop";
-      if (pathname === "/term/opencode") app = "opencode";
-      if (!app) {
+      if (u.pathname !== "/term") {
         socket.destroy();
         return;
       }
 
+      // Extract the command from the ?cmd= query parameter.
+      // No cmd means interactive shell.
+      const cmd = u.searchParams.get("cmd") || undefined;
+
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
-        handleTerminalWs(ws, app);
+        handleTerminalWs(ws, cmd);
       });
     } catch {
       socket.destroy();
@@ -241,7 +222,7 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
 }
 
 // ---------------------------------------------------------------------------
-//  CLI entry point: `tsx tests/scenarios/terminal/terminal-ws-server.ts [port]`
+//  CLI entry point: `node packages/lib/src/terminal-ws-server.ts [port]`
 // ---------------------------------------------------------------------------
 const isDirectRun =
   process.argv[1] &&
