@@ -89,16 +89,12 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
-          scenarios=(basic-ui collab kanban tui-terminals console-logs)
+          scenarios=(basic-ui collab kanban tui-terminals console-logs github github-mobile)
           for s in "${scenarios[@]}"; do
             echo "────────────────────────────────────────"
             echo "Running scenario: $s (human mode)"
             echo "────────────────────────────────────────"
-            pnpm b2v run "tests/scenarios/$s.scenario.ts" \
-              --mode human \
-              --record screencast \
-              --artifacts "artifacts/$s" \
-              --headless \
+            npx tsx tests/scenarios/$s.test.ts \
               || echo "⚠ Scenario $s failed (non-fatal)"
           done
 
