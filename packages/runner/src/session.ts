@@ -73,7 +73,7 @@ function resolveCallerFilename(): string {
 
   for (const frame of stack) {
     const file = frame.getFileName?.() ?? "";
-    if (file && !file.includes("/runner/") && !file.includes("node_modules")) {
+    if (file && !file.includes("/packages/runner/") && !file.includes("node_modules")) {
       const name = path.basename(file).replace(/\.(ts|js|mts|mjs)$/, "");
       return name;
     }
