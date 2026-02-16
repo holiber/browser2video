@@ -121,7 +121,7 @@ Add to `.cursor/mcp.json`:
 | `scenarioFile` | string | required | Path to test file |
 | `mode` | `"human"` \| `"fast"` | `"human"` | Execution speed |
 | `record` | `"screencast"` \| `"screen"` \| `"none"` | `"screencast"` | Recording mode |
-| `voice` | string | `"nova"` | TTS voice (alloy, echo, fable, onyx, nova, shimmer) |
+| `voice` | string | `"cedar"` | TTS voice (alloy, ash, ballad, cedar, coral, echo, fable, onyx, nova, sage, shimmer) |
 | `language` | string | - | Auto-translate narration (e.g. `"ru"`, `"es"`, `"de"`) |
 | `realtimeAudio` | boolean | `false` | Play audio through speakers during execution |
 | `narrationSpeed` | number | `1.0` | Speech speed (0.25-4.0) |
@@ -284,7 +284,7 @@ console.log(server.baseURL); // "http://localhost:5173"
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | `boolean` | `false` | Enable narration |
-| `voice` | `string` | `"nova"` | OpenAI TTS voice |
+| `voice` | `string` | `"cedar"` | OpenAI TTS voice |
 | `speed` | `number` | `1.0` | Speech speed (0.25-4.0) |
 | `model` | `string` | `"tts-1"` | OpenAI TTS model |
 | `apiKey` | `string` | env | OpenAI API key |

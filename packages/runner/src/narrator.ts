@@ -523,7 +523,7 @@ export function createAudioDirector(opts: {
   const tts = new TTSEngine({
     apiKey,
     cacheDir: narr.cacheDir ?? path.resolve(".cache/tts"),
-    voice: narr.voice ?? "nova",
+    voice: narr.voice ?? "cedar",
     speed: narr.speed ?? 1.0,
     model: narr.model ?? "tts-1",
     language: narr.language,
