@@ -4,7 +4,9 @@
  */
 import type { ServerConfig } from "./types.js";
 import { spawn, type ChildProcess } from "child_process";
+import { createRequire } from "module";
 import net from "net";
+import path from "path";
 
 export interface ManagedServer {
   baseURL: string;
@@ -55,10 +57,13 @@ async function getFreePort(): Promise<number> {
 async function startViteServer(root: string, preferredPort?: number): Promise<ManagedServer> {
   let createServerFn: any;
   try {
-    // Dynamic import — vite is an optional peer, not a hard dependency.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const vite = await (Function('return import("vite")')() as Promise<any>);
-    createServerFn = vite.createServer;
+    // Resolve vite from the project root (where it's likely a devDep),
+    // not from the runner package.
+    const absRoot = path.resolve(root);
+    const projectRequire = createRequire(absRoot + "/package.json");
+    const vitePath = projectRequire.resolve("vite");
+    const vite = await import(vitePath);
+    createServerFn = vite.createServer ?? vite.default?.createServer;
   } catch {
     throw new Error(
       "vite is required for server.type='vite' but is not installed. " +

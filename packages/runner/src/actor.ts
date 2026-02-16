@@ -184,9 +184,20 @@ export const CURSOR_OVERLAY_SCRIPT = `
     transition: transform 40ms ease-in-out;
     will-change: transform;
   \`;
-  cursor.innerHTML = \`<svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <path d="M3 2L3 17L7.5 12.5L11.5 18L14 16.5L10 11L16 11L3 2Z" fill="white" stroke="black" stroke-width="1.2" stroke-linejoin="round"/>
-  </svg>\`;
+  var svgNS = 'http://www.w3.org/2000/svg';
+  var svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', '20');
+  svg.setAttribute('height', '20');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('fill', 'none');
+  var pathEl = document.createElementNS(svgNS, 'path');
+  pathEl.setAttribute('d', 'M3 2L3 17L7.5 12.5L11.5 18L14 16.5L10 11L16 11L3 2Z');
+  pathEl.setAttribute('fill', 'white');
+  pathEl.setAttribute('stroke', 'black');
+  pathEl.setAttribute('stroke-width', '1.2');
+  pathEl.setAttribute('stroke-linejoin', 'round');
+  svg.appendChild(pathEl);
+  cursor.appendChild(svg);
   document.body.appendChild(cursor);
 
   const rippleContainer = document.createElement('div');
