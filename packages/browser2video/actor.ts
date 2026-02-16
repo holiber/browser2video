@@ -58,12 +58,15 @@ function sleep(ms: number) {
 
 // ---------------------------------------------------------------------------
 //  Step-timing ease curve (used for move-path pacing)
+//  Models real human mouse movement: ballistic launch → peak velocity → corrective deceleration.
+//  Delay multiplier is low at the start (fast) and rises quadratically toward the end (slow).
 // ---------------------------------------------------------------------------
 
-function stepEaseMultiplier(i: number, n: number, amplitude = 0.4): number {
+function stepEaseMultiplier(i: number, n: number): number {
   if (!Number.isFinite(i) || !Number.isFinite(n) || n <= 1) return 1;
   const t = Math.min(1, Math.max(0, i / (n - 1)));
-  return 1 + amplitude * Math.cos(2 * Math.PI * t);
+  // Quadratic ease-in for delay: 0.3 (fast start) → 1.5 (slow approach)
+  return 0.3 + 1.2 * t * t;
 }
 
 function easedStepMs(baseMs: number, i: number, n: number, factor = 1): number {
@@ -723,6 +726,37 @@ export class Actor {
 
     this.cursorX = Math.round(prevX);
     this.cursorY = Math.round(prevY);
+  }
+
+  /**
+   * Press a keyboard key with a human-like pause afterwards.
+   * Useful for TUI / terminal interactions where raw key presses are needed.
+   */
+  async pressKey(key: string) {
+    await this.page.keyboard.press(key);
+    if (this.mode === "human") {
+      await sleep(pickMs(this.delays.breatheMs));
+    }
+  }
+
+  /**
+   * Click at specific page coordinates (not a selector).
+   * Moves the cursor smoothly, shows click effect, and performs the click.
+   * Useful for canvas, terminal, or other coordinate-based interactions.
+   */
+  async clickAt(x: number, y: number) {
+    await this.moveCursorTo(x, y);
+
+    if (this.mode === "human") {
+      await this.page.evaluate(`window.__b2v_clickEffect?.(${x}, ${y})`);
+      await sleep(pickMs(this.delays.clickEffectMs));
+      await this.page.mouse.down();
+      await sleep(pickMs(this.delays.clickHoldMs));
+      await this.page.mouse.up();
+      await sleep(pickMs(this.delays.afterClickMs));
+    } else {
+      await this.page.mouse.click(x, y);
+    }
   }
 
   /** Add a breathing pause between major steps (human mode only). */

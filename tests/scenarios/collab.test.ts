@@ -3,7 +3,7 @@
  * Worker marks them completed. Both windows are synced via Automerge.
  */
 import { fileURLToPath } from "url";
-import { createSession, startServer, type Page } from "@browser2video/runner";
+import { createSession, startServer, type Page } from "browser2video";
 import { startSyncServer } from "../../apps/demo/scripts/sync-server.ts";
 import path from "path";
 
@@ -54,16 +54,15 @@ async function scenario() {
     label: "Reviewer",
   });
 
-  // Wait for Automerge sync
-  await new Promise((r) => setTimeout(r, 800));
-
   try {
     const TASKS = ["create schemas", "add new note", "edit note"];
     const EXTRA_TASKS = ["write tests", "deploy"];
 
     await step("Verify both pages are ready", async () => {
-      await boss.waitFor('[data-testid="notes-page"]');
-      await worker.waitFor('[data-testid="notes-page"]');
+      // notes-page renders only after the Automerge document is loaded via useDocument,
+      // so this is a reliable signal that sync has completed on both peers.
+      await bossPage.waitForSelector('[data-testid="notes-page"]', { timeout: 10000 });
+      await workerPage.waitForSelector('[data-testid="notes-page"]', { timeout: 10000 });
     });
 
     // Boss creates tasks, Worker completes, Reviewer approves

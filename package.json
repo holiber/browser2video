@@ -1,12 +1,12 @@
 {
-  "name": "browser2video",
+  "name": "browser2video-root",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "dev": "pnpm -C apps/demo dev",
-    "dev:terminals": "node packages/lib/src/terminal-ws-server.ts 9800",
+    "dev:terminals": "node packages/browser2video/terminal-ws-server.ts 9800",
     "dev:full": "pnpm dev:terminals & pnpm dev",
     "typecheck": "pnpm -r --filter '!browser2video-website' typecheck",
     "preview": "pnpm -C apps/demo preview",

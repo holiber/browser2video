@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * @description Generate MDX API reference pages from the @browser2video/lib
+ * @description Generate MDX API reference pages from the browser2video
  * operation registry. Output goes to website/docs/generated/api/.
  *
  * Usage:  node scripts/gen-docs.ts
@@ -13,7 +13,7 @@ import {
   ops,
   getOpsByCategory,
   type OpDef,
-} from "../packages/lib/src/index.ts";
+} from "../packages/browser2video/index.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.resolve(__dirname, "../website/docs/generated/api");
@@ -184,7 +184,7 @@ function generateIndexPage(): string {
   lines.push(``);
   lines.push(`# API Reference`);
   lines.push(``);
-  lines.push(`Auto-generated from the [\`@browser2video/lib\`](https://github.com/holiber/browser2video/tree/main/packages/lib) operation registry (${ops.length} operations).`);
+  lines.push(`Auto-generated from the [\`browser2video\`](https://github.com/holiber/browser2video/tree/main/packages/browser2video) operation registry (${ops.length} operations).`);
   lines.push(``);
 
   for (const [cat, title] of Object.entries(categoryTitles)) {

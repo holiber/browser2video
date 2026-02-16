@@ -3,7 +3,7 @@
  * Uses the local demo app started via startServer().
  */
 import { fileURLToPath } from "url";
-import { createSession, startServer } from "@browser2video/runner";
+import { createSession, startServer } from "browser2video";
 
 async function scenario() {
   const server = await startServer({ type: "vite", root: "apps/demo" });

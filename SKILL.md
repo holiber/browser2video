@@ -29,7 +29,7 @@ Run a `*.test.ts` scenario file with video recording and optional TTS narration.
 
 ```bash
 b2v run tests/scenarios/basic-ui.test.ts
-b2v run tests/scenarios/kanban.test.ts --language ru --voice cedar
+b2v run tests/scenarios/kanban.test.ts --language ru --voice ash
 ```
 
 ### b2v_list_scenarios
@@ -50,10 +50,10 @@ Print environment diagnostics: Node.js version, ffmpeg availability, and platfor
 
 ## Scenario authoring
 
-Scenarios are TypeScript files that use `@browser2video/runner`:
+Scenarios are TypeScript files that use `browser2video`:
 
 ```ts
-import { createSession, startServer } from "@browser2video/runner";
+import { createSession, startServer } from "browser2video";
 
 const server = await startServer({ type: "vite", root: "apps/demo" });
 const session = await createSession();
@@ -68,6 +68,26 @@ await step("Fill the form", "Now we type the user name", async () => {
 const result = await session.finish();
 await server.stop();
 ```
+
+### Actor API
+
+The `actor` wraps Playwright's `Page` with human-like delays in `"human"` mode (cursor movement via WindMouse, click effects, typing delays, breathing pauses). In `"fast"` mode all delays are zero.
+
+| Method | Description |
+|---|---|
+| `actor.goto(url)` | Navigate to a URL |
+| `actor.click(selector)` | Move cursor to element, show click effect, click |
+| `actor.clickAt(x, y)` | Move cursor to coordinates, show click effect, click (for canvas/terminals) |
+| `actor.type(selector, text)` | Click element then type text character-by-character |
+| `actor.pressKey(key)` | Press a keyboard key with a breathing pause |
+| `actor.select(selector, value)` | Open a `<select>` and pick an option |
+| `actor.hover(selector)` | Move cursor to element |
+| `actor.moveCursorTo(x, y)` | Smooth cursor move to coordinates (no click) |
+| `actor.drag(from, to)` | Drag from one selector/coords to another |
+| `actor.waitFor(selector)` | Wait for an element to appear |
+| `actor.breathe()` | Pause between major actions (human mode only) |
+
+All methods include automatic human-like delays — no manual `sleep()` calls needed between steps.
 
 ## Requirements
 

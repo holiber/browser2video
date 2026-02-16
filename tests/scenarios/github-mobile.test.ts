@@ -3,7 +3,7 @@
  * Demonstrates compact video recording on a narrow screen.
  */
 import { fileURLToPath } from "url";
-import { createSession } from "@browser2video/runner";
+import { createSession } from "browser2video";
 
 async function scenario() {
   const session = await createSession();
@@ -40,7 +40,7 @@ async function scenario() {
     const itemName = await firstItem.textContent();
     console.log(`    Clicking on: ${itemName?.trim()}`);
     await actor.clickLocator(firstItem);
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => {});
   });
 
   await step("Navigate back to repo", async () => {

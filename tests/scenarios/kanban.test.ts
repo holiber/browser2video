@@ -4,7 +4,7 @@
  * Narrator explains each column's purpose while cursor highlights it.
  */
 import { fileURLToPath } from "url";
-import { createSession, startServer, type Actor, type Page } from "@browser2video/runner";
+import { createSession, startServer, type Actor, type Page } from "browser2video";
 
 async function scenario() {
   const server = await startServer({ type: "vite", root: "apps/demo" });

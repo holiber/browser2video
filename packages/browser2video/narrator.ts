@@ -8,20 +8,20 @@ import path from "path";
 import crypto from "crypto";
 import { execFileSync, execSync, spawn as spawnProcess } from "child_process";
 
-// Re-export types from lib (single source of truth)
+// Re-export types from local schemas (single source of truth)
 export type {
   NarrationOptions,
   AudioEvent,
   SpeakOptions,
   EffectOptions,
-} from "@browser2video/lib";
+} from "./schemas/narration.ts";
 
 import type {
   NarrationOptions,
   AudioEvent,
   SpeakOptions,
   EffectOptions,
-} from "@browser2video/lib";
+} from "./schemas/narration.ts";
 
 // ---------------------------------------------------------------------------
 //  AudioDirectorAPI — interface exposed to scenarios via session.audio

@@ -73,7 +73,7 @@ function resolveCallerFilename(): string {
 
   for (const frame of stack) {
     const file = frame.getFileName?.() ?? "";
-    if (file && !file.includes("/packages/runner/") && !file.includes("node_modules")) {
+    if (file && !file.includes("/packages/browser2video/") && !file.includes("node_modules")) {
       const name = path.basename(file).replace(/\.(ts|js|mts|mjs)$/, "");
       return name;
     }
@@ -593,7 +593,7 @@ export class Session {
  * Create a new Browser2Video session.
  *
  * ```ts
- * import { createSession } from "@browser2video/runner";
+ * import { createSession } from "browser2video";
  *
  * const session = await createSession();
  * const { step } = session;

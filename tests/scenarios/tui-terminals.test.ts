@@ -3,44 +3,25 @@
  * in-browser xterm panes connected to real PTYs.
  */
 import { fileURLToPath } from "url";
-import { createSession, startServer } from "@browser2video/runner";
-import { startTerminalWsServer } from "@browser2video/lib/terminal";
+import { createSession, startServer, type Actor, type Page } from "browser2video";
+import { startTerminalWsServer } from "browser2video/terminal";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function focusTerminal(page: any, testId: string) {
-  const selector = `[data-testid="${testId}"] .xterm-helper-textarea`;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    await page.evaluate((sel: string) => {
-      const ta = document.querySelector(sel) as HTMLElement | null;
-      ta?.focus();
-    }, selector);
-    await sleep(150);
-    const ok = await page.evaluate(
-      (sel: string) => document.activeElement === document.querySelector(sel),
-      selector,
-    );
-    if (ok) return;
-  }
-}
-
-async function typeInTerminal(page: any, testId: string, text: string, opts?: { delay?: number }) {
+async function typeInTerminal(page: Page, testId: string, text: string, opts?: { delay?: number }) {
   const selector = `[data-testid="${testId}"] .xterm-helper-textarea`;
   const el = await page.$(selector);
   if (!el) throw new Error(`Terminal textarea not found: ${selector}`);
   await el.focus();
-  await sleep(100);
   for (const ch of text) {
     if (ch === "\n") {
       await page.keyboard.press("Enter");
     } else {
       await page.keyboard.type(ch, { delay: 0 });
     }
-    if (opts?.delay) await sleep(opts.delay);
+    if (opts?.delay) await new Promise((r) => setTimeout(r, opts.delay));
   }
 }
 
-async function waitForWsOpen(page: any, selector: string, timeoutMs = 15000) {
+async function waitForWsOpen(page: Page, selector: string, timeoutMs = 15000) {
   await page.waitForFunction(
     (sel: string) => {
       const el = document.querySelector(sel) as any;
@@ -51,7 +32,7 @@ async function waitForWsOpen(page: any, selector: string, timeoutMs = 15000) {
   );
 }
 
-async function waitForXtermText(page: any, rootSelector: string, includes: string[], timeoutMs: number) {
+async function waitForXtermText(page: Page, rootSelector: string, includes: string[], timeoutMs: number) {
   await page.waitForFunction(
     ([sel, inc]: [string, string[]]) => {
       const root = document.querySelector(sel);
@@ -65,42 +46,20 @@ async function waitForXtermText(page: any, rootSelector: string, includes: strin
   );
 }
 
-async function waitForPrompt(page: any, testId: string, timeoutMs = 15000) {
+async function waitForPrompt(page: Page, testId: string, timeoutMs = 15000) {
   await waitForXtermText(page, `[data-testid="${testId}"]`, ["$"], timeoutMs);
 }
 
-async function clickInTerminal(page: any, testId: string, relX: number, relY: number) {
+/** Compute absolute coordinates from a relative position inside a terminal pane. */
+async function termCoords(page: Page, testId: string, relX: number, relY: number) {
   const box = await page.$eval(`[data-testid="${testId}"]`, (el: any) => {
     const r = el.getBoundingClientRect();
     return { x: r.x, y: r.y, width: r.width, height: r.height };
   });
-  const targetX = Math.round(box.x + box.width * relX);
-  const targetY = Math.round(box.y + box.height * relY);
-  const startPos = await page.evaluate(() => {
-    const cursor = document.getElementById("__b2v_cursor");
-    if (!cursor) return null;
-    const m = cursor.style.transform.match(/translate\((.+?)px,\s*(.+?)px\)/);
-    if (m) return { x: parseFloat(m[1]) + 2, y: parseFloat(m[2]) + 2 };
-    return null;
-  });
-  const fromX = startPos?.x ?? targetX - 80;
-  const fromY = startPos?.y ?? targetY - 40;
-  const steps = 25;
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    const ease = 1 - Math.pow(1 - t, 3);
-    const px = Math.round(fromX + (targetX - fromX) * ease);
-    const py = Math.round(fromY + (targetY - fromY) * ease);
-    await page.mouse.move(px, py);
-    await page.evaluate(`window.__b2v_moveCursor?.(${px}, ${py})`);
-    if (i < steps) await sleep(8);
-  }
-  await page.evaluate(`window.__b2v_clickEffect?.(${targetX}, ${targetY})`);
-  await sleep(40);
-  await page.mouse.down();
-  await sleep(80);
-  await page.mouse.up();
-  await sleep(60);
+  return {
+    x: Math.round(box.x + box.width * relX),
+    y: Math.round(box.y + box.height * relY),
+  };
 }
 
 async function scenario() {
@@ -130,77 +89,77 @@ async function scenario() {
 
     await step("Wait for mc to render", async () => {
       await waitForXtermText(page, '[data-testid="xterm-term1"]', ["1Help"], 20000);
-      await sleep(800);
     });
 
     await step("Wait for htop to render", async () => {
       await waitForXtermText(page, '[data-testid="xterm-term2"]', ["CPU"], 20000);
-      await sleep(1000);
     });
 
     await step("Navigate mc with keyboard (left panel)", async () => {
-      await focusTerminal(page, "xterm-term1");
-      for (let i = 0; i < 4; i++) { await page.keyboard.press("ArrowDown"); await sleep(250); }
-      await page.keyboard.press("ArrowUp"); await sleep(250);
-      await page.keyboard.press("ArrowUp"); await sleep(300);
+      const pos = await termCoords(page, "xterm-term1", 0.25, 0.25);
+      await actor.clickAt(pos.x, pos.y);
+      for (let i = 0; i < 4; i++) await actor.pressKey("ArrowDown");
+      await actor.pressKey("ArrowUp");
+      await actor.pressKey("ArrowUp");
     });
 
     await step("Switch to right panel (Tab)", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await page.keyboard.press("Tab"); await sleep(500);
-      for (let i = 0; i < 3; i++) { await page.keyboard.press("ArrowDown"); await sleep(250); }
+      await actor.pressKey("Tab");
+      for (let i = 0; i < 3; i++) await actor.pressKey("ArrowDown");
     });
 
     await step("Switch back to left panel (Tab)", async () => {
-      await page.keyboard.press("Tab"); await sleep(400);
+      await actor.pressKey("Tab");
     });
 
     await step("Click files in left panel", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await sleep(300);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.20); await sleep(500);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.28); await sleep(500);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.36); await sleep(500);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.24); await sleep(500);
+      let pos = await termCoords(page, "xterm-term1", 0.20, 0.20);
+      await actor.clickAt(pos.x, pos.y);
+      pos = await termCoords(page, "xterm-term1", 0.20, 0.28);
+      await actor.clickAt(pos.x, pos.y);
+      pos = await termCoords(page, "xterm-term1", 0.20, 0.36);
+      await actor.clickAt(pos.x, pos.y);
+      pos = await termCoords(page, "xterm-term1", 0.20, 0.24);
+      await actor.clickAt(pos.x, pos.y);
     });
 
     await step("Click files in right panel", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await sleep(300);
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.20); await sleep(500);
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.28); await sleep(500);
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.36); await sleep(500);
+      let pos = await termCoords(page, "xterm-term1", 0.70, 0.20);
+      await actor.clickAt(pos.x, pos.y);
+      pos = await termCoords(page, "xterm-term1", 0.70, 0.28);
+      await actor.clickAt(pos.x, pos.y);
+      pos = await termCoords(page, "xterm-term1", 0.70, 0.36);
+      await actor.clickAt(pos.x, pos.y);
     });
 
     await step("Open directory with Enter", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await sleep(300);
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.16); await sleep(400);
-      await page.keyboard.press("Enter"); await sleep(800);
+      const pos = await termCoords(page, "xterm-term1", 0.70, 0.16);
+      await actor.clickAt(pos.x, pos.y);
+      await actor.pressKey("Enter");
+      await actor.breathe();
     });
 
     await step("Navigate back in right panel", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await sleep(300);
-      await clickInTerminal(page, "xterm-term1", 0.70, 0.16); await sleep(400);
-      await page.keyboard.press("Enter"); await sleep(600);
+      const pos = await termCoords(page, "xterm-term1", 0.70, 0.16);
+      await actor.clickAt(pos.x, pos.y);
+      await actor.pressKey("Enter");
+      await actor.breathe();
     });
 
     await step("Click back to left panel and browse", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await sleep(300);
-      await clickInTerminal(page, "xterm-term1", 0.20, 0.24); await sleep(500);
-      await page.keyboard.press("ArrowDown"); await sleep(250);
-      await page.keyboard.press("ArrowDown"); await sleep(250);
-      await page.keyboard.press("ArrowDown"); await sleep(300);
+      const pos = await termCoords(page, "xterm-term1", 0.20, 0.24);
+      await actor.clickAt(pos.x, pos.y);
+      await actor.pressKey("ArrowDown");
+      await actor.pressKey("ArrowDown");
+      await actor.pressKey("ArrowDown");
     });
 
     await step("View file with F3 in mc", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await page.keyboard.press("F3"); await sleep(1200);
-      for (let i = 0; i < 5; i++) { await page.keyboard.press("ArrowDown"); await sleep(200); }
-      await sleep(400);
-      await page.keyboard.press("q"); await sleep(600);
+      await actor.pressKey("F3");
+      await actor.breathe();
+      for (let i = 0; i < 5; i++) await actor.pressKey("ArrowDown");
+      await actor.breathe();
+      await actor.pressKey("q");
     });
 
     await step("Wait for shell prompt", async () => {
@@ -209,50 +168,46 @@ async function scenario() {
 
     await step("Run ls in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "ls\n", { delay: 60 });
-      await sleep(600);
       await waitForPrompt(page, "xterm-term4");
     });
 
     await step("Run ls -la in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "ls -la\n", { delay: 60 });
-      await sleep(800);
       await waitForPrompt(page, "xterm-term4");
     });
 
     await step("Launch vim in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "vim\n", { delay: 60 });
-      await sleep(1200);
+      await waitForXtermText(page, '[data-testid="xterm-term4"]', ["~"], 10000);
     });
 
     await step("Type text in vim (insert mode)", async () => {
-      await focusTerminal(page, "xterm-term4");
-      await page.keyboard.press("i"); await sleep(400);
+      await actor.pressKey("i");
       await typeInTerminal(page, "xterm-term4", "Hello from browser2video!", { delay: 70 });
-      await sleep(300);
-      await page.keyboard.press("Enter"); await sleep(200);
+      await actor.pressKey("Enter");
       await typeInTerminal(page, "xterm-term4", "This is a demo of vim inside xterm.js", { delay: 60 });
-      await sleep(300);
-      await page.keyboard.press("Enter"); await sleep(200);
+      await actor.pressKey("Enter");
       await typeInTerminal(page, "xterm-term4", "running in a browser terminal pane.", { delay: 60 });
-      await sleep(500);
+      await actor.breathe();
     });
 
     await step("Exit vim without saving", async () => {
-      await page.keyboard.press("Escape"); await sleep(400);
+      await actor.pressKey("Escape");
       await typeInTerminal(page, "xterm-term4", ":q!\n", { delay: 80 });
-      await sleep(800);
       await waitForPrompt(page, "xterm-term4");
     });
 
     await step("Quit mc", async () => {
-      await focusTerminal(page, "xterm-term1");
-      await page.keyboard.press("F10"); await sleep(500);
-      await page.keyboard.press("Enter"); await sleep(1000);
+      const pos = await termCoords(page, "xterm-term1", 0.25, 0.25);
+      await actor.clickAt(pos.x, pos.y);
+      await actor.pressKey("F10");
+      await actor.pressKey("Enter");
+      await actor.breathe();
     });
 
     await step("Quit htop", async () => {
       await typeInTerminal(page, "xterm-term2", "q");
-      await sleep(1000);
+      await actor.breathe();
     });
 
     await session.finish();

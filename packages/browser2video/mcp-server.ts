@@ -3,7 +3,7 @@
  * @description Browser2Video MCP server (stdio).
  * Runs *.test.ts scenario files as subprocesses via `node` (native TS),
  * passing narration config through B2V_* environment variables.
- * Tool names and descriptions come from @browser2video/lib (single source of truth).
+ * Tool names and descriptions come from the operation registry (single source of truth).
  */
 import path from "node:path";
 import fs from "node:fs";
@@ -12,10 +12,10 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runTool, listTool, doctorTool } from "@browser2video/lib";
+import { runTool, listTool, doctorTool } from "./ops/tools.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../../..");
+const repoRoot = path.resolve(__dirname, "../..");
 const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
 
 /**
@@ -75,7 +75,7 @@ function runTestFile(
 }
 
 // ---------------------------------------------------------------------------
-//  MCP Server — tool names/descriptions from @browser2video/lib
+//  MCP Server — tool names/descriptions from the operation registry
 // ---------------------------------------------------------------------------
 
 const server = new McpServer(

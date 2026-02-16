@@ -5,7 +5,7 @@ sidebar_position: 0
 
 # API Reference
 
-Auto-generated from the [`@browser2video/lib`](https://github.com/holiber/browser2video/tree/main/packages/lib) operation registry (26 operations).
+Auto-generated from the [`browser2video`](https://github.com/holiber/browser2video/tree/main/packages/browser2video) operation registry (26 operations).
 
 ## Session
 

@@ -2,7 +2,7 @@
 /**
  * @description Browser2Video CLI — yargs-based command parser.
  * Commands: run <file>, list [dir], doctor.
- * Schemas for run options come from @browser2video/lib (single source of truth).
+ * Schemas for run options come from the operation registry (single source of truth).
  */
 import path from "path";
 import fs from "fs";
@@ -10,14 +10,14 @@ import { execFile } from "child_process";
 import { fileURLToPath } from "url";
 import yargs, { type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
-import { RunInputSchema } from "@browser2video/lib";
+import { RunInputSchema } from "./ops/tools.ts";
 
 // ---------------------------------------------------------------------------
 //  Paths
 // ---------------------------------------------------------------------------
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../../..");
+const repoRoot = path.resolve(__dirname, "../..");
 const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
 
 // ---------------------------------------------------------------------------
@@ -66,7 +66,7 @@ function runTestFile(
 
 /**
  * Add run-related options to a yargs command.
- * Options and descriptions are derived from the RunInputSchema in @browser2video/lib.
+ * Options and descriptions are derived from the RunInputSchema.
  */
 function addRunOptions<T>(yarg: Argv<T>) {
   // Extract descriptions from the Zod schema at the field level

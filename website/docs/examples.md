@@ -18,7 +18,7 @@ A narrated walkthrough of a Kanban board task lifecycle. The narrator explains e
   <summary>Show code</summary>
 
 ```ts
-import { createSession, startServer } from "@browser2video/runner";
+import { createSession, startServer } from "browser2video";
 
 const server = await startServer({ type: "vite", root: "apps/demo" });
 const session = await createSession({ narration: { enabled: true } });
@@ -66,7 +66,7 @@ Two browser windows sharing a real-time synced todo list, with a terminal review
   <summary>Show code</summary>
 
 ```ts
-import { createSession, startServer } from "@browser2video/runner";
+import { createSession, startServer } from "browser2video";
 import { startSyncServer } from "../../apps/demo/scripts/sync-server.js";
 
 const server = await startServer({ type: "vite", root: "apps/demo" });
@@ -120,7 +120,7 @@ Scrolling, drag-and-drop, canvas drawing, form inputs, and React Flow nodes.
   <summary>Show code</summary>
 
 ```ts
-import { createSession, startServer } from "@browser2video/runner";
+import { createSession, startServer } from "browser2video";
 
 const server = await startServer({ type: "vite", root: "apps/demo" });
 const session = await createSession();

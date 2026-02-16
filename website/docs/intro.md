@@ -12,7 +12,7 @@ Browser2Video is a toolkit for producing **video proofs** from browser automatio
 ## Quick start
 
 ```ts
-import { createSession, startServer } from "@browser2video/runner";
+import { createSession, startServer } from "browser2video";
 
 const server = await startServer({ type: "vite", root: "apps/demo" });
 const session = await createSession();

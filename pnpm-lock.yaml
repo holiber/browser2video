@@ -100,70 +100,16 @@ importers:
         specifier: ^3.5.0
         version: 3.5.0(vite@6.4.1(@types/node@22.19.11)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.46.0)(tsx@4.21.0))
 
-  packages/cli:
+  packages/browser2video:
     dependencies:
-      '@browser2video/lib':
-        specifier: workspace:*
-        version: link:../lib
-      yargs:
-        specifier: ^17.7.2
-        version: 17.7.2
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.11
-      '@types/yargs':
-        specifier: ^17.0.33
-        version: 17.0.35
-      typescript:
-        specifier: ~5.7.0
-        version: 5.7.3
-
-  packages/lib:
-    dependencies:
-      node-pty:
-        specifier: ^1.0.0
+      '@ffmpeg-installer/ffmpeg':
+        specifier: ^1.1.0
         version: 1.1.0
-      ws:
-        specifier: ^8.18.0
-        version: 8.19.0
-      zod:
-        specifier: ^3.24.0
-        version: 3.25.76
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.18.0
-        version: 8.18.1
-      typescript:
-        specifier: ~5.7.0
-        version: 5.7.3
-
-  packages/mcp:
-    dependencies:
-      '@browser2video/lib':
-        specifier: workspace:*
-        version: link:../lib
       '@modelcontextprotocol/sdk':
         specifier: ^1.26.0
         version: 1.26.0(zod@3.25.76)
-      zod:
-        specifier: ^3.24.0
-        version: 3.25.76
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.11
-      typescript:
-        specifier: ~5.7.0
-        version: 5.7.3
-
-  packages/runner:
-    dependencies:
-      '@browser2video/lib':
-        specifier: workspace:*
-        version: link:../lib
-      '@ffmpeg-installer/ffmpeg':
-        specifier: ^1.1.0
+      node-pty:
+        specifier: ^1.0.0
         version: 1.1.0
       playwright:
         specifier: ^1.50.0
@@ -171,25 +117,34 @@ importers:
       ws:
         specifier: ^8.19.0
         version: 8.19.0
+      yargs:
+        specifier: ^17.7.2
+        version: 17.7.2
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.11
+      '@types/ws':
+        specifier: ^8.18.0
+        version: 8.18.1
+      '@types/yargs':
+        specifier: ^17.0.33
+        version: 17.0.35
       typescript:
         specifier: ~5.7.0
         version: 5.7.3
 
   tests/scenarios:
     dependencies:
-      '@browser2video/lib':
-        specifier: workspace:*
-        version: link:../../packages/lib
-      '@browser2video/runner':
-        specifier: workspace:*
-        version: link:../../packages/runner
       '@playwright/test':
         specifier: ^1.50.0
         version: 1.58.2
+      browser2video:
+        specifier: workspace:*
+        version: link:../../packages/browser2video
     devDependencies:
       typescript:
         specifier: ~5.7.0

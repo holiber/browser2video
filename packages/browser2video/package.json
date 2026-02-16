@@ -1,0 +1,32 @@
+{
+  "name": "browser2video",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./terminal": "./terminal-ws-server.ts"
+  },
+  "bin": {
+    "b2v": "./cli.ts",
+    "b2v-mcp": "./mcp-server.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "node-pty": "^1.0.0",
+    "playwright": "^1.50.0",
+    "ws": "^8.19.0",
+    "yargs": "^17.7.2",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.0",
+    "@types/yargs": "^17.0.33",
+    "typescript": "~5.7.0"
+  }
+}

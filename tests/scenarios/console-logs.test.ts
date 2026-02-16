@@ -4,9 +4,7 @@
  * CRUD operations that generate visible console output.
  */
 import { fileURLToPath } from "url";
-import { createSession, startServer } from "@browser2video/runner";
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+import { createSession, startServer } from "browser2video";
 
 const TASKS = ["setup database", "write API routes", "add auth middleware"];
 
@@ -25,14 +23,10 @@ async function scenario() {
       await actor.waitFor('[data-testid="console-panel"]');
     });
 
-    await sleep(600);
-
     for (const title of TASKS) {
       await step(`Add task: "${title}"`, async () => {
         await actor.type('[data-testid="note-input"]', title);
-        await sleep(150);
         await actor.click('[data-testid="note-add-btn"]');
-        await sleep(400);
       });
     }
 
@@ -46,7 +40,6 @@ async function scenario() {
       }, TASKS[0]);
       if (idx < 0) throw new Error(`Could not find task "${TASKS[0]}"`);
       await actor.click(`[data-testid="note-check-${idx}"]`);
-      await sleep(500);
     });
 
     await step(`Delete task: "${TASKS[1]}"`, async () => {
@@ -59,17 +52,13 @@ async function scenario() {
       }, TASKS[1]);
       if (idx < 0) throw new Error(`Could not find task "${TASKS[1]}"`);
       await actor.click(`[data-testid="note-delete-${idx}"]`);
-      await sleep(500);
     });
 
     await step("Add another task", async () => {
       await actor.type('[data-testid="note-input"]', "deploy to production");
-      await sleep(150);
       await actor.click('[data-testid="note-add-btn"]');
-      await sleep(500);
     });
 
-    await sleep(1500);
     await session.finish();
   } finally {
     await server.stop();

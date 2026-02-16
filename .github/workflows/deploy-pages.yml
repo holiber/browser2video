@@ -47,6 +47,7 @@ jobs:
       - name: Record all scenarios
         env:
           NODE_OPTIONS: '--experimental-transform-types'
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           export DISPLAY=:99
           Xvfb :99 -screen 0 1920x1080x24 &

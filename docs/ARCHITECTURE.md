@@ -4,14 +4,11 @@ This repo is a small monorepo for recording repeatable browser automation "proof
 
 ## Packages
 
+- `packages/browser2video/`
+  - Core library: `createSession()` API, actor interactions, recording backends, narration, video composition,
+    Zod schemas/operation registry, CLI (`b2v`), MCP server (`b2v-mcp`), and terminal WebSocket bridge.
 - `apps/demo/`
   - Vite + React app used as a stable, controllable target for scenarios.
-- `packages/runner/`
-  - Core library: `createSession()` API, actor interactions, recording backends, narration, video composition.
-- `packages/cli/`
-  - `b2v` CLI: runs test files as subprocesses with env-based configuration.
-- `packages/mcp/`
-  - MCP stdio server exposing `b2v_run` and related tools for AI agents.
 - `tests/scenarios/`
   - Standalone `*.test.ts` files using `createSession()` for each scenario.
 
@@ -71,7 +68,7 @@ Each run writes into one directory:
 
 ## MCP server
 
-`packages/mcp` implements a stdio MCP server using the TypeScript MCP SDK.
+`packages/browser2video/mcp-server.ts` implements a stdio MCP server using the TypeScript MCP SDK.
 It exposes tools for AI agents:
 
 - `b2v_list_scenarios` — list available test files

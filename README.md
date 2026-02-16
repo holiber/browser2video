@@ -23,41 +23,47 @@ node tests/scenarios/basic-ui.test.ts
 
 ## Video examples
 
-### Kanban board with narration
+All videos are auto-generated on every push to `main`. Watch them at the [video gallery](https://holiber.github.io/browser2video/videos/).
 
-A narrated walkthrough of a Kanban board task lifecycle. The narrator explains each column while the cursor highlights it.
+### Single-actor UI demo
 
-[![Kanban scenario](https://github.com/holiber/browser2video/releases/download/examples-v3/kanban-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/kanban-demo.mp4)
+A single browser page with form inputs, scrolling, drag-and-drop, canvas drawing, and React Flow nodes. Shows the basics of `createSession` + `Actor` interactions.
 
-### Collaborative todo list
-
-Two browser windows sharing a real-time synced todo list, with a terminal reviewer approving items.
-
-[![Collab scenario](https://github.com/holiber/browser2video/releases/download/examples-v3/collab-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/collab-demo.mp4)
-
-### Basic UI interactions
-
-Scrolling, drag-and-drop, canvas drawing, form inputs, and React Flow nodes.
+[Scenario source](tests/scenarios/basic-ui.test.ts)
 
 [![Basic UI demo](https://github.com/holiber/browser2video/releases/download/examples-v3/basic-ui-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/basic-ui-demo.mp4)
 
-### GitHub browsing
+### Narrated Kanban board
 
-Navigating a public GitHub repo, clicking through folders and files.
+AI-narrated walkthrough of a Kanban board lifecycle. The narrator explains each column while the cursor highlights it. Uses `session.step(caption, narration, fn)` for concurrent speech and actions.
 
-[![GitHub scenario](https://github.com/holiber/browser2video/releases/download/examples-v3/github-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/github-demo.mp4)
+[Scenario source](tests/scenarios/kanban.test.ts)
 
-### Console logging CRUD
+[![Kanban scenario](https://github.com/holiber/browser2video/releases/download/examples-v3/kanban-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/kanban-demo.mp4)
 
-In-page console panel showing live log output during form interactions.
+### Multi-window collaboration
 
-[![Console logs](https://github.com/holiber/browser2video/releases/download/examples-v3/console-logs-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/console-logs-demo.mp4)
+Records **two browser windows** side-by-side sharing a real-time synced todo list via Automerge. Demonstrates multi-pane video composition with `session.openPage()` called twice.
 
-### Terminal UI
+[Scenario source](tests/scenarios/collab.test.ts)
 
-Interactive shell terminals running inside the browser.
+[![Collab scenario](https://github.com/holiber/browser2video/releases/download/examples-v3/collab-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/collab-demo.mp4)
+
+### Terminal UI (mc, htop, vim)
+
+Interactive TUI apps (Midnight Commander, htop, vim) running in real PTY terminals rendered via xterm.js in the browser. Uses `actor.clickAt()` and `actor.pressKey()` for terminal interactions.
+
+[Scenario source](tests/scenarios/tui-terminals.test.ts)
 
 [![TUI terminals](https://github.com/holiber/browser2video/releases/download/examples-v3/tui-terminals-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/tui-terminals-demo.mp4)
+
+### Console logging
+
+In-page console panel showing live log output during CRUD operations on a notes app.
+
+[Scenario source](tests/scenarios/console-logs.test.ts)
+
+[![Console logs](https://github.com/holiber/browser2video/releases/download/examples-v3/console-logs-demo.gif)](https://github.com/holiber/browser2video/releases/download/examples-v3/console-logs-demo.mp4)
 
 **[Documentation](https://holiber.github.io/browser2video/)** | **[Auto-generated scenario videos](https://holiber.github.io/browser2video/videos/)**
 
@@ -99,7 +105,7 @@ Add to `.cursor/mcp.json`:
   "mcpServers": {
     "browser2video": {
       "command": "node",
-      "args": ["packages/mcp/src/server.ts"],
+      "args": ["packages/browser2video/mcp-server.ts"],
       "env": {}
     }
   }
@@ -121,7 +127,7 @@ Add to `.cursor/mcp.json`:
 | `scenarioFile` | string | required | Path to test file |
 | `mode` | `"human"` \| `"fast"` | `"human"` | Execution speed |
 | `record` | `"screencast"` \| `"screen"` \| `"none"` | `"screencast"` | Recording mode |
-| `voice` | string | `"cedar"` | TTS voice (alloy, ash, ballad, cedar, coral, echo, fable, onyx, nova, sage, shimmer) |
+| `voice` | string | `"ash"` | TTS voice (alloy, ash, coral, echo, fable, nova, onyx, sage, shimmer) |
 | `language` | string | - | Auto-translate narration (e.g. `"ru"`, `"es"`, `"de"`) |
 | `realtimeAudio` | boolean | `false` | Play audio through speakers during execution |
 | `narrationSpeed` | number | `1.0` | Speech speed (0.25-4.0) |
@@ -145,11 +151,9 @@ After merge to `main`, a deploy workflow records all scenarios and publishes vid
 ## Repo layout
 
 ```
-apps/demo/            Vite + React demo app (target under test)
-packages/runner/      Core library (@browser2video/runner)
-packages/cli/         CLI tool (b2v)
-packages/mcp/         MCP server (stdio, for AI agents)
-tests/scenarios/      Scenario test files
+apps/demo/               Vite + React demo app (target under test)
+packages/browser2video/  Core library, CLI, MCP server, schemas, terminal bridge
+tests/scenarios/         Scenario test files
 ```
 
 ## Architecture
@@ -165,7 +169,7 @@ See `docs/ARCHITECTURE.md`.
 Create a new recording session. This is the main entry point.
 
 ```ts
-import { createSession } from "@browser2video/runner";
+import { createSession } from "browser2video";
 
 const session = await createSession({
   mode: "human",           // "human" | "fast"
@@ -273,7 +277,7 @@ The `Actor` provides human-like browser interactions:
 Start a dev server (Vite, Next.js, static, or custom command).
 
 ```ts
-import { startServer } from "@browser2video/runner";
+import { startServer } from "browser2video";
 
 const server = await startServer({ type: "vite", root: "apps/demo" });
 console.log(server.baseURL); // "http://localhost:5173"
@@ -284,7 +288,7 @@ console.log(server.baseURL); // "http://localhost:5173"
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enabled` | `boolean` | `false` | Enable narration |
-| `voice` | `string` | `"cedar"` | OpenAI TTS voice |
+| `voice` | `string` | `"ash"` | OpenAI TTS voice |
 | `speed` | `number` | `1.0` | Speech speed (0.25-4.0) |
 | `model` | `string` | `"tts-1"` | OpenAI TTS model |
 | `apiKey` | `string` | env | OpenAI API key |
@@ -309,5 +313,5 @@ console.log(server.baseURL); // "http://localhost:5173"
 For advanced usage, Playwright types and launchers are re-exported:
 
 ```ts
-import { chromium, type Page, type Locator } from "@browser2video/runner";
+import { chromium, type Page, type Locator } from "browser2video";
 ```

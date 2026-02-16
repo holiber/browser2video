@@ -7,12 +7,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@browser2video/lib": "workspace:*",
-    "@browser2video/runner": "workspace:*",
+    "browser2video": "workspace:*",
     "@playwright/test": "^1.50.0"
   },
   "devDependencies": {
     "typescript": "~5.7.0"
   }
 }
-
