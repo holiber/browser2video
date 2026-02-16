@@ -272,15 +272,19 @@ export const FAST_MODE_INIT_SCRIPT = `
 // ---------------------------------------------------------------------------
 
 export class Actor {
+  page: Page;
+  mode: Mode;
   private cursorX = 0;
   private cursorY = 0;
   private delays: ActorDelays;
 
   constructor(
-    public page: Page,
-    public mode: Mode,
+    page: Page,
+    mode: Mode,
     opts?: { delays?: Partial<ActorDelays> },
   ) {
+    this.page = page;
+    this.mode = mode;
     this.delays = mergeDelays(mode, opts?.delays);
   }
 

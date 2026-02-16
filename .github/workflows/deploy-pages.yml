@@ -45,6 +45,8 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Record all scenarios
+        env:
+          NODE_OPTIONS: '--experimental-transform-types'
         run: |
           export DISPLAY=:99
           Xvfb :99 -screen 0 1920x1080x24 &
