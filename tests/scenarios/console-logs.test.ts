@@ -3,7 +3,6 @@
  * Opens the notes app with an embedded console panel and performs
  * CRUD operations that generate visible console output.
  */
-import { test } from "@playwright/test";
 import { fileURLToPath } from "url";
 import { createSession, startServer } from "@browser2video/runner";
 
@@ -16,10 +15,11 @@ async function scenario() {
   if (!server) throw new Error("Failed to start Vite server");
 
   const session = await createSession();
-  const { page, actor } = await session.openPage({ url: server.baseURL });
+  const { step } = session;
+  const { page, actor } = await session.openPage({ url: server.baseURL, viewport: { width: 640 } });
 
   try {
-    await session.step("Open notes page with console", async () => {
+    await step("Open notes page with console", async () => {
       await actor.goto(`${server.baseURL}/notes?role=boss&showConsole=true`);
       await actor.waitFor('[data-testid="notes-page"]');
       await actor.waitFor('[data-testid="console-panel"]');
@@ -28,7 +28,7 @@ async function scenario() {
     await sleep(600);
 
     for (const title of TASKS) {
-      await session.step(`Add task: "${title}"`, async () => {
+      await step(`Add task: "${title}"`, async () => {
         await actor.type('[data-testid="note-input"]', title);
         await sleep(150);
         await actor.click('[data-testid="note-add-btn"]');
@@ -36,7 +36,7 @@ async function scenario() {
       });
     }
 
-    await session.step(`Complete task: "${TASKS[0]}"`, async () => {
+    await step(`Complete task: "${TASKS[0]}"`, async () => {
       const idx = await page.evaluate((title: string) => {
         const items = document.querySelectorAll('[data-testid^="note-title-"]');
         return Array.from(items).findIndex((el: any) => {
@@ -49,7 +49,7 @@ async function scenario() {
       await sleep(500);
     });
 
-    await session.step(`Delete task: "${TASKS[1]}"`, async () => {
+    await step(`Delete task: "${TASKS[1]}"`, async () => {
       const idx = await page.evaluate((title: string) => {
         const items = document.querySelectorAll('[data-testid^="note-title-"]');
         return Array.from(items).findIndex((el: any) => {
@@ -62,7 +62,7 @@ async function scenario() {
       await sleep(500);
     });
 
-    await session.step("Add another task", async () => {
+    await step("Add another task", async () => {
       await actor.type('[data-testid="note-input"]', "deploy to production");
       await sleep(150);
       await actor.click('[data-testid="note-add-btn"]');
@@ -76,8 +76,10 @@ async function scenario() {
   }
 }
 
-test("console-logs", scenario);
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
+if (isDirectRun) {
   scenario().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+} else {
+  const { test } = await import("@playwright/test");
+  test("console-logs", scenario);
 }

@@ -2,7 +2,6 @@
  * Interactive shell terminals with TUI apps (htop, mc) running inside
  * in-browser xterm panes connected to real PTYs.
  */
-import { test } from "@playwright/test";
 import { fileURLToPath } from "url";
 import { createSession, startServer } from "@browser2video/runner";
 import { startTerminalWsServer } from "./terminal/terminal-ws-server.js";
@@ -110,10 +109,11 @@ async function scenario() {
   const srv = await startTerminalWsServer();
 
   const session = await createSession();
+  const { step } = session;
   const { page, actor } = await session.openPage({ url: server.baseURL });
 
   try {
-    await session.step("Open terminals page", async () => {
+    await step("Open terminals page", async () => {
       const url = `${server.baseURL}/terminals?termWs=${encodeURIComponent(srv.baseWsUrl)}`;
       await actor.goto(url);
       await actor.waitFor('[data-testid="terminals-page"]');
@@ -122,40 +122,40 @@ async function scenario() {
       await actor.waitFor('[data-testid="xterm-term4"] .xterm');
     });
 
-    await session.step("Wait for terminal connections", async () => {
+    await step("Wait for terminal connections", async () => {
       await waitForWsOpen(page, '[data-testid="xterm-term1"]');
       await waitForWsOpen(page, '[data-testid="xterm-term2"]');
       await waitForWsOpen(page, '[data-testid="xterm-term4"]');
     });
 
-    await session.step("Wait for mc to render", async () => {
+    await step("Wait for mc to render", async () => {
       await waitForXtermText(page, '[data-testid="xterm-term1"]', ["1Help"], 20000);
       await sleep(800);
     });
 
-    await session.step("Wait for htop to render", async () => {
+    await step("Wait for htop to render", async () => {
       await waitForXtermText(page, '[data-testid="xterm-term2"]', ["CPU"], 20000);
       await sleep(1000);
     });
 
-    await session.step("Navigate mc with keyboard (left panel)", async () => {
+    await step("Navigate mc with keyboard (left panel)", async () => {
       await focusTerminal(page, "xterm-term1");
       for (let i = 0; i < 4; i++) { await page.keyboard.press("ArrowDown"); await sleep(250); }
       await page.keyboard.press("ArrowUp"); await sleep(250);
       await page.keyboard.press("ArrowUp"); await sleep(300);
     });
 
-    await session.step("Switch to right panel (Tab)", async () => {
+    await step("Switch to right panel (Tab)", async () => {
       await focusTerminal(page, "xterm-term1");
       await page.keyboard.press("Tab"); await sleep(500);
       for (let i = 0; i < 3; i++) { await page.keyboard.press("ArrowDown"); await sleep(250); }
     });
 
-    await session.step("Switch back to left panel (Tab)", async () => {
+    await step("Switch back to left panel (Tab)", async () => {
       await page.keyboard.press("Tab"); await sleep(400);
     });
 
-    await session.step("Click files in left panel", async () => {
+    await step("Click files in left panel", async () => {
       await focusTerminal(page, "xterm-term1");
       await clickInTerminal(page, "xterm-term1", 0.20, 0.14); await sleep(400);
       await clickInTerminal(page, "xterm-term1", 0.20, 0.22); await sleep(400);
@@ -163,30 +163,30 @@ async function scenario() {
       await clickInTerminal(page, "xterm-term1", 0.20, 0.18); await sleep(400);
     });
 
-    await session.step("Click files in right panel", async () => {
+    await step("Click files in right panel", async () => {
       await clickInTerminal(page, "xterm-term1", 0.70, 0.14); await sleep(400);
       await clickInTerminal(page, "xterm-term1", 0.70, 0.22); await sleep(400);
       await clickInTerminal(page, "xterm-term1", 0.70, 0.30); await sleep(400);
     });
 
-    await session.step("Open directory with Enter", async () => {
+    await step("Open directory with Enter", async () => {
       await clickInTerminal(page, "xterm-term1", 0.70, 0.10); await sleep(300);
       await page.keyboard.press("Enter"); await sleep(800);
     });
 
-    await session.step("Navigate back in right panel", async () => {
+    await step("Navigate back in right panel", async () => {
       await clickInTerminal(page, "xterm-term1", 0.70, 0.10); await sleep(300);
       await page.keyboard.press("Enter"); await sleep(600);
     });
 
-    await session.step("Click back to left panel and browse", async () => {
+    await step("Click back to left panel and browse", async () => {
       await clickInTerminal(page, "xterm-term1", 0.20, 0.18); await sleep(400);
       await page.keyboard.press("ArrowDown"); await sleep(250);
       await page.keyboard.press("ArrowDown"); await sleep(250);
       await page.keyboard.press("ArrowDown"); await sleep(300);
     });
 
-    await session.step("View file with F3 in mc", async () => {
+    await step("View file with F3 in mc", async () => {
       await focusTerminal(page, "xterm-term1");
       await page.keyboard.press("F3"); await sleep(1200);
       for (let i = 0; i < 5; i++) { await page.keyboard.press("ArrowDown"); await sleep(200); }
@@ -194,28 +194,28 @@ async function scenario() {
       await page.keyboard.press("q"); await sleep(600);
     });
 
-    await session.step("Wait for shell prompt", async () => {
+    await step("Wait for shell prompt", async () => {
       await waitForPrompt(page, "xterm-term4");
     });
 
-    await session.step("Run ls in shell", async () => {
+    await step("Run ls in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "ls\n", { delay: 60 });
       await sleep(600);
       await waitForPrompt(page, "xterm-term4");
     });
 
-    await session.step("Run ls -la in shell", async () => {
+    await step("Run ls -la in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "ls -la\n", { delay: 60 });
       await sleep(800);
       await waitForPrompt(page, "xterm-term4");
     });
 
-    await session.step("Launch vim in shell", async () => {
+    await step("Launch vim in shell", async () => {
       await typeInTerminal(page, "xterm-term4", "vim\n", { delay: 60 });
       await sleep(1200);
     });
 
-    await session.step("Type text in vim (insert mode)", async () => {
+    await step("Type text in vim (insert mode)", async () => {
       await focusTerminal(page, "xterm-term4");
       await page.keyboard.press("i"); await sleep(400);
       await typeInTerminal(page, "xterm-term4", "Hello from browser2video!", { delay: 70 });
@@ -228,20 +228,20 @@ async function scenario() {
       await sleep(500);
     });
 
-    await session.step("Exit vim without saving", async () => {
+    await step("Exit vim without saving", async () => {
       await page.keyboard.press("Escape"); await sleep(400);
       await typeInTerminal(page, "xterm-term4", ":q!\n", { delay: 80 });
       await sleep(800);
       await waitForPrompt(page, "xterm-term4");
     });
 
-    await session.step("Quit mc", async () => {
+    await step("Quit mc", async () => {
       await focusTerminal(page, "xterm-term1");
       await page.keyboard.press("F10"); await sleep(500);
       await page.keyboard.press("Enter"); await sleep(1000);
     });
 
-    await session.step("Quit htop", async () => {
+    await step("Quit htop", async () => {
       await typeInTerminal(page, "xterm-term2", "q");
       await sleep(1000);
     });
@@ -253,8 +253,10 @@ async function scenario() {
   }
 }
 
-test("tui-terminals", scenario);
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
+if (isDirectRun) {
   scenario().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+} else {
+  const { test } = await import("@playwright/test");
+  test("tui-terminals", scenario);
 }

@@ -21,7 +21,7 @@ import type {
   ActorDelays,
 } from "./types.js";
 
-import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT } from "./actor.js";
+import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.js";
 import { composeVideos } from "./video-compositor.js";
 import {
   type AudioDirectorAPI,
@@ -41,6 +41,28 @@ function sleep(ms: number) {
 
 function isUnderPlaywright(): boolean {
   return process.env.PLAYWRIGHT_TEST_WORKER_INDEX !== undefined;
+}
+
+/** Load .env from cwd, setting only vars that are not already defined. */
+function loadDotenv(): void {
+  const envPath = path.resolve(process.cwd(), ".env");
+  if (!fs.existsSync(envPath)) return;
+  try {
+    const content = fs.readFileSync(envPath, "utf-8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx < 1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim();
+      if (process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch {
+    // Silently ignore read errors
+  }
 }
 
 function resolveCallerFilename(): string {
@@ -102,6 +124,7 @@ interface PaneState {
   terminal?: TerminalHandle;
   rawVideoPath?: string;
   process?: ChildProcess;
+  createdAtMs: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +148,7 @@ export class Session {
   readonly layout: LayoutConfig;
   private readonly ffmpeg: string;
   private readonly delays?: Partial<ActorDelays>;
-  private readonly narrationOpts?: NarrationOptions;
+  private narrationOpts?: NarrationOptions;
   private audioDirector!: AudioDirectorAPI & { getEvents?: () => AudioEvent[] };
 
   constructor(opts: SessionOptions = {}) {
@@ -146,11 +169,31 @@ export class Session {
     this.layout = opts.layout ?? "row";
     this.ffmpeg = opts.ffmpegPath ?? "ffmpeg";
     this.delays = opts.delays;
-    this.narrationOpts = opts.narration;
+
+    // Store explicit narration opts; auto-enable happens in _init() after .env is loaded
+    if (opts.narration) {
+      this.narrationOpts = opts.narration;
+    }
   }
 
   /** Launch the browser. Called automatically by createSession(). */
   async _init(): Promise<void> {
+    // Lightweight inline .env loader — sets missing env vars from .env file
+    loadDotenv();
+
+    // Auto-enable narration when OPENAI_API_KEY is present and not explicitly configured
+    if (!this.narrationOpts && process.env.OPENAI_API_KEY) {
+      this.narrationOpts = { enabled: true };
+    }
+
+    // Apply B2V_* env var overrides for narration settings
+    if (this.narrationOpts) {
+      if (process.env.B2V_VOICE) this.narrationOpts.voice = process.env.B2V_VOICE;
+      if (process.env.B2V_NARRATION_SPEED) this.narrationOpts.speed = parseFloat(process.env.B2V_NARRATION_SPEED);
+      if (process.env.B2V_REALTIME_AUDIO) this.narrationOpts.realtime = process.env.B2V_REALTIME_AUDIO === "true";
+      if (process.env.B2V_NARRATION_LANGUAGE) this.narrationOpts.language = process.env.B2V_NARRATION_LANGUAGE;
+    }
+
     fs.mkdirSync(this.artifactDir, { recursive: true });
 
     this.browser = await chromium.launch({
@@ -216,6 +259,9 @@ export class Session {
     const context = await this.browser.newContext(ctxOpts);
     const page = await context.newPage();
 
+    // Set dark background on the blank page immediately to avoid white flash in recordings
+    await page.evaluate(() => { document.documentElement.style.background = "#1a1a2e"; });
+
     // Init scripts
     if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
     if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
@@ -230,13 +276,21 @@ export class Session {
 
     const actor = new Actor(page, this.mode, { delays: this.delays });
 
+    // Auto-inject cursor overlay after every navigation (human mode)
+    if (this.mode === "human") {
+      page.on("framenavigated", (frame) => {
+        if (frame === page.mainFrame()) {
+          actor.injectCursor().catch(() => {});
+        }
+      });
+    }
+
     // Navigate if URL provided
     if (opts.url) {
       await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30000 });
-      await actor.injectCursor();
     }
 
-    const pane: PaneState = { id, type: "browser", label, context, page, actor, rawVideoPath };
+    const pane: PaneState = { id, type: "browser", label, context, page, actor, rawVideoPath, createdAtMs: Date.now() };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
 
@@ -278,6 +332,9 @@ export class Session {
     const context = await this.browser.newContext(ctxOpts);
     const page = await context.newPage();
 
+    // Dark background to avoid white flash before content loads
+    await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
+
     // Set terminal page content
     await page.setContent(TERMINAL_PAGE_HTML, { waitUntil: "domcontentloaded" });
     await page.evaluate((t: string) => (window as any).__b2v_setTitle(t), label);
@@ -303,9 +360,28 @@ export class Session {
       proc.stderr?.on("data", pushOutput);
 
       termProcess = proc;
+      const mode = this.mode;
+      const delays = this.delays;
       termHandle = {
         send: async (text: string) => {
-          proc.stdin?.write(text.endsWith("\n") ? text : `${text}\n`);
+          const line = text.endsWith("\n") ? text : `${text}\n`;
+
+          if (mode === "human") {
+            // Type visually character by character on the terminal page
+            const keyDelay = delays?.keyDelayMs
+              ? pickMs(delays.keyDelayMs as [number, number])
+              : pickMs(DEFAULT_DELAYS.human.keyDelayMs);
+            for (const ch of text) {
+              page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), ch).catch(() => {});
+              await sleep(keyDelay);
+            }
+            // Show newline visually
+            page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), "\n").catch(() => {});
+            await sleep(50);
+          }
+
+          // Send the full line to the process
+          proc.stdin?.write(line);
           await sleep(300);
         },
         page,
@@ -319,6 +395,7 @@ export class Session {
     const pane: PaneState = {
       id, type: "terminal", label, context, page,
       terminal: termHandle, rawVideoPath, process: termProcess,
+      createdAtMs: Date.now(),
     };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
@@ -330,14 +407,38 @@ export class Session {
   //  Public: step tracking and audio
   // -----------------------------------------------------------------------
 
-  /** Track a named step (shown in subtitles and logs). */
-  async step(caption: string, fn: () => Promise<void>): Promise<void> {
+  /**
+   * Track a named step (shown in subtitles and logs).
+   * Arrow function so it can be destructured from the session.
+   *
+   * Overloaded: pass an optional narration string as the second arg
+   * to speak concurrently with the step body.
+   *
+   * ```ts
+   * await step("Do thing", async () => { ... });
+   * await step("Do thing", "Narration text", async () => { ... });
+   * ```
+   */
+  step = async (
+    caption: string,
+    fnOrNarration: string | (() => Promise<void>),
+    maybeFn?: () => Promise<void>,
+  ): Promise<void> => {
+    const narration = typeof fnOrNarration === "string" ? fnOrNarration : undefined;
+    const fn = typeof fnOrNarration === "function" ? fnOrNarration : maybeFn!;
+
     this.stepIndex++;
     const idx = this.stepIndex;
     const startMs = Date.now() - this.startTime;
     console.log(`  [Step ${idx}] ${caption}`);
 
-    await fn();
+    // Pre-generate TTS so speak() starts playback instantly
+    if (narration) await this.audioDirector.warmup(narration);
+
+    // Run narration and step body concurrently
+    const tasks: Promise<void>[] = [fn()];
+    if (narration) tasks.push(this.audioDirector.speak(narration));
+    await Promise.all(tasks);
 
     // Breathing pause after each step (human mode)
     const firstActor = [...this.panes.values()].find((p) => p.actor)?.actor;
@@ -345,7 +446,7 @@ export class Session {
 
     const endMs = Date.now() - this.startTime;
     this.steps.push({ index: idx, caption, startMs, endMs });
-  }
+  };
 
   /** Access the audio director for narration/sound effects. */
   get audio(): AudioDirectorAPI {
@@ -404,6 +505,14 @@ export class Session {
         .filter((p): p is string => !!p && fs.existsSync(p));
 
       if (rawPaths.length > 0) {
+        // Compute time offsets relative to the earliest pane for temporal alignment
+        const paneCreationTimes = this.paneOrder
+          .map((id) => this.panes.get(id))
+          .filter((p): p is PaneState => !!p && !!p.rawVideoPath && fs.existsSync(p.rawVideoPath))
+          .map((p) => p.createdAtMs);
+        const earliestMs = Math.min(...paneCreationTimes);
+        const startOffsets = paneCreationTimes.map((t) => t - earliestMs);
+
         console.log(`  Compositing ${rawPaths.length} pane(s)...`);
         try {
           composeVideos({
@@ -412,6 +521,7 @@ export class Session {
             ffmpeg: this.ffmpeg,
             layout: this.layout === "auto" ? "auto" : this.layout,
             targetDurationSec: durationMs / 1000,
+            startOffsets,
           });
           console.log(`  Video saved: ${videoPath}`);
         } catch (err) {
@@ -486,8 +596,9 @@ export class Session {
  * import { createSession } from "@browser2video/runner";
  *
  * const session = await createSession();
+ * const { step } = session;
  * const { page, actor } = await session.openPage({ url: "https://example.com" });
- * await session.step("Click button", async () => {
+ * await step("Click button", async () => {
  *   await actor.click("button");
  * });
  * await session.finish();

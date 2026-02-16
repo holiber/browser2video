@@ -186,25 +186,25 @@ export default function KanbanPage() {
       {/* Board header */}
       <div
         data-testid="kanban-header"
-        className="flex items-center gap-3 border-b px-6 py-3"
+        className="flex items-center gap-2 border-b px-3 py-2"
       >
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-accent text-sm font-bold text-accent-foreground">
+        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-accent text-xs font-bold text-accent-foreground">
           K
         </div>
-        <h1 className="text-lg font-semibold">Kanban Board</h1>
-        <span className="text-sm text-muted-foreground">
+        <h1 className="text-sm font-semibold">Kanban Board</h1>
+        <span className="text-xs text-muted-foreground">
           Task Lifecycle Demo
         </span>
       </div>
 
       {/* Board columns */}
-      <div className="flex flex-1 gap-4 overflow-x-auto p-6">
+      <div className="flex flex-1 gap-2 overflow-x-auto px-3 py-4">
         {columns.map((col) => (
           <div
             key={col.id}
             data-testid={`column-${col.id}`}
             data-column-id={col.id}
-            className="flex w-72 shrink-0 flex-col rounded-xl border transition-colors duration-200"
+            className="flex w-48 shrink-0 flex-col rounded-xl border transition-colors duration-200"
             style={{
               borderColor:
                 dragOverCol === col.id && dragCardId
@@ -217,27 +217,27 @@ export default function KanbanPage() {
             }}
           >
             {/* Column header */}
-            <div className="flex items-center gap-2 px-3 py-3">
+            <div className="flex items-center gap-1.5 px-2 py-2">
               <div
-                className="h-2.5 w-2.5 rounded-full"
+                className="h-2 w-2 rounded-full"
                 style={{ background: col.color }}
               />
               <h2
                 data-testid={`column-title-${col.id}`}
-                className="text-sm font-medium"
+                className="text-xs font-medium truncate"
               >
                 {col.title}
               </h2>
               <span
                 data-testid={`column-count-${col.id}`}
-                className="ml-auto text-xs text-muted-foreground"
+                className="ml-auto text-[10px] text-muted-foreground"
               >
                 {col.cards.length}
               </span>
             </div>
 
             {/* Cards */}
-            <div className="flex flex-1 flex-col gap-2 px-2 pb-2">
+            <div className="flex flex-1 flex-col gap-1.5 px-1.5 pb-1.5">
               {col.cards.map((card) => (
                 <div
                   key={card.id}
@@ -247,7 +247,7 @@ export default function KanbanPage() {
                     e.preventDefault();
                     handleDragStart(card.id, col.id);
                   }}
-                  className="cursor-grab select-none rounded-lg border px-3 py-2.5 text-sm transition-all duration-150 active:cursor-grabbing"
+                  className="cursor-grab select-none rounded-md border px-2 py-1.5 text-xs transition-all duration-150 active:cursor-grabbing"
                   style={{
                     borderColor:
                       dragCardId === card.id
@@ -264,52 +264,52 @@ export default function KanbanPage() {
                 </div>
               ))}
 
-              {/* Add card form */}
+              {/* Add card form — only Backlog and In Progress show the add button */}
               {addingTo === col.id ? (
-                <div data-testid={`add-card-form-${col.id}`} className="flex flex-col gap-2">
+                <div data-testid={`add-card-form-${col.id}`} className="flex flex-col gap-1.5">
                   <input
                     data-testid={`add-card-input-${col.id}`}
                     type="text"
                     autoFocus
-                    placeholder="Enter card title..."
+                    placeholder="Card title..."
                     value={newCardTitle}
                     onChange={(e) => setNewCardTitle(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter") confirmAdd();
                       if (e.key === "Escape") cancelAdd();
                     }}
-                    className="rounded-lg border px-3 py-2 text-sm outline-none"
+                    className="rounded-md border px-2 py-1.5 text-xs outline-none"
                     style={{
                       background: "var(--kanban-bg-card)",
                     }}
                   />
-                  <div className="flex gap-2">
+                  <div className="flex gap-1.5">
                     <button
                       data-testid={`add-card-confirm-${col.id}`}
                       onClick={confirmAdd}
-                      className="rounded-lg px-3 py-1.5 text-xs font-medium text-white transition-colors"
+                      className="rounded-md px-2 py-1 text-[10px] font-medium text-white transition-colors"
                       style={{ background: "var(--kanban-accent)" }}
                     >
-                      Add Card
+                      Add
                     </button>
                     <button
                       data-testid={`add-card-cancel-${col.id}`}
                       onClick={cancelAdd}
-                      className="rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors"
+                      className="rounded-md px-2 py-1 text-[10px] text-muted-foreground transition-colors"
                     >
                       Cancel
                     </button>
                   </div>
                 </div>
-              ) : (
+              ) : (col.id === "backlog" || col.id === "in-progress") ? (
                 <button
                   data-testid={`add-card-btn-${col.id}`}
                   onClick={() => startAdd(col.id)}
-                  className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/30"
+                  className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/30"
                 >
-                  <span className="text-base leading-none">+</span> New card
+                  <span className="text-sm leading-none">+</span> New card
                 </button>
-              )}
+              ) : null}
             </div>
           </div>
         ))}

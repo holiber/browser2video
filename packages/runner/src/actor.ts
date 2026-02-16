@@ -3,7 +3,7 @@
  * WindMouse cursor movement, click effects, typing, drag-and-drop,
  * and drawing.  Shared by the unified runner.
  */
-import type { Page, ElementHandle } from "playwright";
+import type { Page, ElementHandle, Locator } from "playwright";
 import type { Mode, ActorDelays, DelayRange } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -290,10 +290,40 @@ export class Actor {
     await this.page.evaluate(CURSOR_OVERLAY_SCRIPT);
   }
 
-  /** Navigate and re-inject cursor overlay. */
+  /**
+   * Move cursor smoothly to specific coordinates (human mode only).
+   * Useful when interacting with Playwright Locator APIs directly.
+   */
+  async moveCursorTo(x: number, y: number) {
+    if (this.mode !== "human") return;
+    const from = { x: this.cursorX, y: this.cursorY };
+    const points = windMouse(from, { x: Math.round(x), y: Math.round(y) });
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]!;
+      await this.page.mouse.move(p.x, p.y);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
+    }
+    this.cursorX = Math.round(x);
+    this.cursorY = Math.round(y);
+  }
+
+  /**
+   * Move cursor to a Playwright Locator's center and click it.
+   * Useful when working with Playwright's Locator API directly.
+   */
+  async clickLocator(locator: Locator) {
+    await locator.scrollIntoViewIfNeeded({ timeout: 10000 });
+    const box = await locator.boundingBox();
+    if (box) {
+      await this.moveCursorTo(box.x + box.width / 2, box.y + box.height / 2);
+    }
+    await locator.click({ force: true });
+  }
+
+  /** Navigate to a URL. Cursor is auto-injected via framenavigated listener. */
   async goto(url: string) {
     await this.page.goto(url, { waitUntil: "networkidle" });
-    await this.injectCursor();
   }
 
   /** Wait for an element to appear. */
@@ -617,6 +647,78 @@ export class Actor {
     this.cursorX = absPoints[absPoints.length - 1].x;
     this.cursorY = absPoints[absPoints.length - 1].y;
     await sleep(pickMs(this.delays.afterDragMs));
+  }
+
+  /**
+   * Circle the cursor around an element in a spiral path (1.5 full rotations),
+   * like a presenter circling something on a whiteboard. The radius grows from
+   * 0.7x to 1.0x with slight noise for human imperfection. Fast mode: no-op.
+   *
+   * Duration auto-scales with element size (larger element = longer circle).
+   * Override with `durationMs` if needed.
+   */
+  async circleAround(selector: string, opts?: { durationMs?: number }) {
+    if (this.mode !== "human") return;
+
+    const el = (await this.page.waitForSelector(selector, {
+      state: "visible",
+      timeout: 3000,
+    }))!;
+    const scrollBehavior: ScrollBehavior = "smooth";
+    await el.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
+    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
+    const box = (await el.boundingBox())!;
+
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    const baseRx = box.width / 2 + 18;
+    const baseRy = box.height / 2 + 14;
+
+    // Spiral: 1.5 full rotations (3*PI), radius grows from 0.7x to 1.0x
+    const totalAngle = 3 * Math.PI;
+    const rStart = 0.7;
+    const rEnd = 1.0;
+
+    // Start point at the spiral entry (angle=0, radius=rStart)
+    const startX = cx + baseRx * rStart;
+    const startY = cy;
+    const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, { x: Math.round(startX), y: Math.round(startY) });
+    for (let i = 0; i < movePoints.length; i++) {
+      const p = movePoints[i]!;
+      await this.page.mouse.move(p.x, p.y);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
+    }
+
+    // Auto-calculate duration from path length: ~400px/s, clamped to [800, 4000] ms
+    const avgRadius = (baseRx + baseRy) / 2;
+    const pathLength = 1.5 * 2 * Math.PI * avgRadius * ((rStart + rEnd) / 2);
+    const autoDuration = Math.max(800, Math.min(4000, Math.round(pathLength / 400 * 1000)));
+    const duration = opts?.durationMs ?? autoDuration;
+    const totalSteps = Math.max(40, Math.floor(duration / 20));
+    const stepDelay = duration / totalSteps;
+    let prevX = startX;
+    let prevY = startY;
+
+    for (let i = 1; i <= totalSteps; i++) {
+      const t = i / totalSteps;
+      const angle = t * totalAngle;
+      const rFactor = rStart + (rEnd - rStart) * t;
+      const noise = 3.0 * (1 - t * 0.4);
+      const px = Math.round(cx + baseRx * rFactor * Math.cos(angle) + (Math.random() - 0.5) * noise);
+      const py = Math.round(cy + baseRy * rFactor * Math.sin(angle) + (Math.random() - 0.5) * noise);
+
+      if (px !== Math.round(prevX) || py !== Math.round(prevY)) {
+        await this.page.mouse.move(px, py);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${px}, ${py})`);
+        prevX = px;
+        prevY = py;
+      }
+      await sleep(stepDelay);
+    }
+
+    this.cursorX = Math.round(prevX);
+    this.cursorY = Math.round(prevY);
   }
 
   /** Add a breathing pause between major steps (human mode only). */

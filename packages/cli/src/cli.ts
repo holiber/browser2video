@@ -190,6 +190,11 @@ function addRunOptions<T>(yarg: Argv<T>) {
       type: "number",
       default: 1.0,
       describe: "Narration speed 0.25-4.0",
+    })
+    .option("realtime-audio", {
+      type: "boolean",
+      default: false,
+      describe: "Play narration through speakers in realtime",
     });
 }
 
@@ -243,6 +248,7 @@ cli.command(
           enabled: true,
           voice: argv.voice as string,
           speed: argv.narrateSpeed as number,
+          realtime: Boolean(argv.realtimeAudio),
         }
       : undefined;
 

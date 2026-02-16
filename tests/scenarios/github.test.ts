@@ -3,26 +3,26 @@
  * navigate into docs, click files, scroll through the README.
  * No authorization required.
  */
-import { test } from "@playwright/test";
 import { fileURLToPath } from "url";
 import { createSession } from "@browser2video/runner";
 
 async function scenario() {
   const session = await createSession();
+  const { step } = session;
   const { page, actor } = await session.openPage({
     url: "https://github.com/holiber/browser2video",
     viewport: { width: 1024, height: 768 },
   });
 
-  await session.step("Wait for repository page", async () => {
+  await step("Wait for repository page", async () => {
     await actor.waitFor("main", 20000);
   });
 
-  await session.step("Scroll to the file list", async () => {
+  await step("Scroll to the file list", async () => {
     await actor.scroll(null, 400);
   });
 
-  await session.step("Retrieve first-level files and folders", async () => {
+  await step("Retrieve first-level files and folders", async () => {
     const items = await page.evaluate(() => {
       const rows = document.querySelectorAll(
         'table[aria-labelledby] tbody tr, div[role="grid"] div[role="row"]',
@@ -65,29 +65,28 @@ async function scenario() {
     }
   });
 
-  await session.step("Open docs folder", async () => {
+  await step("Open docs folder", async () => {
     const docsLink = page.locator('a[href$="/tree/main/docs"]').last();
-    await docsLink.scrollIntoViewIfNeeded({ timeout: 10000 });
-    await docsLink.click({ force: true });
+    await actor.clickLocator(docsLink);
     await page.waitForURL(/\/tree\/.*\/docs/, { timeout: 15000 });
     await actor.waitFor("main", 10000);
   });
 
-  await session.step("Browse docs contents", async () => {
+  await step("Browse docs contents", async () => {
     await actor.scroll(null, 300);
     const firstItem = page.locator("a.Link--primary:visible").first();
     const itemName = await firstItem.textContent();
     console.log(`    Clicking on: ${itemName?.trim()}`);
-    await firstItem.click({ force: true });
+    await actor.clickLocator(firstItem);
     await page.waitForTimeout(3000);
   });
 
-  await session.step("Navigate back to docs", async () => {
+  await step("Navigate back to docs", async () => {
     await page.goBack({ waitUntil: "domcontentloaded" });
     await actor.waitFor("main", 10000);
   });
 
-  await session.step("Open another docs item", async () => {
+  await step("Open another docs item", async () => {
     await actor.scroll(null, 200);
     const items = page.locator("a.Link--primary:visible");
     const count = await items.count();
@@ -95,18 +94,18 @@ async function scenario() {
       const second = items.nth(1);
       const name = await second.textContent();
       console.log(`    Clicking on: ${name?.trim()}`);
-      await second.click({ force: true });
+      await actor.clickLocator(second);
       await page.waitForTimeout(3000);
     }
   });
 
-  await session.step("Navigate back to repo root", async () => {
+  await step("Navigate back to repo root", async () => {
     const repoLink = page.locator('a[href="/holiber/browser2video"]').first();
-    await repoLink.click();
+    await actor.clickLocator(repoLink);
     await actor.waitFor("main", 10000);
   });
 
-  await session.step("Scroll through README", async () => {
+  await step("Scroll through README", async () => {
     await actor.scroll(null, 500);
     await actor.scroll(null, 500);
     await actor.scroll(null, -300);
@@ -115,8 +114,10 @@ async function scenario() {
   await session.finish();
 }
 
-test("github", scenario);
-
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);
+if (isDirectRun) {
   scenario().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+} else {
+  const { test } = await import("@playwright/test");
+  test("github", scenario);
 }

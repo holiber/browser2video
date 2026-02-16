@@ -221,12 +221,15 @@ function TaskItem({
               {task.title}
             </span>
             {task.approved && (
-              <span
-                className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-400"
+              <motion.span
+                className="inline-block rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-400"
                 data-testid={`note-approved-${index}`}
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: [0, 1.3, 0.9, 1.1, 1], opacity: 1 }}
+                transition={{ duration: 0.6, ease: "easeOut" }}
               >
                 Approved
-              </span>
+              </motion.span>
             )}
           </div>
         </span>
