@@ -2,7 +2,7 @@
  * @description Type definitions for the Browser2Video library.
  */
 import type { Page } from "playwright";
-import type { AudioDirectorAPI, AudioEvent, NarrationOptions } from "./narrator.js";
+import type { AudioEvent, NarrationOptions } from "./narrator.js";
 
 // ---------------------------------------------------------------------------
 //  Core primitives
@@ -121,84 +121,3 @@ export type ServerConfig =
   | { type: "next"; root: string; port?: number }
   | { type: "command"; cmd: string; port: number; readyPattern?: string }
   | { type: "static"; root: string; port?: number };
-
-// ---------------------------------------------------------------------------
-//  Legacy types (kept for backward compatibility during migration)
-// ---------------------------------------------------------------------------
-
-export interface BrowserPaneConfig {
-  id: string;
-  type: "browser";
-  url?: string;
-  path?: string;
-  label?: string;
-  viewport?: { width?: number; height?: number };
-}
-
-export interface TerminalPaneConfig {
-  id: string;
-  type: "terminal";
-  command?: string | ((ctx: { syncWsUrl?: string; baseURL?: string; docUrl?: string }) => string);
-  label?: string;
-  viewport?: { width?: number; height?: number };
-}
-
-export type PaneConfig = BrowserPaneConfig | TerminalPaneConfig;
-
-export interface SyncConfig {
-  type: "automerge";
-  wsUrl?: string;
-}
-
-/** @deprecated Use createSession() + openPage()/openTerminal() instead. */
-export interface ScenarioConfig {
-  server?: ServerConfig | null;
-  panes: PaneConfig[];
-  sync?: SyncConfig;
-  layout?: LayoutConfig;
-  serverLogs?: boolean | "hidden";
-}
-
-/** @deprecated Use Session methods directly. */
-export interface ScenarioContext {
-  actor(paneId: string): import("./actor.js").Actor;
-  page(paneId: string): Page;
-  terminal(paneId: string): TerminalHandle;
-  step(paneId: string | "all", caption: string, fn: () => Promise<void>): Promise<void>;
-  audio: AudioDirectorAPI;
-  baseURL?: string;
-  paneIds: readonly string[];
-  syncWsUrl?: string;
-  docUrl?: string;
-}
-
-/** @deprecated Use SessionOptions instead. */
-export interface RunOptions {
-  mode: Mode;
-  baseURL?: string;
-  artifactDir: string;
-  recordMode?: RecordMode;
-  ffmpegPath?: string;
-  headless?: boolean;
-  delays?: Partial<ActorDelays>;
-  devtools?: boolean;
-  screenIndex?: number;
-  display?: string;
-  displaySize?: string;
-  narration?: NarrationOptions;
-  debugOverlay?: boolean;
-  userDataDir?: string;
-  executablePath?: string;
-}
-
-/** @deprecated Use SessionResult instead. */
-export interface RunResult {
-  mode: Mode;
-  recordMode: RecordMode;
-  videoPath?: string;
-  subtitlesPath: string;
-  metadataPath: string;
-  steps: StepRecord[];
-  durationMs: number;
-  audioEvents?: AudioEvent[];
-}

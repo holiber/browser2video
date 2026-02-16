@@ -1,5 +1,5 @@
 /**
- * @description Start / stop web servers based on ScenarioConfig.server.
+ * @description Start / stop web servers based on ServerConfig.
  * Supports Vite, custom commands, static file servers, etc.
  */
 import type { ServerConfig } from "./types.js";
@@ -175,7 +175,7 @@ async function startStaticServer(root: string, preferredPort?: number): Promise<
 }
 
 /**
- * Start a server based on the ScenarioConfig.server configuration.
+ * Start a server based on the ServerConfig configuration.
  * Returns null if no server is needed.
  */
 export async function startServer(config: ServerConfig | null | undefined): Promise<ManagedServer | null> {

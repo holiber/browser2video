@@ -49,17 +49,3 @@ export type { NarrationOptions, AudioDirectorAPI, AudioEvent } from "./narrator.
 // Shared utilities (less common, but available)
 export { composeVideos } from "./video-compositor.js";
 export { startScreenCapture, tryParseDisplaySize } from "./screen-capture.js";
-
-// Legacy exports (backward compatibility — will be removed)
-export { run } from "./unified-runner.js";
-export { scenarioTest } from "./playwright-helper.js";
-export type {
-  ScenarioConfig,
-  ScenarioContext,
-  RunOptions,
-  RunResult,
-  BrowserPaneConfig,
-  TerminalPaneConfig,
-  PaneConfig,
-  SyncConfig,
-} from "./types.js";
