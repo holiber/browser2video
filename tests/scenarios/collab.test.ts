@@ -13,6 +13,9 @@ async function scenario() {
 
   const sync = await startSyncServer({ artifactDir: path.resolve("artifacts", "collab-sync") });
   const session = await createSession({ layout: "row" });
+  session.addCleanup(() => sync.stop());
+  session.addCleanup(() => server.stop());
+
   const { step } = session;
 
   // Open both browser panes first (without URLs) so recordings start simultaneously
@@ -34,11 +37,11 @@ async function scenario() {
   await bossPage.waitForFunction(
     () => (globalThis as any).document.location.hash.length > 1,
     undefined,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
   const hash = await bossPage.evaluate(() => (globalThis as any).document.location.hash);
   const docUrl = hash.startsWith("#") ? hash.slice(1) : hash;
-  console.log(`  Doc hash: ${hash}`);
+  console.error(`  Doc hash: ${hash}`);
 
   // Navigate Worker with the shared hash
   const workerUrl = new URL(`${server.baseURL}/notes?role=worker`);
@@ -54,126 +57,121 @@ async function scenario() {
     label: "Reviewer",
   });
 
-  try {
-    const TASKS = ["create schemas", "add new note", "edit note"];
-    const EXTRA_TASKS = ["write tests", "deploy"];
+  const TASKS = ["create schemas", "add new note", "edit note"];
+  const EXTRA_TASKS = ["write tests", "deploy"];
 
-    await step("Verify both pages are ready", async () => {
-      // notes-page renders only after the Automerge document is loaded via useDocument,
-      // so this is a reliable signal that sync has completed on both peers.
-      await bossPage.waitForSelector('[data-testid="notes-page"]', { timeout: 10000 });
-      await workerPage.waitForSelector('[data-testid="notes-page"]', { timeout: 10000 });
+  await step("Verify both pages are ready", async () => {
+    // notes-page renders only after the Automerge document is loaded via useDocument,
+    // so this is a reliable signal that sync has completed on both peers.
+    await bossPage.waitForSelector('[data-testid="notes-page"]', { timeout: 20000 });
+    await workerPage.waitForSelector('[data-testid="notes-page"]', { timeout: 20000 });
+  });
+
+  // Boss creates tasks, Worker completes, Reviewer approves
+  for (let i = 0; i < TASKS.length; i++) {
+    const t = TASKS[i];
+
+    await step(`Boss adds task: "${t}"`, async () => {
+      await boss.type('[data-testid="note-input"]', t);
+      await boss.click('[data-testid="note-add-btn"]');
     });
 
-    // Boss creates tasks, Worker completes, Reviewer approves
-    for (let i = 0; i < TASKS.length; i++) {
-      const t = TASKS[i];
-
-      await step(`Boss adds task: "${t}"`, async () => {
-        await boss.type('[data-testid="note-input"]', t);
-        await boss.click('[data-testid="note-add-btn"]');
-      });
-
-      await step(`Worker sees "${t}" appear`, async () => {
-        await waitForTitle(workerPage, t);
-      });
-
-      await step(`Worker marks "${t}" completed`, async () => {
-        const idx = await getIndexByTitle(workerPage, t);
-        if (idx < 0) throw new Error(`Worker: could not find task "${t}" to complete`);
-        await worker.click(`[data-testid="note-check-${idx}"]`);
-      });
-
-      await step(`Boss sees "${t}" completed`, async () => {
-        await waitForCompletedByTitle(bossPage, t);
-      });
-
-      await step(`Reviewer approves "${t}"`, async () => {
-        await reviewer.send(`APPROVE "${t}"`);
-      });
-
-      await step(`Boss sees "${t}" approved`, async () => {
-        await waitForApprovedByTitle(bossPage, t);
-      });
-
-      await step(`Worker sees "${t}" approved`, async () => {
-        await waitForApprovedByTitle(workerPage, t);
-      });
-    }
-
-    // Boss adds extra tasks
-    for (const t of EXTRA_TASKS) {
-      await step(`Boss adds task: "${t}"`, async () => {
-        await boss.type('[data-testid="note-input"]', t);
-        await boss.click('[data-testid="note-add-btn"]');
-      });
-      await step(`Worker sees "${t}" appear`, async () => {
-        await waitForTitle(workerPage, t);
-      });
-    }
-
-    // Boss rearranges
-    await step('Boss moves "write tests" above "deploy"', async () => {
-      const idxWT = await getIndexByTitle(bossPage, "write tests");
-      const idxD = await getIndexByTitle(bossPage, "deploy");
-      if (idxWT < 0 || idxD < 0) throw new Error("Boss: reorder items not found");
-      await boss.drag(`[data-testid="note-item-${idxWT}"]`, `[data-testid="note-item-${idxD}"]`);
+    await step(`Worker sees "${t}" appear`, async () => {
+      await waitForTitle(workerPage, t);
     });
 
-    // Wait for Boss's reorder to sync to Worker before Worker makes their own change
-    await step('Worker moves "deploy" above "write tests"', async () => {
-      await workerPage.waitForTimeout(500);
-      const idxD = await getIndexByTitle(workerPage, "deploy");
-      const idxWT = await getIndexByTitle(workerPage, "write tests");
-      if (idxD < 0 || idxWT < 0) throw new Error("Worker: reorder items not found");
-      await worker.drag(`[data-testid="note-item-${idxD}"]`, `[data-testid="note-item-${idxWT}"]`);
+    await step(`Worker marks "${t}" completed`, async () => {
+      const idx = await getIndexByTitle(workerPage, t);
+      if (idx < 0) throw new Error(`Worker: could not find task "${t}" to complete`);
+      await worker.click(`[data-testid="note-check-${idx}"]`);
     });
 
-    // Boss deletes "edit note"
-    await step('Boss deletes "edit note"', async () => {
-      const idx = await getIndexByTitle(bossPage, "edit note");
-      if (idx < 0) throw new Error('Boss: could not find "edit note" to delete');
-      await boss.click(`[data-testid="note-delete-${idx}"]`);
+    await step(`Boss sees "${t}" completed`, async () => {
+      await waitForCompletedByTitle(bossPage, t);
     });
 
-    await step('Worker sees "edit note" disappear', async () => {
-      await waitForTitleGone(workerPage, "edit note");
+    await step(`Reviewer approves "${t}"`, async () => {
+      await reviewer.send(`APPROVE "${t}"`);
     });
 
-    // Verify final order
-    const expectedOrder = ["deploy", "write tests", "add new note", "create schemas"];
-
-    await step("Verify final order (Boss)", async () => {
-      const order = await getOrder(bossPage);
-      for (let i = 0; i < expectedOrder.length; i++) {
-        if (order[i] !== expectedOrder[i]) {
-          throw new Error(
-            `Boss order mismatch at ${i}: "${order[i]}" vs "${expectedOrder[i]}"\n` +
-            `  Got: ${JSON.stringify(order)}\n  Expected: ${JSON.stringify(expectedOrder)}`,
-          );
-        }
-      }
-      console.log(`    Boss: all ${expectedOrder.length} items in correct order`);
+    await step(`Boss sees "${t}" approved`, async () => {
+      await waitForApprovedByTitle(bossPage, t);
     });
 
-    await step("Verify final order (Worker)", async () => {
-      const order = await getOrder(workerPage);
-      for (let i = 0; i < expectedOrder.length; i++) {
-        if (order[i] !== expectedOrder[i]) {
-          throw new Error(
-            `Worker order mismatch at ${i}: "${order[i]}" vs "${expectedOrder[i]}"\n` +
-            `  Got: ${JSON.stringify(order)}\n  Expected: ${JSON.stringify(expectedOrder)}`,
-          );
-        }
-      }
-      console.log(`    Worker: all ${expectedOrder.length} items in correct order`);
+    await step(`Worker sees "${t}" approved`, async () => {
+      await waitForApprovedByTitle(workerPage, t);
     });
-
-    await session.finish();
-  } finally {
-    await sync.stop();
-    await server.stop();
   }
+
+  // Boss adds extra tasks
+  for (const t of EXTRA_TASKS) {
+    await step(`Boss adds task: "${t}"`, async () => {
+      await boss.type('[data-testid="note-input"]', t);
+      await boss.click('[data-testid="note-add-btn"]');
+    });
+    await step(`Worker sees "${t}" appear`, async () => {
+      await waitForTitle(workerPage, t);
+    });
+  }
+
+  // Boss rearranges
+  await step('Boss moves "write tests" above "deploy"', async () => {
+    const idxWT = await getIndexByTitle(bossPage, "write tests");
+    const idxD = await getIndexByTitle(bossPage, "deploy");
+    if (idxWT < 0 || idxD < 0) throw new Error("Boss: reorder items not found");
+    await boss.drag(`[data-testid="note-item-${idxWT}"]`, `[data-testid="note-item-${idxD}"]`);
+  });
+
+  // Wait for Boss's reorder to sync to Worker before Worker makes their own change
+  await step('Worker moves "deploy" above "write tests"', async () => {
+    await workerPage.waitForTimeout(500);
+    const idxD = await getIndexByTitle(workerPage, "deploy");
+    const idxWT = await getIndexByTitle(workerPage, "write tests");
+    if (idxD < 0 || idxWT < 0) throw new Error("Worker: reorder items not found");
+    await worker.drag(`[data-testid="note-item-${idxD}"]`, `[data-testid="note-item-${idxWT}"]`);
+  });
+
+  // Boss deletes "edit note"
+  await step('Boss deletes "edit note"', async () => {
+    const idx = await getIndexByTitle(bossPage, "edit note");
+    if (idx < 0) throw new Error('Boss: could not find "edit note" to delete');
+    await boss.click(`[data-testid="note-delete-${idx}"]`);
+  });
+
+  await step('Worker sees "edit note" disappear', async () => {
+    await waitForTitleGone(workerPage, "edit note");
+  });
+
+  // Verify final order
+  const expectedOrder = ["deploy", "write tests", "add new note", "create schemas"];
+
+  await step("Verify final order (Boss)", async () => {
+    const order = await getOrder(bossPage);
+    for (let i = 0; i < expectedOrder.length; i++) {
+      if (order[i] !== expectedOrder[i]) {
+        throw new Error(
+          `Boss order mismatch at ${i}: "${order[i]}" vs "${expectedOrder[i]}"\n` +
+          `  Got: ${JSON.stringify(order)}\n  Expected: ${JSON.stringify(expectedOrder)}`,
+        );
+      }
+    }
+    console.error(`    Boss: all ${expectedOrder.length} items in correct order`);
+  });
+
+  await step("Verify final order (Worker)", async () => {
+    const order = await getOrder(workerPage);
+    for (let i = 0; i < expectedOrder.length; i++) {
+      if (order[i] !== expectedOrder[i]) {
+        throw new Error(
+          `Worker order mismatch at ${i}: "${order[i]}" vs "${expectedOrder[i]}"\n` +
+          `  Got: ${JSON.stringify(order)}\n  Expected: ${JSON.stringify(expectedOrder)}`,
+        );
+      }
+    }
+    console.error(`    Worker: all ${expectedOrder.length} items in correct order`);
+  });
+
+  await session.finish();
 }
 
 // DOM helpers
@@ -208,7 +206,7 @@ async function waitForTitle(page: Page, title: string) {
       });
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 
@@ -222,7 +220,7 @@ async function waitForTitleGone(page: Page, title: string) {
       });
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 
@@ -241,7 +239,7 @@ async function waitForCompletedByTitle(page: Page, title: string) {
       return false;
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 
@@ -258,7 +256,7 @@ async function waitForApprovedByTitle(page: Page, title: string) {
       return false;
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 

@@ -114,6 +114,14 @@ Scroll a page or element.
 - `deltaY` (number, required) — Scroll amount (positive = down).
 - `pageId` (string, optional).
 
+### b2v_select_text
+
+Human-like text selection by dragging from one element to another. Produces a visible browser text highlight.
+
+- `fromSelector` (string, required) — CSS selector for the start of selection.
+- `toSelector` (string, optional) — CSS selector for the end of selection (defaults to `fromSelector`).
+- `pageId` (string, optional).
+
 ### b2v_terminal_send
 
 Send text/command to terminal stdin.
@@ -173,7 +181,17 @@ End session, compose video, return artifact paths.
 
 ### b2v_status
 
-Return current session state: panes, steps, mode, recording status.
+Return current session state. No parameters.
+
+**Returns:**
+- `active` (boolean) — Whether a session is running.
+- `mode` — `"human"` or `"fast"`.
+- `record` — Whether recording is enabled.
+- `headed` — Whether the browser is visible.
+- `artifactDir` — Path to the artifacts directory.
+- `panes` — Summary of open pages and terminals (IDs, URLs, viewports).
+- `steps` — Array of recorded steps so far.
+- `wsEndpoint` — WebSocket endpoint for the browser.
 
 ## Batch tools
 
@@ -212,14 +230,70 @@ Print environment diagnostics: Node.js, ffmpeg, platform.
 | `actor.goto(url)` | Navigate to a URL |
 | `actor.click(selector)` | Move cursor to element, show click effect, click |
 | `actor.clickAt(x, y)` | Click at coordinates |
-| `actor.type(selector, text)` | Click element then type text character-by-character |
+| `actor.type(selector, text)` | Type text — auto-detects xterm.js terminals vs DOM inputs |
+| `actor.typeAndEnter(selector, text)` | Type text and press Enter |
 | `actor.pressKey(key)` | Press a keyboard key with a breathing pause |
 | `actor.select(selector, value)` | Open a `<select>` and pick an option |
 | `actor.hover(selector)` | Move cursor to element |
+| `actor.selectText(from, to?)` | Select text by dragging between elements |
 | `actor.moveCursorTo(x, y)` | Smooth cursor move to coordinates |
 | `actor.drag(from, to)` | Drag from one selector to another |
 | `actor.waitFor(selector)` | Wait for an element to appear |
-| `actor.breathe()` | Pause between major actions (human mode only) |
+
+## When to use `b2v_click` vs `b2v_add_step`
+
+**Individual tools** (`b2v_click`, `b2v_type`, `b2v_drag`, etc.) give you per-action control. Use them when:
+- You need to inspect the page between actions (via Playwright MCP `browser_snapshot`).
+- The workflow is exploratory and you are deciding what to do next based on page state.
+- You want fine-grained control over pacing and narration timing.
+
+**`b2v_add_step`** executes a code block with `actor`, `page`, and `session` in scope. Use it when:
+- You want to perform a multi-action sequence as a single unit.
+- You want to export the steps as a replayable `.ts` scenario file via `b2v_save_scenario`.
+- The actions are straightforward and don't need intermediate inspection.
+
+You can mix both approaches in the same session.
+
+## Multi-page and multi-terminal workflows
+
+When you open multiple pages or terminals, each returns an ID (`pageId` / `terminalId`). Pass these IDs to interaction tools to target a specific pane.
+
+**Example: two browser pages side by side**
+
+```
+b2v_start { "mode": "human" }
+b2v_open_page { "url": "https://app.example.com/editor", "label": "Editor" }
+  -> returns { "pageId": "page-0" }
+b2v_open_page { "url": "https://app.example.com/preview", "label": "Preview" }
+  -> returns { "pageId": "page-1" }
+
+b2v_click { "selector": "#save-btn", "pageId": "page-0" }
+b2v_step { "caption": "Preview updates automatically" }
+```
+
+If you omit `pageId`, b2v uses the first (or only) page. Same for `terminalId`.
+
+## Error handling
+
+- If a `b2v_click` or `b2v_type` fails (element not found), the MCP tool returns an error. Use Playwright MCP's `browser_snapshot` to re-inspect the page and find the correct selector.
+- Call `b2v_status` to check if a session is already active before calling `b2v_start`.
+- If `b2v_start` fails due to a port conflict, try a different `cdpPort` value.
+- When using `b2v_add_step`, wrap risky code in try/catch so a single failure doesn't abort the session:
+
+```json
+{
+  "caption": "Accept cookies if present",
+  "code": "try { await actor.click('button:has-text(\"Accept\")'); } catch {}"
+}
+```
+
+## Tips
+
+- **Always inspect before interacting.** Use Playwright MCP's `browser_snapshot` to find CSS selectors before calling `b2v_click` or `b2v_type`.
+- **Use `b2v_step` before major actions** to produce meaningful subtitles in the final video.
+- **Use `b2v_narrate` for voiceover** that plays concurrently with the next actions. `b2v_step` with a `narration` field does the same but also marks a subtitle.
+- **Run `b2v_doctor` first** if you are unsure whether Node.js and ffmpeg are available.
+- **Check session state with `b2v_status`** to see open panes, recorded steps, and artifact directory.
 
 ## Requirements
 

@@ -403,8 +403,31 @@ export class Actor {
     }
   }
 
-  /** Type text into a focused element. */
+  /**
+   * Type text into an element.
+   * Automatically detects xterm.js terminal panes (looks for `.xterm-helper-textarea`
+   * inside the target) and handles them correctly — newlines are sent as Enter.
+   * For regular DOM inputs, clicks to focus first, then types with human-like delays.
+   */
   async type(selector: string, text: string) {
+    // Auto-detect xterm.js terminal containers
+    const xtermTextarea = await this.page.$(`${selector} .xterm-helper-textarea`);
+    if (xtermTextarea) {
+      await xtermTextarea.focus();
+      const charDelay = this.mode === "fast" ? 0 : pickMs(this.delays.keyDelayMs);
+      for (const ch of text) {
+        if (ch === "\n") {
+          await this.page.keyboard.press("Enter");
+        } else {
+          await this.page.keyboard.type(ch, { delay: 0 });
+        }
+        if (charDelay) await sleep(charDelay);
+      }
+      await sleep(pickMs(this.delays.afterTypeMs));
+      return;
+    }
+
+    // Regular DOM input
     await this.click(selector);
     await sleep(pickMs(this.delays.beforeTypeMs));
 
@@ -423,6 +446,11 @@ export class Actor {
     }
 
     await sleep(pickMs(this.delays.afterTypeMs));
+  }
+
+  /** Type text and press Enter. Shorthand for `type()` + `pressKey("Enter")`. */
+  async typeAndEnter(selector: string, text: string) {
+    await this.type(selector, text + "\n");
   }
 
   /** Open a select dropdown and pick a value. */

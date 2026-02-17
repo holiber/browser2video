@@ -13,56 +13,54 @@ async function scenario() {
   if (!server) throw new Error("Failed to start Vite server");
 
   const session = await createSession();
+  session.addCleanup(() => server.stop());
+
   const { step } = session;
   const { page, actor } = await session.openPage({ url: server.baseURL, viewport: { width: 640 } });
 
-  try {
-    await step("Open notes page with console", async () => {
-      await actor.goto(`${server.baseURL}/notes?role=boss&showConsole=true`);
-      await actor.waitFor('[data-testid="notes-page"]');
-      await actor.waitFor('[data-testid="console-panel"]');
-    });
+  await step("Open notes page with console", async () => {
+    await actor.goto(`${server.baseURL}/notes?role=boss&showConsole=true`);
+    await actor.waitFor('[data-testid="notes-page"]');
+    await actor.waitFor('[data-testid="console-panel"]');
+  });
 
-    for (const title of TASKS) {
-      await step(`Add task: "${title}"`, async () => {
-        await actor.type('[data-testid="note-input"]', title);
-        await actor.click('[data-testid="note-add-btn"]');
-      });
-    }
-
-    await step(`Complete task: "${TASKS[0]}"`, async () => {
-      const idx = await page.evaluate((title: string) => {
-        const items = document.querySelectorAll('[data-testid^="note-title-"]');
-        return Array.from(items).findIndex((el: any) => {
-          const span = el?.querySelector?.("div > span") ?? el?.querySelector?.("span") ?? el;
-          return String(span?.textContent ?? "").trim() === title;
-        });
-      }, TASKS[0]);
-      if (idx < 0) throw new Error(`Could not find task "${TASKS[0]}"`);
-      await actor.click(`[data-testid="note-check-${idx}"]`);
-    });
-
-    await step(`Delete task: "${TASKS[1]}"`, async () => {
-      const idx = await page.evaluate((title: string) => {
-        const items = document.querySelectorAll('[data-testid^="note-title-"]');
-        return Array.from(items).findIndex((el: any) => {
-          const span = el?.querySelector?.("div > span") ?? el?.querySelector?.("span") ?? el;
-          return String(span?.textContent ?? "").trim() === title;
-        });
-      }, TASKS[1]);
-      if (idx < 0) throw new Error(`Could not find task "${TASKS[1]}"`);
-      await actor.click(`[data-testid="note-delete-${idx}"]`);
-    });
-
-    await step("Add another task", async () => {
-      await actor.type('[data-testid="note-input"]', "deploy to production");
+  for (const title of TASKS) {
+    await step(`Add task: "${title}"`, async () => {
+      await actor.type('[data-testid="note-input"]', title);
       await actor.click('[data-testid="note-add-btn"]');
     });
-
-    await session.finish();
-  } finally {
-    await server.stop();
   }
+
+  await step(`Complete task: "${TASKS[0]}"`, async () => {
+    const idx = await page.evaluate((title: string) => {
+      const items = document.querySelectorAll('[data-testid^="note-title-"]');
+      return Array.from(items).findIndex((el: any) => {
+        const span = el?.querySelector?.("div > span") ?? el?.querySelector?.("span") ?? el;
+        return String(span?.textContent ?? "").trim() === title;
+      });
+    }, TASKS[0]);
+    if (idx < 0) throw new Error(`Could not find task "${TASKS[0]}"`);
+    await actor.click(`[data-testid="note-check-${idx}"]`);
+  });
+
+  await step(`Delete task: "${TASKS[1]}"`, async () => {
+    const idx = await page.evaluate((title: string) => {
+      const items = document.querySelectorAll('[data-testid^="note-title-"]');
+      return Array.from(items).findIndex((el: any) => {
+        const span = el?.querySelector?.("div > span") ?? el?.querySelector?.("span") ?? el;
+        return String(span?.textContent ?? "").trim() === title;
+      });
+    }, TASKS[1]);
+    if (idx < 0) throw new Error(`Could not find task "${TASKS[1]}"`);
+    await actor.click(`[data-testid="note-delete-${idx}"]`);
+  });
+
+  await step("Add another task", async () => {
+    await actor.type('[data-testid="note-input"]', "deploy to production");
+    await actor.click('[data-testid="note-add-btn"]');
+  });
+
+  await session.finish();
 }
 
 const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);

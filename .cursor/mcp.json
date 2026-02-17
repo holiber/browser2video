@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "browser2video": {
-      "command": "node",
-      "args": ["packages/mcp/src/server.ts"],
-      "env": {}
-    }
-  }
-}

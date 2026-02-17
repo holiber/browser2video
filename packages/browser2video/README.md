@@ -18,17 +18,22 @@ npx -y b2v run tests/scenarios/basic-ui.test.ts --mode human --headed
 ## Library usage
 
 ```ts
-import { createSession } from "browser2video";
+import { createSession, startServer } from "browser2video";
+
+const server = await startServer({ type: "vite", root: "apps/demo" });
 
 const session = await createSession({ mode: "human", record: true });
-const { step } = session;
-const { actor } = await session.openPage({ url: "https://example.com" });
+session.addCleanup(() => server.stop());
 
-await step("Click sign in", async () => {
-  await actor.click("text=Sign in");
+const { step } = session;
+const { actor } = await session.openPage({ url: server.baseURL });
+
+await step("Fill form", async () => {
+  await actor.type('[data-testid="name"]', "Jane Doe");
+  await actor.click('[data-testid="submit"]');
 });
 
-await session.finish();
+await session.finish(); // composes video + runs cleanup
 ```
 
 ## MCP server (Cursor / OpenClaw)
@@ -73,3 +78,5 @@ npx -y b2v-mcp  # starts the MCP server
 ```
 
 Tools: `b2v_run`, `b2v_list_scenarios`, `b2v_doctor`.
+
+For complete tool parameters, schemas, and agent workflow details, see [`SKILL.md`](../../SKILL.md).

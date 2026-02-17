@@ -41,6 +41,7 @@ pnpm-debug.log*
 !.vscode/extensions.json
 !.vscode/settings.json
 .idea
+.cursor/
 
 # Temporary files
 tmp/

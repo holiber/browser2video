@@ -24,6 +24,9 @@ const session = await createSession({
   mode: "human",
   narration: { enabled: true },
 });
+session.addCleanup(() => termSrv.close());
+session.addCleanup(() => server.stop());
+
 const { step } = session;
 const { page, actor } = await session.openPage({
   url: server.baseURL,
@@ -72,18 +75,6 @@ async function dragKanbanCard(a: Actor, p: Page, cardTitle: string, toColumnId: 
   await a.drag(`[data-card-id="${cardId}"]`, `[data-testid="column-${toColumnId}"]`);
 }
 
-async function typeInTerminal(p: Page, testId: string, text: string, opts?: { delay?: number }) {
-  const selector = `[data-testid="${testId}"] .xterm-helper-textarea`;
-  const el = await p.$(selector);
-  if (!el) throw new Error(`Terminal textarea not found: ${selector}`);
-  await el.focus();
-  for (const ch of text) {
-    if (ch === "\n") await p.keyboard.press("Enter");
-    else await p.keyboard.type(ch, { delay: 0 });
-    if (opts?.delay) await new Promise((r) => setTimeout(r, opts.delay));
-  }
-}
-
 async function waitForXtermText(p: Page, rootSelector: string, includes: string[], timeoutMs: number) {
   await p.waitForFunction(
     ([sel, inc]: [string, string[]]) => {
@@ -127,10 +118,9 @@ async function termCoords(p: Page, testId: string, relX: number, relY: number) {
   return { x: Math.round(box.x + box.width * relX), y: Math.round(box.y + box.height * relY) };
 }
 
-try {
-  // ════════════════════════════════════════════════════════════════════════
-  //  PART 1: Form, scroll, drag, graph, drawing
-  // ════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
+//  PART 1: Form, scroll, drag, graph, drawing
+// ════════════════════════════════════════════════════════════════════════
 
   await step("Introduction", narrations.intro, async () => {
     await actor.goto(`${server.baseURL}/`);
@@ -266,13 +256,12 @@ try {
 
   await step("Use Vim in terminal", narrations.tuiVim, async () => {
     await waitForPrompt(page, "xterm-term4");
-    await typeInTerminal(page, "xterm-term4", "vim\n", { delay: 60 });
+    await actor.type('[data-testid="xterm-term4"]', "vim\n");
     await waitForXtermText(page, '[data-testid="xterm-term4"]', ["~"], 10000);
     await actor.pressKey("i");
-    await typeInTerminal(page, "xterm-term4", "Hello from browser2video!", { delay: 70 });
-    await actor.breathe();
+    await actor.type('[data-testid="xterm-term4"]', "Hello from browser2video!");
     await actor.pressKey("Escape");
-    await typeInTerminal(page, "xterm-term4", ":q!\n", { delay: 80 });
+    await actor.type('[data-testid="xterm-term4"]', ":q!\n");
   });
 
   // ════════════════════════════════════════════════════════════════════════
@@ -286,7 +275,3 @@ try {
 
   const result = await session.finish();
   console.log("Video:", result.video);
-} finally {
-  await termSrv.close();
-  await server.stop();
-}

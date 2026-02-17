@@ -13,6 +13,7 @@ const session = await createSession({
   mode: "human",
   narration: { enabled: true },
 });
+session.addCleanup(() => server.stop());
 const { step } = session;
 const { page, actor } = await session.openPage({
   url: `${server.baseURL}/kanban`,
@@ -60,82 +61,78 @@ await step("Warm up narration cache", async () => {
   await Promise.all(narrations.map((text) => session.audio.warmup(text)));
 });
 
-try {
-  await step("Open Kanban board", narrations[0], async () => {
-    await actor.waitFor('[data-testid="kanban-board"]');
-  });
+await step("Open Kanban board", narrations[0], async () => {
+  await actor.waitFor('[data-testid="kanban-board"]');
+});
 
-  await step("Explain Backlog column", narrations[1], async () => {
-    await actor.circleAround('[data-testid="column-title-backlog"]');
-  });
+await step("Explain Backlog column", narrations[1], async () => {
+  await actor.circleAround('[data-testid="column-title-backlog"]');
+});
 
-  await step("Explain In Progress column", narrations[2], async () => {
-    await actor.circleAround('[data-testid="column-title-in-progress"]');
-  });
+await step("Explain In Progress column", narrations[2], async () => {
+  await actor.circleAround('[data-testid="column-title-in-progress"]');
+});
 
-  await step("Explain Code Review column", narrations[3], async () => {
-    await actor.circleAround('[data-testid="column-title-code-review"]');
-  });
+await step("Explain Code Review column", narrations[3], async () => {
+  await actor.circleAround('[data-testid="column-title-code-review"]');
+});
 
-  await step("Explain Done column", narrations[4], async () => {
-    await actor.circleAround('[data-testid="column-title-done"]');
-  });
+await step("Explain Done column", narrations[4], async () => {
+  await actor.circleAround('[data-testid="column-title-done"]');
+});
 
-  await step("Explain Released column", narrations[5], async () => {
-    await actor.circleAround('[data-testid="column-title-released"]');
-  });
+await step("Explain Released column", narrations[5], async () => {
+  await actor.circleAround('[data-testid="column-title-released"]');
+});
 
-  await step("Create task: Implement user authentication", narrations[6], async () => {
-    await actor.circleAround('[data-testid="column-backlog"]');
-    await addCard(actor, "backlog", "Implement user authentication");
-  });
+await step("Create task: Implement user authentication", narrations[6], async () => {
+  await actor.circleAround('[data-testid="column-backlog"]');
+  await addCard(actor, "backlog", "Implement user authentication");
+});
 
-  await step("Create task: Write API tests", narrations[7], async () => {
-    await addCard(actor, "backlog", "Write API tests");
-  });
+await step("Create task: Write API tests", narrations[7], async () => {
+  await addCard(actor, "backlog", "Write API tests");
+});
 
-  await step("Create task: Update documentation", narrations[8], async () => {
-    await addCard(actor, "backlog", "Update documentation");
-  });
+await step("Create task: Update documentation", narrations[8], async () => {
+  await addCard(actor, "backlog", "Update documentation");
+});
 
-  await step("Start work on authentication task", narrations[9], async () => {
-    await actor.circleAround('[data-testid="column-title-in-progress"]');
-    await dragCardToColumn(actor, page, "Implement user authentication", "in-progress");
-  });
+await step("Start work on authentication task", narrations[9], async () => {
+  await actor.circleAround('[data-testid="column-title-in-progress"]');
+  await dragCardToColumn(actor, page, "Implement user authentication", "in-progress");
+});
 
-  await step("Submit authentication for code review", narrations[10], async () => {
-    await actor.circleAround('[data-testid="column-title-code-review"]');
-    await dragCardToColumn(actor, page, "Implement user authentication", "code-review");
-  });
+await step("Submit authentication for code review", narrations[10], async () => {
+  await actor.circleAround('[data-testid="column-title-code-review"]');
+  await dragCardToColumn(actor, page, "Implement user authentication", "code-review");
+});
 
-  await step("Code review approved", narrations[11], async () => {
-    await actor.circleAround('[data-testid="column-title-done"]');
-    await dragCardToColumn(actor, page, "Implement user authentication", "done");
-  });
+await step("Code review approved", narrations[11], async () => {
+  await actor.circleAround('[data-testid="column-title-done"]');
+  await dragCardToColumn(actor, page, "Implement user authentication", "done");
+});
 
-  await step("Release authentication feature", narrations[12], async () => {
-    await actor.circleAround('[data-testid="column-title-released"]');
-    await dragCardToColumn(actor, page, "Implement user authentication", "released");
-  });
+await step("Release authentication feature", narrations[12], async () => {
+  await actor.circleAround('[data-testid="column-title-released"]');
+  await dragCardToColumn(actor, page, "Implement user authentication", "released");
+});
 
-  await step("Start work on API tests", narrations[13], async () => {
-    await dragCardToColumn(actor, page, "Write API tests", "in-progress");
-  });
+await step("Start work on API tests", narrations[13], async () => {
+  await dragCardToColumn(actor, page, "Write API tests", "in-progress");
+});
 
-  await step("Submit API tests for review", async () => {
-    await dragCardToColumn(actor, page, "Write API tests", "code-review");
-  });
+await step("Submit API tests for review", async () => {
+  await dragCardToColumn(actor, page, "Write API tests", "code-review");
+});
 
-  await step("API tests review approved", async () => {
-    await dragCardToColumn(actor, page, "Write API tests", "done");
-  });
+await step("API tests review approved", async () => {
+  await dragCardToColumn(actor, page, "Write API tests", "done");
+});
 
-  await step("Summary", narrations[14], async () => {
-    await actor.circleAround('[data-testid="kanban-board"]');
-  });
+await step("Summary", narrations[14], async () => {
+  await actor.circleAround('[data-testid="kanban-board"]');
+});
 
-  const result = await session.finish();
-  console.log("Video:", result.video);
-} finally {
-  await server.stop();
-}
+const result = await session.finish();
+console.log("Video:", result.video);
