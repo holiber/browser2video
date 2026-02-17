@@ -69,8 +69,11 @@ Each run writes into one directory:
 ## MCP server
 
 `packages/browser2video/mcp-server.ts` implements a stdio MCP server using the TypeScript MCP SDK.
-It exposes tools for AI agents:
+It exposes 20+ tools for AI agents in two categories:
 
-- `b2v_list_scenarios` — list available test files
-- `b2v_doctor` — environment diagnostics
-- `b2v_run` — run a scenario with narration, voice, language options
+- **Batch tools** — run pre-written scenario files as subprocesses (`b2v_run`, `b2v_list_scenarios`, `b2v_doctor`).
+- **Interactive tools** — real-time browser/terminal control with human-like interactions, recording, narration, and scenario export (`b2v_start`, `b2v_open_page`, `b2v_click`, `b2v_type`, `b2v_step`, `b2v_finish`, etc.).
+
+The MCP server is designed to work alongside Playwright MCP. Both connect to the same browser via CDP: b2v handles interactions and recording, Playwright MCP handles page inspection (snapshots, screenshots, evaluate).
+
+For the complete tool reference and agent workflow, see [`SKILL.md`](../SKILL.md).

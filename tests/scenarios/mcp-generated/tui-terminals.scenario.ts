@@ -6,21 +6,6 @@
 import { createSession, startServer, type Page } from "browser2video";
 import { startTerminalWsServer } from "browser2video/terminal";
 
-async function typeInTerminal(page: Page, testId: string, text: string, opts?: { delay?: number }) {
-  const selector = `[data-testid="${testId}"] .xterm-helper-textarea`;
-  const el = await page.$(selector);
-  if (!el) throw new Error(`Terminal textarea not found: ${selector}`);
-  await el.focus();
-  for (const ch of text) {
-    if (ch === "\n") {
-      await page.keyboard.press("Enter");
-    } else {
-      await page.keyboard.type(ch, { delay: 0 });
-    }
-    if (opts?.delay) await new Promise((r) => setTimeout(r, opts.delay));
-  }
-}
-
 async function waitForWsOpen(page: Page, selector: string, timeoutMs = 15000) {
   await page.waitForFunction(
     (sel: string) => {
@@ -77,11 +62,13 @@ if (!server) throw new Error("Failed to start Vite server");
 const srv = await startTerminalWsServer();
 
 const session = await createSession({ record: true, mode: "human" });
+session.addCleanup(() => srv.close());
+session.addCleanup(() => server.stop());
+
 const { step } = session;
 const { page, actor } = await session.openPage({ url: server.baseURL });
 
-try {
-  await step("Open terminals page", async () => {
+await step("Open terminals page", async () => {
     const url = `${server.baseURL}/terminals?termWs=${encodeURIComponent(srv.baseWsUrl)}`;
     await actor.goto(url);
     await actor.waitFor('[data-testid="terminals-page"]');
@@ -145,14 +132,12 @@ try {
     const pos = await termCoords(page, "xterm-term1", 0.70, 0.16);
     await actor.clickAt(pos.x, pos.y);
     await actor.pressKey("Enter");
-    await actor.breathe();
   });
 
   await step("Navigate back in right panel", async () => {
     const pos = await termCoords(page, "xterm-term1", 0.70, 0.16);
     await actor.clickAt(pos.x, pos.y);
     await actor.pressKey("Enter");
-    await actor.breathe();
   });
 
   await step("Click back to left panel and browse", async () => {
@@ -165,9 +150,7 @@ try {
 
   await step("View file with F3 in mc", async () => {
     await actor.pressKey("F3");
-    await actor.breathe();
     for (let i = 0; i < 5; i++) await actor.pressKey("ArrowDown");
-    await actor.breathe();
     await actor.pressKey("q");
   });
 
@@ -176,52 +159,34 @@ try {
   });
 
   await step("Run ls in shell", async () => {
-    await typeInTerminal(page, "xterm-term4", "ls\n", { delay: 60 });
+    await actor.type('[data-testid="xterm-term4"]', "ls\n");
     await waitForPrompt(page, "xterm-term4");
   });
 
   await step("Run ls -la in shell", async () => {
-    await typeInTerminal(page, "xterm-term4", "ls -la\n", { delay: 60 });
+    await actor.type('[data-testid="xterm-term4"]', "ls -la\n");
     await waitForPrompt(page, "xterm-term4");
   });
 
   await step("Launch vim in shell", async () => {
-    await typeInTerminal(page, "xterm-term4", "vim\n", { delay: 60 });
+    await actor.type('[data-testid="xterm-term4"]', "vim\n");
     await waitForXtermText(page, '[data-testid="xterm-term4"]', ["~"], 10000);
   });
 
   await step("Type text in vim (insert mode)", async () => {
     await actor.pressKey("i");
-    await typeInTerminal(page, "xterm-term4", "Hello from browser2video!", { delay: 70 });
+    await actor.type('[data-testid="xterm-term4"]', "Hello from browser2video!");
     await actor.pressKey("Enter");
-    await typeInTerminal(page, "xterm-term4", "This is a demo of vim inside xterm.js", { delay: 60 });
+    await actor.type('[data-testid="xterm-term4"]', "This is a demo of vim inside xterm.js");
     await actor.pressKey("Enter");
-    await typeInTerminal(page, "xterm-term4", "running in a browser terminal pane.", { delay: 60 });
-    await actor.breathe();
+    await actor.type('[data-testid="xterm-term4"]', "running in a browser terminal pane.");
   });
 
   await step("Exit vim without saving", async () => {
     await actor.pressKey("Escape");
-    await typeInTerminal(page, "xterm-term4", ":q!\n", { delay: 80 });
+    await actor.type('[data-testid="xterm-term4"]', ":q!\n");
     await waitForPrompt(page, "xterm-term4");
-  });
-
-  await step("Quit mc", async () => {
-    const pos = await termCoords(page, "xterm-term1", 0.25, 0.25);
-    await actor.clickAt(pos.x, pos.y);
-    await actor.pressKey("F10");
-    await actor.pressKey("Enter");
-    await actor.breathe();
-  });
-
-  await step("Quit htop", async () => {
-    await typeInTerminal(page, "xterm-term2", "q");
-    await actor.breathe();
   });
 
   const result = await session.finish();
   console.log("Video:", result.video);
-} finally {
-  await srv.close();
-  await server.stop();
-}

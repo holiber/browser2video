@@ -13,14 +13,15 @@ async function scenario() {
   const session = await createSession({
     narration: { enabled: true },
   });
+  session.addCleanup(() => server.stop());
+
   const { step } = session;
   const { page, actor } = await session.openPage({
     url: `${server.baseURL}/kanban`,
     viewport: { width: 1060, height: 720 },
   });
 
-  try {
-    await step("Open Kanban board",
+  await step("Open Kanban board",
       "Welcome! In this video we'll walk through a complete task lifecycle on a Kanban board. Let me explain each column.",
       async () => {
         await actor.waitFor('[data-testid="kanban-board"]');
@@ -120,10 +121,7 @@ async function scenario() {
       async () => { await actor.circleAround('[data-testid="kanban-board"]'); },
     );
 
-    await session.finish();
-  } finally {
-    await server.stop();
-  }
+  await session.finish();
 }
 
 async function addCard(actor: Actor, columnId: string, title: string) {

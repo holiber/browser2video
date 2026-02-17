@@ -110,9 +110,11 @@ B2V_NARRATION_LANGUAGE=ru node tests/scenarios/kanban.test.ts
 
 The MCP server lets AI agents (Cursor, Claude, etc.) interactively control a browser and terminals with human-like behavior, recording, narration, and scenario export. It works alongside Playwright MCP, which connects to the same browser via CDP for page inspection.
 
+> For full tool parameters, schemas, and agent workflow details, see [`SKILL.md`](SKILL.md).
+
 ### Setup
 
-Add to `.cursor/mcp.json`:
+Add to your `.cursor/mcp.json` (or equivalent MCP config):
 
 ```json
 {
@@ -130,28 +132,35 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
+**b2v** handles human-like interactions, recording, terminals, and narration. **Playwright MCP** connects to the same browser via CDP for page inspection (snapshots, screenshots, evaluate). Both servers share the same browser instance through the CDP port.
+
+### Two modes of use
+
+**Interactive** -- the agent controls the browser in real-time, step by step. Good for exploratory workflows, live demos, and building new scenarios on the fly.
+
+**Batch** -- run a pre-written `.ts` scenario file as a subprocess. Good for repeatable recordings and CI.
+
+### Interactive workflow
+
+```
+1. b2v_start          -- launch browser with recording
+2. b2v_open_page      -- open a URL (returns pageId)
+3. browser_snapshot    -- (Playwright MCP) inspect the page to find selectors
+4. b2v_click / b2v_type / b2v_drag  -- human-like interactions
+5. b2v_step            -- mark recording step with subtitle and optional narration
+6. b2v_save_scenario   -- export steps as a replayable .ts file
+7. b2v_finish          -- compose final video, returns artifact paths
+```
+
 ### Interactive tools
 
-| Tool | Description |
-|------|-------------|
-| `b2v_start` | Start session — launch browser with recording and CDP endpoint |
-| `b2v_finish` | End session, compose video, return artifact paths |
-| `b2v_status` | Current session state: panes, steps, mode |
-| `b2v_open_page` | Open a browser page (returns `pageId`) |
-| `b2v_open_terminal` | Open a terminal pane running a command |
-| `b2v_click` | Human-like click (WindMouse cursor, click effect) |
-| `b2v_click_at` | Human-like click at x,y coordinates |
-| `b2v_type` | Human-like typing with per-character delays |
-| `b2v_press_key` | Press keyboard key with breathing pause |
-| `b2v_hover` | Human-like cursor hover |
-| `b2v_drag` | Human-like drag between elements |
-| `b2v_scroll` | Scroll page or element |
-| `b2v_terminal_send` | Send command to terminal stdin |
-| `b2v_terminal_read` | Read terminal output |
-| `b2v_step` | Mark a recording step (subtitle + optional narration) |
-| `b2v_narrate` | Speak narration text via TTS |
-| `b2v_add_step` | Execute code and record for scenario export |
-| `b2v_save_scenario` | Export steps as a replayable `.ts` scenario file |
+| | |
+|---|---|
+| **Session** | `b2v_start`, `b2v_finish`, `b2v_status` |
+| **Pages / terminals** | `b2v_open_page`, `b2v_open_terminal`, `b2v_terminal_send`, `b2v_terminal_read` |
+| **Actor interactions** | `b2v_click`, `b2v_click_at`, `b2v_type`, `b2v_press_key`, `b2v_hover`, `b2v_drag`, `b2v_scroll`, `b2v_select_text` |
+| **Recording / narration** | `b2v_step`, `b2v_narrate` |
+| **Scenario builder** | `b2v_add_step`, `b2v_save_scenario` |
 
 ### Batch tools
 
@@ -160,6 +169,12 @@ Add to `.cursor/mcp.json`:
 | `b2v_run` | Run a pre-written scenario file with recording and narration |
 | `b2v_list_scenarios` | List available scenario files |
 | `b2v_doctor` | Print environment diagnostics |
+
+### Troubleshooting
+
+- **`ffmpeg` not found** -- install ffmpeg and make sure it is in your `PATH`. Run `b2v_doctor` to verify.
+- **CDP port conflict** -- if port 9222 is busy, set a different port via `B2V_CDP_PORT` env var in both `b2v` and `playwright` server configs.
+- **Session already running** -- call `b2v_finish` (or restart the MCP server) before starting a new session.
 
 ## Docker (Linux screen recording)
 
@@ -271,9 +286,18 @@ await step("Explain dashboard",
 );
 ```
 
+### `session.addCleanup(fn)`
+
+Register a cleanup function that runs automatically when `finish()` is called. No more try/finally wrappers.
+
+```ts
+const server = await startServer({ type: "vite", root: "apps/demo" });
+session.addCleanup(() => server.stop());
+```
+
 ### `session.finish(): Promise<SessionResult>`
 
-Stop recording, compose video, mix narration audio, and generate subtitles.
+Stop recording, compose video, mix narration audio, generate subtitles, and run cleanup functions.
 
 ```ts
 const result = await session.finish();
@@ -291,15 +315,19 @@ The `Actor` provides human-like browser interactions:
 |--------|-------------|
 | `actor.click(selector)` | Click an element with cursor movement and click effect |
 | `actor.clickLocator(locator)` | Click a Playwright Locator (moves cursor first) |
-| `actor.type(selector, text)` | Type text with per-character delays |
+| `actor.type(selector, text)` | Type text — auto-detects xterm.js terminals vs DOM inputs |
+| `actor.typeAndEnter(selector, text)` | Type text and press Enter |
+| `actor.pressKey(key)` | Press a keyboard key (e.g. `"Tab"`, `"ArrowDown"`, `"F3"`) |
+| `actor.clickAt(x, y)` | Click at specific page coordinates (for canvas/terminal) |
 | `actor.scroll(selector, deltaY)` | Scroll within an element or the page |
 | `actor.drag(from, to)` | Drag from one element to another |
 | `actor.draw(canvas, points)` | Draw on a canvas (normalized 0-1 coordinates) |
 | `actor.circleAround(selector)` | Trace a spiral path around an element (for highlighting) |
+| `actor.hover(selector)` | Move the cursor smoothly over an element |
+| `actor.selectText(from, to?)` | Select text by dragging between elements |
 | `actor.moveCursorTo(x, y)` | Move the cursor overlay to coordinates |
 | `actor.goto(url)` | Navigate to a URL (auto-injects cursor) |
 | `actor.waitFor(selector)` | Wait for an element to appear |
-| `actor.breathe()` | Breathing pause between steps (human mode only) |
 
 ### `startServer(config): Promise<ManagedServer>`
 
@@ -329,7 +357,7 @@ console.log(server.baseURL); // "http://localhost:5173"
 
 | Variable | Description |
 |----------|-------------|
-| `OPENAI_API_KEY` | OpenAI API key for narration (auto-enables narration when present) |
+| `OPENAI_API_KEY` | OpenAI API key for narration (auto-enables in human mode when present) |
 | `B2V_MODE` | Override execution mode (`human` / `fast`) |
 | `B2V_RECORD` | Override recording (`true` / `false`) |
 | `B2V_VOICE` | Override TTS voice |

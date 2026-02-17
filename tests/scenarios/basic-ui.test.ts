@@ -10,11 +10,12 @@ async function scenario() {
   if (!server) throw new Error("Failed to start Vite server");
 
   const session = await createSession();
+  session.addCleanup(() => server.stop());
+
   const { step } = session;
   const { page, actor } = await session.openPage({ url: server.baseURL, viewport: { width: 650 } });
 
-  try {
-    await step("Open dashboard", async () => {
+  await step("Open dashboard", async () => {
       await actor.goto(`${server.baseURL}/`);
       await actor.waitFor('[data-testid="app-page"]');
     });
@@ -133,10 +134,7 @@ async function scenario() {
       ]);
     });
 
-    await session.finish();
-  } finally {
-    await server.stop();
-  }
+  await session.finish();
 }
 
 const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url);

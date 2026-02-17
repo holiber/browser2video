@@ -139,6 +139,7 @@ export class Session {
   private stepIndex = 0;
   private startTime = 0;
   private finished = false;
+  private cleanupFns: Array<() => Promise<void> | void> = [];
 
   // Resolved options
   readonly mode: Mode;
@@ -187,7 +188,8 @@ export class Session {
     loadDotenv();
 
     // Auto-enable narration when OPENAI_API_KEY is present and not explicitly configured
-    if (!this.narrationOpts && (process.env.B2V_NARRATE === "true" || process.env.OPENAI_API_KEY)) {
+    // Only auto-enable in human mode — fast mode skips narration unless explicitly requested
+    if (!this.narrationOpts && this.mode === "human" && (process.env.B2V_NARRATE === "true" || process.env.OPENAI_API_KEY)) {
       this.narrationOpts = { enabled: true };
     }
 
@@ -528,12 +530,15 @@ export class Session {
     const startMs = Date.now() - this.startTime;
     console.error(`  [Step ${idx}] ${caption}`);
 
+    // Narration only runs in human mode — fast mode skips TTS entirely
+    const doNarrate = narration && this.mode === "human";
+
     // Pre-generate TTS so speak() starts playback instantly
-    if (narration) await this.audioDirector.warmup(narration);
+    if (doNarrate) await this.audioDirector.warmup(narration);
 
     // Run narration and step body concurrently
     const tasks: Promise<void>[] = [fn()];
-    if (narration) tasks.push(this.audioDirector.speak(narration));
+    if (doNarrate) tasks.push(this.audioDirector.speak(narration));
     await Promise.all(tasks);
 
     // Breathing pause after each step (human mode)
@@ -547,6 +552,20 @@ export class Session {
   /** Access the audio director for narration/sound effects. */
   get audio(): AudioDirectorAPI {
     return this.audioDirector;
+  }
+
+  /**
+   * Register a cleanup function to run automatically when `finish()` is called.
+   * Use this for servers, terminal processes, and other resources so you don't
+   * need a try/finally wrapper around your scenario.
+   *
+   * ```ts
+   * const server = await startServer({ type: "vite", root: "apps/demo" });
+   * session.addCleanup(() => server.stop());
+   * ```
+   */
+  addCleanup(fn: () => Promise<void> | void): void {
+    this.cleanupFns.push(fn);
   }
 
   // -----------------------------------------------------------------------
@@ -563,9 +582,9 @@ export class Session {
     const subtitlesPath = path.join(this.artifactDir, "captions.vtt");
     const metadataPath = path.join(this.artifactDir, "run.json");
 
-    // Tail capture (human mode)
-    if (this.record && this.mode === "human") {
-      await sleep(300);
+    // Tail capture — wait for the last frame to render before closing pages
+    if (this.record) {
+      await sleep(this.mode === "human" ? 300 : 150);
     }
 
     // Close pages to flush screencast recordings
@@ -668,6 +687,11 @@ export class Session {
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
     console.error(`  Metadata:   ${metadataPath}`);
     console.error(`  Duration:   ${(durationMs / 1000).toFixed(1)}s\n`);
+
+    // Run registered cleanup functions (servers, terminal processes, etc.)
+    for (const fn of this.cleanupFns) {
+      try { await fn(); } catch { /* ignore cleanup errors */ }
+    }
 
     return {
       video: videoPath,
