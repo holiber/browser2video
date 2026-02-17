@@ -267,6 +267,7 @@ async function scenario() {
       await editor.type(CODE_SKELETON.trim());
 
       await editor.pressKey("Escape");
+      await editor.typeAndEnter(":set nopaste");
       await editor.typeAndEnter(":w");
       await new Promise((r) => setTimeout(r, 2500));
     },
