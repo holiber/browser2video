@@ -88,7 +88,7 @@ jobs:
           Xvfb :99 -screen 0 1920x1080x24 &
           sleep 2
 
-          scenarios=(basic-ui collab kanban tui-terminals console-logs github-mobile)
+          scenarios=(basic-ui collab kanban tui-terminals console-logs github-mobile carousel-demo)
           for s in "${scenarios[@]}"; do
             echo "────────────────────────────────────────"
             echo "Running scenario: $s (human mode)"
