@@ -108,7 +108,7 @@ B2V_NARRATION_LANGUAGE=ru node tests/scenarios/kanban.test.ts
 
 ## MCP server (for AI agents)
 
-The MCP server lets AI agents (Cursor, Claude, etc.) run scenarios programmatically.
+The MCP server lets AI agents (Cursor, Claude, etc.) interactively control a browser and terminals with human-like behavior, recording, narration, and scenario export. It works alongside Playwright MCP, which connects to the same browser via CDP for page inspection.
 
 ### Setup
 
@@ -117,33 +117,49 @@ Add to `.cursor/mcp.json`:
 ```json
 {
   "mcpServers": {
-    "browser2video": {
+    "b2v": {
       "command": "npx",
-      "args": ["-y", "--package", "browser2video", "b2v-mcp"],
-      "env": {}
+      "args": ["-y", "b2v-mcp"],
+      "env": { "B2V_CDP_PORT": "9222" }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
     }
   }
 }
 ```
 
-### Tools
+### Interactive tools
 
 | Tool | Description |
 |------|-------------|
-| `b2v_list_scenarios` | List available `*.test.ts` and `*.scenario.ts` files |
+| `b2v_start` | Start session — launch browser with recording and CDP endpoint |
+| `b2v_finish` | End session, compose video, return artifact paths |
+| `b2v_status` | Current session state: panes, steps, mode |
+| `b2v_open_page` | Open a browser page (returns `pageId`) |
+| `b2v_open_terminal` | Open a terminal pane running a command |
+| `b2v_click` | Human-like click (WindMouse cursor, click effect) |
+| `b2v_click_at` | Human-like click at x,y coordinates |
+| `b2v_type` | Human-like typing with per-character delays |
+| `b2v_press_key` | Press keyboard key with breathing pause |
+| `b2v_hover` | Human-like cursor hover |
+| `b2v_drag` | Human-like drag between elements |
+| `b2v_scroll` | Scroll page or element |
+| `b2v_terminal_send` | Send command to terminal stdin |
+| `b2v_terminal_read` | Read terminal output |
+| `b2v_step` | Mark a recording step (subtitle + optional narration) |
+| `b2v_narrate` | Speak narration text via TTS |
+| `b2v_add_step` | Execute code and record for scenario export |
+| `b2v_save_scenario` | Export steps as a replayable `.ts` scenario file |
+
+### Batch tools
+
+| Tool | Description |
+|------|-------------|
+| `b2v_run` | Run a pre-written scenario file with recording and narration |
+| `b2v_list_scenarios` | List available scenario files |
 | `b2v_doctor` | Print environment diagnostics |
-| `b2v_run` | Run a scenario with recording, narration, and language options |
-
-**`b2v_run` parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `scenarioFile` | string | required | Path to scenario file (relative to current working directory or absolute) |
-| `mode` | `"human"` \| `"fast"` | `"human"` | Execution speed |
-| `voice` | string | `"ash"` | TTS voice (alloy, ash, coral, echo, fable, nova, onyx, sage, shimmer) |
-| `language` | string | - | Auto-translate narration (e.g. `"ru"`, `"es"`, `"de"`) |
-| `realtimeAudio` | boolean | `false` | Play audio through speakers during execution |
-| `narrationSpeed` | number | `1.0` | Speech speed (0.25-4.0) |
 
 ## Docker (Linux screen recording)
 

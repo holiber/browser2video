@@ -34,7 +34,7 @@ export function listScenarioFiles(dir: string): string[] {
   if (!fs.statSync(dir).isDirectory()) return [];
   return fs
     .readdirSync(dir)
-    .filter((f) => f.endsWith(".test.ts") || f.endsWith(".scenario.ts"))
+    .filter((f) => /\.(test|scenario)\.(ts|js)$/.test(f))
     .sort();
 }
 

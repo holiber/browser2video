@@ -137,6 +137,15 @@ importers:
         specifier: ~5.7.0
         version: 5.7.3
 
+  tests/mcp-proof:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.26.0
+        version: 1.26.0(zod@3.25.76)
+      browser2video:
+        specifier: workspace:*
+        version: link:../../packages/browser2video
+
   tests/scenarios:
     dependencies:
       '@playwright/test':

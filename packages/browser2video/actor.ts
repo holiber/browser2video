@@ -17,7 +17,7 @@ export const DEFAULT_DELAYS: Record<Mode, ActorDelays> = {
     mouseMoveStepMs: [3, 3],
     clickEffectMs: [25, 25],
     clickHoldMs: [90, 90],
-    afterClickMs: [70, 70],
+    afterClickMs: [300, 300],
     beforeTypeMs: [55, 55],
     keyDelayMs: [35, 35],
     keyBoundaryPauseMs: [30, 30],
@@ -374,6 +374,11 @@ export class Actor {
     return { ...target, el };
   }
 
+  /** Move cursor to an element (hover). */
+  async hover(selector: string) {
+    await this.moveTo(selector);
+  }
+
   /** Click on an element. */
   async click(selector: string) {
     const { x, y } = await this.moveTo(selector);
@@ -512,21 +517,16 @@ export class Actor {
     await sleep(this.mode === "human" ? 600 : 50);
   }
 
-  /** Drag from one element to another. */
-  async drag(fromSelector: string, toSelector: string) {
-    const fromEl = (await this.page.waitForSelector(fromSelector, { state: "visible", timeout: 3000 }))!;
-    const fromBox = (await fromEl.boundingBox())!;
-    const from = {
-      x: Math.round(fromBox.x + fromBox.width / 2),
-      y: Math.round(fromBox.y + fromBox.height / 2),
-    };
-
-    const toEl = (await this.page.waitForSelector(toSelector, { state: "visible", timeout: 3000 }))!;
-    const toBox = (await toEl.boundingBox())!;
-    const to = {
-      x: Math.round(toBox.x + toBox.width / 2),
-      y: Math.round(toBox.y + toBox.height / 2),
-    };
+  /**
+   * Drag between two arbitrary page coordinates with human-like cursor motion.
+   * Low-level building block used by drag(), dragByOffset(), and selectText().
+   */
+  async dragCoords(
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+  ) {
+    from = { x: Math.round(from.x), y: Math.round(from.y) };
+    to = { x: Math.round(to.x), y: Math.round(to.y) };
 
     if (this.mode === "human") {
       const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, from);
@@ -561,6 +561,25 @@ export class Actor {
     await sleep(pickMs(this.delays.afterDragMs));
   }
 
+  /** Drag from one element's center to another element's center. */
+  async drag(fromSelector: string, toSelector: string) {
+    const fromEl = (await this.page.waitForSelector(fromSelector, { state: "visible", timeout: 3000 }))!;
+    const fromBox = (await fromEl.boundingBox())!;
+    const from = {
+      x: Math.round(fromBox.x + fromBox.width / 2),
+      y: Math.round(fromBox.y + fromBox.height / 2),
+    };
+
+    const toEl = (await this.page.waitForSelector(toSelector, { state: "visible", timeout: 3000 }))!;
+    const toBox = (await toEl.boundingBox())!;
+    const to = {
+      x: Math.round(toBox.x + toBox.width / 2),
+      y: Math.round(toBox.y + toBox.height / 2),
+    };
+
+    await this.dragCoords(from, to);
+  }
+
   /** Drag an element by a pixel offset. */
   async dragByOffset(selector: string, dx: number, dy: number) {
     const el = (await this.page.waitForSelector(selector, { state: "visible", timeout: 3000 }))!;
@@ -574,37 +593,42 @@ export class Actor {
     };
     const to = { x: from.x + dx, y: from.y + dy };
 
-    if (this.mode === "human") {
-      const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, from);
-      for (let i = 0; i < movePoints.length; i++) {
-        const p = movePoints[i]!;
-        await this.page.mouse.move(p.x, p.y);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
-      }
+    await this.dragCoords(from, to);
+  }
+
+  /**
+   * Select text by dragging from the top-left of one element to the
+   * bottom-right of another (or the same element if only one selector given).
+   * Produces a visible browser text selection highlight.
+   */
+  async selectText(fromSelector: string, toSelector?: string) {
+    const fromEl = (await this.page.waitForSelector(fromSelector, { state: "visible", timeout: 5000 }))!;
+    const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
+    await fromEl.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
+    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
+
+    const fromBox = (await fromEl.boundingBox())!;
+    const from = {
+      x: Math.round(fromBox.x + 2),
+      y: Math.round(fromBox.y + 2),
+    };
+
+    let to: { x: number; y: number };
+    if (toSelector) {
+      const toEl = (await this.page.waitForSelector(toSelector, { state: "visible", timeout: 5000 }))!;
+      const toBox = (await toEl.boundingBox())!;
+      to = {
+        x: Math.round(toBox.x + toBox.width - 2),
+        y: Math.round(toBox.y + toBox.height - 2),
+      };
+    } else {
+      to = {
+        x: Math.round(fromBox.x + fromBox.width - 2),
+        y: Math.round(fromBox.y + fromBox.height - 2),
+      };
     }
 
-    await this.page.mouse.move(from.x, from.y);
-    await this.page.mouse.down();
-    await sleep(pickMs(this.delays.clickHoldMs));
-
-    const dragSteps = this.mode === "human" ? 25 : 5;
-    const dragPoints = linearPath(from, to, dragSteps);
-    for (let i = 0; i < dragPoints.length; i++) {
-      const p = dragPoints[i]!;
-      await this.page.mouse.move(p.x, p.y);
-      if (this.mode === "human") {
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
-        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, dragPoints.length));
-      }
-    }
-
-    await sleep(pickMs(this.delays.afterClickMs));
-    await this.page.mouse.up();
-
-    this.cursorX = to.x;
-    this.cursorY = to.y;
-    await sleep(pickMs(this.delays.afterDragMs));
+    await this.dragCoords(from, to);
   }
 
   /** Draw on a canvas element (points are 0-1 normalized). */

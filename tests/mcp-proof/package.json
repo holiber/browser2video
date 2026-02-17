@@ -1,0 +1,10 @@
+{
+  "name": "@browser2video/mcp-proof",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "browser2video": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.26.0"
+  }
+}

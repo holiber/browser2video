@@ -191,7 +191,7 @@ export async function startScreenCapture(opts: ScreenCaptureOptions): Promise<{ 
     throw new Error("ffmpeg screen recorder exited immediately");
   }
 
-  console.log(`  Screen recording started (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
+  console.error(`  Screen recording started (${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
 
   const stop = async () => {
     const t0 = Date.now();
@@ -209,7 +209,7 @@ export async function startScreenCapture(opts: ScreenCaptureOptions): Promise<{ 
       try { proc.kill("SIGINT"); } catch { /* ignore */ }
       await new Promise<void>((resolve) => proc.once("exit", () => resolve()));
     }
-    console.log(`  Screen recording stopped (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    console.error(`  Screen recording stopped (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
 
     const frames = probeFrameCount(outputPath, ffmpeg);
     if (frames <= 0) {

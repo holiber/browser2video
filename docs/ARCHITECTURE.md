@@ -10,7 +10,7 @@ This repo is a small monorepo for recording repeatable browser automation "proof
 - `apps/demo/`
   - Vite + React app used as a stable, controllable target for scenarios.
 - `tests/scenarios/`
-  - Standalone `*.test.ts` files using `createSession()` for each scenario.
+  - Standalone scenario files (`.ts` / `.js`) using `createSession()` for each scenario.
 
 ## Session API
 

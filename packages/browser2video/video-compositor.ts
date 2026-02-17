@@ -73,7 +73,7 @@ export function composeVideos(opts: ComposeOptions): void {
       h: opts.cssCrop.h * scale,
     };
     cropFilter = `,crop=${c.w}:${c.h}:${c.x}:${c.y}`;
-    if (scale !== 1) console.log(`  Video scale: ${scale}x (${actualW}px actual vs ${cssVp}px CSS)`);
+    if (scale !== 1) console.error(`  Video scale: ${scale}x (${actualW}px actual vs ${cssVp}px CSS)`);
   }
 
   // Build per-input filter chains — use tpad + PTS-STARTPTS to preserve
@@ -137,25 +137,40 @@ export function composeVideos(opts: ComposeOptions): void {
   }
 
   const outDur = probeDurationSeconds(outputPath, ffmpeg);
-  if (outDur > 0) console.log(`  Output duration: ${outDur.toFixed(2)}s`);
+  if (outDur > 0) console.error(`  Output duration: ${outDur.toFixed(2)}s`);
 }
 
-/** Simple re-encode a single WebM to MP4. */
+/** Re-encode a single WebM to MP4 at constant 30fps for smooth playback. */
 function reencodeToMp4(inputPath: string, outputPath: string, ffmpeg: string): void {
-  execFileSync(
-    ffmpeg,
-    [
-      "-y",
-      "-i", inputPath,
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", "18",
-      "-pix_fmt", "yuv420p",
-      "-movflags", "+faststart",
-      outputPath,
-    ],
-    { stdio: "pipe" },
-  );
+  const args = [
+    "-y",
+    "-i", inputPath,
+    "-vf", "fps=30,format=yuv420p",
+    "-r", "30",
+    "-fps_mode", "cfr",
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "18",
+    "-pix_fmt", "yuv420p",
+    "-movflags", "+faststart",
+    outputPath,
+  ];
+
+  try {
+    execFileSync(ffmpeg, args, { stdio: "pipe" });
+  } catch (err: any) {
+    const stderr: string = err?.stderr ?? "";
+    if (stderr.includes("fps_mode") && (stderr.includes("Unrecognized option") || stderr.includes("Option not found"))) {
+      const fallbackArgs = args.filter((a) => a !== "-fps_mode" && a !== "cfr");
+      const rIdx = fallbackArgs.findIndex((a) => a === "-r");
+      if (rIdx >= 0) {
+        fallbackArgs.splice(rIdx + 2, 0, "-vsync", "cfr");
+      }
+      execFileSync(ffmpeg, fallbackArgs, { stdio: "pipe" });
+    } else {
+      throw err;
+    }
+  }
 }
 
 /**

@@ -93,7 +93,7 @@ cli.command(
   (y) => {
     const withFile = y.positional("file", {
       type: "string",
-      describe: "Path to a *.test.ts file",
+      describe: "Path to a scenario .ts or .js file",
       demandOption: true,
     });
     return addRunOptions(withFile);

@@ -1,6 +1,6 @@
 # browser2video
 
-Record smooth browser automation videos with subtitles, optional narration, and step metadata.
+Record browser and terminal automation as smooth, narrated videos with subtitles and step metadata.
 
 ## Requirements
 
@@ -9,8 +9,6 @@ Record smooth browser automation videos with subtitles, optional narration, and 
 - `OPENAI_API_KEY` (optional; enables narration/TTS)
 
 ## CLI (via npx)
-
-Run commands from your scenario project directory (the current working directory is used to resolve paths):
 
 ```bash
 npx -y b2v doctor
@@ -35,23 +33,43 @@ await session.finish();
 
 ## MCP server (Cursor / OpenClaw)
 
-Run the MCP server with:
+b2v MCP provides interactive browser/terminal control with human-like interactions, video recording, and scenario export. It works alongside Playwright MCP, which connects to the same browser via CDP for page inspection.
 
-```bash
-npx -y --package browser2video b2v-mcp
-```
-
-Example `.cursor/mcp.json`:
+### Recommended `mcp.json`
 
 ```json
 {
   "mcpServers": {
-    "browser2video": {
+    "b2v": {
       "command": "npx",
-      "args": ["-y", "--package", "browser2video", "b2v-mcp"],
-      "env": {}
+      "args": ["-y", "b2v-mcp"],
+      "env": { "B2V_CDP_PORT": "9222" }
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
     }
   }
 }
 ```
 
+### Interactive workflow
+
+1. `b2v_start` — Launch browser with recording and CDP endpoint
+2. `b2v_open_page` — Open a page (returns `pageId`)
+3. Use Playwright MCP for inspection (`browser_snapshot`, `browser_screenshot`)
+4. Use b2v tools for human-like interactions (`b2v_click`, `b2v_type`, `b2v_drag`, etc.)
+5. `b2v_step` / `b2v_narrate` — Mark recording steps with subtitles and narration
+6. `b2v_add_step` — Execute code and record it for scenario export
+7. `b2v_save_scenario` — Export as a replayable `.ts` scenario file
+8. `b2v_finish` — Compose the final video
+
+### Batch mode
+
+Run pre-written scenario files as subprocesses:
+
+```bash
+npx -y b2v-mcp  # starts the MCP server
+```
+
+Tools: `b2v_run`, `b2v_list_scenarios`, `b2v_doctor`.

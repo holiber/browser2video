@@ -17,6 +17,7 @@ export const SessionOptionsSchema = z.object({
   display: z.string().optional().describe("Linux DISPLAY for screen recording."),
   displaySize: z.string().optional().describe("Linux display size, e.g. '2560x720'."),
   narration: NarrationOptionsSchema.optional().describe("TTS narration options."),
+  cdpPort: z.number().int().optional().describe("Chrome DevTools Protocol port for external tool connections (0 = disabled). Default: B2V_CDP_PORT env or 0."),
 });
 
 export type SessionOptions = z.infer<typeof SessionOptionsSchema>;
