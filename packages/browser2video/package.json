@@ -31,7 +31,6 @@
   },
   "bin": {
     "b2v": "./bin/b2v.js",
-    "browser2video": "./bin/browser2video.js",
     "b2v-mcp": "./bin/b2v-mcp.js"
   },
   "files": [

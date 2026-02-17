@@ -13,9 +13,8 @@ Record smooth browser automation videos with subtitles, optional narration, and 
 Run commands from your scenario project directory (the current working directory is used to resolve paths):
 
 ```bash
-npx -y browser2video list
-npx -y browser2video doctor
-npx -y browser2video run tests/scenarios/basic-ui.test.ts --mode human --headed
+npx -y b2v doctor
+npx -y b2v run tests/scenarios/basic-ui.test.ts --mode human --headed
 ```
 
 ## Library usage

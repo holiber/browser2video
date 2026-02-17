@@ -29,8 +29,8 @@ Video recording is controlled by the scenario code (via `createSession({ record:
 **Example:**
 
 ```bash
-npx -y browser2video run tests/scenarios/basic-ui.test.ts
-npx -y browser2video run tests/scenarios/kanban.test.ts --language ru --voice ash
+npx -y b2v run tests/scenarios/basic-ui.test.ts
+npx -y b2v run tests/scenarios/kanban.test.ts --language ru --voice ash
 ```
 
 ### b2v_list_scenarios

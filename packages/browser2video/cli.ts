@@ -1,22 +1,19 @@
 #!/usr/bin/env node
 /**
  * @description Browser2Video CLI — yargs-based command parser.
- * Commands: run <file>, list [dir], doctor.
+ * Commands: run <file>, doctor.
  * Schemas for run options come from the operation registry (single source of truth).
  */
-import path from "path";
-import fs from "fs";
 import yargs, { type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
 import { RunInputSchema } from "./ops/tools.ts";
-import { defaultScenariosDir, runScenarioAsNodeTs } from "./runner.ts";
+import { runScenarioAsNodeTs } from "./runner.ts";
 
 // ---------------------------------------------------------------------------
 //  Paths
 // ---------------------------------------------------------------------------
 
 const cwd = process.cwd();
-const defaultDir = defaultScenariosDir(cwd);
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -82,10 +79,10 @@ function addRunOptions<T>(yarg: Argv<T>) {
 // ---------------------------------------------------------------------------
 
 const cli = yargs(hideBin(process.argv))
-  .scriptName(path.basename(process.argv[1] ?? "b2v"))
+  .scriptName("b2v")
   .usage("$0 <command> [options]")
   .strict()
-  .demandCommand(1, "Please specify a command: run, list, or doctor")
+  .demandCommand(1, "Please specify a command: run or doctor")
   .help();
 
 // ---- run <file> -----------------------------------------------------------
@@ -126,42 +123,6 @@ cli.command(
     });
 
     process.exit(res.code);
-  },
-);
-
-// ---- list [dir] -----------------------------------------------------------
-
-cli.command(
-  "list [dir]",
-  "List *.test.ts scenario files in a directory",
-  (y) =>
-    y.positional("dir", {
-      type: "string",
-      default: defaultDir,
-      describe: "Directory to scan (default: tests/scenarios)",
-    }),
-  (argv) => {
-    const dir = path.isAbsolute(argv.dir as string)
-      ? (argv.dir as string)
-      : path.resolve(process.cwd(), argv.dir as string);
-
-    if (!fs.existsSync(dir)) {
-      console.error(`Directory not found: ${dir}`);
-      process.exit(1);
-    }
-
-    const files = fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".test.ts"))
-      .sort();
-
-    if (files.length === 0) {
-      console.log("(no test files found)");
-    } else {
-      for (const f of files) {
-        console.log(f);
-      }
-    }
   },
 );
 
