@@ -197,7 +197,7 @@ jobs:
             </style>
           </head>
           <body>
-            <a class="back" href="/">← Back to docs</a>
+            <a class="back" href="..">← Back to docs</a>
             <h1>Scenario Demo Videos</h1>
             <p class="subtitle">Auto-generated from the latest <code>main</code> branch.</p>
 
@@ -235,8 +235,8 @@ jobs:
                 });
               }
 
-              buildCards('grid-human', '/videos');
-              buildCards('grid-fast', '/videos-fast');
+              buildCards('grid-human', '.');
+              buildCards('grid-fast', '../videos-fast');
             </script>
           </body>
           </html>
