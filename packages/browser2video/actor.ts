@@ -279,7 +279,7 @@ export class Actor {
   mode: Mode;
   private cursorX = 0;
   private cursorY = 0;
-  private delays: ActorDelays;
+  protected delays: ActorDelays;
 
   constructor(
     page: Page,

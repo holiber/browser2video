@@ -12,7 +12,7 @@ async function scenario() {
   if (!server) throw new Error("Failed to start Vite server");
 
   const sync = await startSyncServer({ artifactDir: path.resolve("artifacts", "collab-sync") });
-  const session = await createSession({ layout: "row" });
+  const session = await createSession({ layout: "row" }); // 3 panes in a single row
   session.addCleanup(() => sync.stop());
   session.addCleanup(() => server.stop());
 

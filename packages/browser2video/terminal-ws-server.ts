@@ -4,6 +4,7 @@
  * or /term (no cmd) for an interactive shell session.
  */
 import http from "node:http";
+import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -59,15 +60,30 @@ function spawnPty(cmd: string | undefined, initialCols: number, initialRows: num
   };
 
   if (!cmd) {
-    // Interactive shell with a clean prompt for reliable detection
-    env.PS1 = "\\$ ";
-    return pty.spawn("bash", ["--norc", "--noprofile", "-i"], {
+    // Interactive shell with a clean prompt and automatic title tracking.
+    // Write a tiny init file that:
+    //   - sets a minimal PS1
+    //   - uses PROMPT_COMMAND to reset title to "Shell" when idle
+    //   - uses a DEBUG trap to set title to the running command name
+    const initFile = path.join(os.tmpdir(), `b2v-bashrc-${process.pid}-${Date.now()}.sh`);
+    fs.writeFileSync(initFile, [
+      'PS1="\\$ "',
+      'PROMPT_COMMAND=\'printf "\\033]0;Shell\\007"\'',
+      'trap \'case "$BASH_COMMAND" in "$PROMPT_COMMAND") ;; *) printf "\\033]0;%s\\007" "$BASH_COMMAND";; esac\' DEBUG',
+    ].join("\n") + "\n", "utf-8");
+
+    const p = pty.spawn("bash", ["--init-file", initFile, "-i"], {
       name: "xterm-256color",
       cols: initialCols,
       rows: initialRows,
       cwd: process.cwd(),
       env,
     });
+
+    // Clean up temp init file once the shell starts (small delay to ensure bash has read it)
+    setTimeout(() => { try { fs.unlinkSync(initFile); } catch {} }, 2000);
+
+    return p;
   }
 
   // Launch any command via bash -lc wrapper
@@ -106,6 +122,7 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   }
 
   let _terminalPageHtml: ((wsUrl: string, testId: string, title: string) => string) | null = null;
+  let _terminalGridHtml: ((baseWsUrl: string, terminals: Array<{ cmd?: string; testId: string; title: string }>, grid?: number[][]) => string) | null = null;
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://localhost");
@@ -145,6 +162,32 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
       res.end(_terminalPageHtml(wsUrl, testId, title));
       return;
     }
+    if (u.pathname === "/terminal-grid") {
+      // Serve multi-terminal page with CSS grid layout
+      const configParam = u.searchParams.get("config");
+      if (!configParam) {
+        res.statusCode = 400;
+        res.end("Missing config parameter");
+        return;
+      }
+      let config: { terminals: Array<{ cmd?: string; testId: string; title: string }>; grid?: number[][] };
+      try {
+        config = JSON.parse(decodeURIComponent(configParam));
+      } catch {
+        res.statusCode = 400;
+        res.end("Invalid config JSON");
+        return;
+      }
+      const baseWsUrl = `ws://localhost:${(server.address() as any)?.port ?? 0}`;
+      if (!_terminalGridHtml) {
+        _terminalGridHtml = buildXtermGridPageHtmlFn();
+      }
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.end(_terminalGridHtml(baseWsUrl, config.terminals, config.grid));
+      return;
+    }
+
     res.statusCode = 404;
     res.setHeader("content-type", "text/plain; charset=utf-8");
     res.end("Not found");
@@ -162,7 +205,10 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
       // ignore
     }
 
-    const p = spawnPty(cmd, 120, 30);
+    // Start at 80x24 (matching xterm.js defaults) to avoid garbled initial
+    // output. The browser-side fitTerminal() will resize to the actual
+    // grid cell dimensions once the WebSocket is established.
+    const p = spawnPty(cmd, 80, 24);
 
     p.onData((data: string) => {
       try {
@@ -287,7 +333,8 @@ function buildXtermPageHtmlFn() {
 <script src="/static/addon-fit.js"><\/script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #1e1e1e; color: #d4d4d4; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+  html { height: 100%; }
+  body { background: #1e1e1e; color: #d4d4d4; overflow: hidden; height: 100%; display: flex; flex-direction: column; }
   .bar { background: #2d2d2d; color: #cccccc; padding: 4px 12px; font-size: 12px; border-bottom: 1px solid #3e3e3e; flex-shrink: 0; font-family: system-ui, sans-serif; }
   #term { flex: 1; min-height: 0; padding: 4px; }
 </style></head><body>
@@ -303,7 +350,8 @@ function buildXtermPageHtmlFn() {
     var fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(el);
-    try { fit.fit(); } catch(e) {}
+    window.__b2vFit = fit;
+    window.__b2vTerm = term;
 
     var encoder = new TextEncoder();
     var ws = new WebSocket('${wsUrl}');
@@ -314,14 +362,59 @@ function buildXtermPageHtmlFn() {
       ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     }
 
+    function fitTerminal() {
+      // Try FitAddon first (works when xterm render service is initialized)
+      try { fit.fit(); sendResize(); return; } catch(e) {}
+
+      // Fallback: manual measurement for headless Chromium where the
+      // render service never initializes (no paint cycles in headless mode).
+      // Use the actual rendered xterm row height (includes internal line spacing)
+      // and a test span for character width.
+      var xtermRows = el.querySelector('.xterm-rows');
+      var firstRow = xtermRows && xtermRows.children[0];
+      if (!firstRow) return;
+      var cellH = firstRow.getBoundingClientRect().height;
+      if (!cellH) return;
+
+      var s = document.createElement('span');
+      s.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace';
+      s.style.fontSize = '13px';
+      s.style.position = 'absolute';
+      s.style.visibility = 'hidden';
+      s.textContent = 'W';
+      document.body.appendChild(s);
+      var cellW = s.getBoundingClientRect().width;
+      document.body.removeChild(s);
+      if (!cellW) return;
+
+      var style = getComputedStyle(el);
+      var padH = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+      var padW = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
+      var cols = Math.max(2, Math.floor((el.offsetWidth - padW) / cellW));
+      var rows = Math.max(1, Math.floor((el.offsetHeight - padH) / cellH));
+      if (cols !== term.cols || rows !== term.rows) {
+        term.resize(cols, rows);
+      }
+      sendResize();
+    }
+
     ws.onopen = function() {
       el.dataset.b2vWsState = 'open';
-      sendResize();
+      // Fit AFTER the WebSocket is open so the PTY resize is sent
+      // in sync with the xterm.js resize (avoids garbled initial display).
+      fitTerminal();
       term.focus();
     };
+    var fitted = false;
     ws.onmessage = function(ev) {
       if (ev.data instanceof ArrayBuffer) {
         try { term.write(new Uint8Array(ev.data)); } catch(e) {}
+        // After the first data write, xterm.js has rendered content and
+        // the cell dimensions are established. Re-fit to ensure accuracy.
+        if (!fitted) {
+          fitted = true;
+          setTimeout(fitTerminal, 10);
+        }
       }
     };
     ws.onerror = function() { el.dataset.b2vWsState = 'error'; };
@@ -331,10 +424,80 @@ function buildXtermPageHtmlFn() {
       if (ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
     });
 
-    var ro = new ResizeObserver(function() { try { fit.fit(); sendResize(); } catch(e) {} });
+    term.onTitleChange(function(t) {
+      if (t) document.querySelector('.bar').textContent = t;
+    });
+
+    var ro = new ResizeObserver(function() { fitTerminal(); });
     ro.observe(el);
   <\/script>
 </body></html>`;
+}
+
+// ---------------------------------------------------------------------------
+//  Multi-terminal CSS grid page builder (iframes for keyboard isolation)
+// ---------------------------------------------------------------------------
+
+function buildXtermGridPageHtmlFn() {
+  return (
+    baseWsUrl: string,
+    terminals: Array<{ cmd?: string; testId: string; title: string }>,
+    grid?: number[][],
+  ) => {
+    // Build CSS grid template from the layout array
+    const gridRows = grid ? grid.length : 1;
+    const gridCols = grid ? Math.max(...grid.map((r) => r.length)) : terminals.length;
+
+    // Generate grid-template-areas from the number[][] layout
+    let gridTemplateAreas = "";
+    if (grid) {
+      gridTemplateAreas = grid
+        .map((row) => `"${row.map((idx) => `p${idx}`).join(" ")}"`)
+        .join(" ");
+    } else {
+      // Default: all in a single row
+      gridTemplateAreas = `"${terminals.map((_, i) => `p${i}`).join(" ")}"`;
+    }
+
+    const gridTemplateRows = `repeat(${gridRows}, 1fr)`;
+    const gridTemplateCols = `repeat(${gridCols}, 1fr)`;
+
+    // Build iframes
+    const iframes = terminals
+      .map((t, i) => {
+        const wsUrl = t.cmd
+          ? `${baseWsUrl}/term?cmd=${encodeURIComponent(t.cmd)}`
+          : `${baseWsUrl}/term`;
+        const src = `/terminal?${new URLSearchParams({
+          ...(t.cmd ? { cmd: t.cmd } : {}),
+          testId: t.testId,
+          title: t.title,
+        }).toString()}`;
+        return `<iframe name="term-${i}" data-pane-index="${i}" src="${src}" style="grid-area: p${i}; border: none; width: 100%; height: 100%; min-height: 0; min-width: 0;"></iframe>`;
+      })
+      .join("\n  ");
+
+    return `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1e1e1e;
+    overflow: hidden;
+    height: 100vh;
+    display: grid;
+    grid-template-areas: ${gridTemplateAreas};
+    grid-template-rows: ${gridTemplateRows};
+    grid-template-columns: ${gridTemplateCols};
+    align-items: stretch;
+    justify-items: stretch;
+    gap: 1px;
+  }
+  iframe { border: none; width: 100%; height: 100%; min-height: 0; min-width: 0; }
+</style></head><body>
+  ${iframes}
+</body></html>`;
+  };
 }
 
 // ---------------------------------------------------------------------------
