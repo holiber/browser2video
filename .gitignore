@@ -50,3 +50,4 @@ tmp/
 artifacts/
 test-results/
 videos/
+tests/scenarios/fixtures/carousel-demo/package-lock.json

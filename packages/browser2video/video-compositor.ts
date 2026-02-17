@@ -205,14 +205,6 @@ function composeWithGridTemplate(
   const gridRows = grid.length;
   const gridCols = Math.max(...grid.map((r) => r.length));
 
-  // Probe first input to determine cell dimensions
-  const cellSize = probeSize(inputs[0], ffmpeg);
-  if (cellSize.w === 0 || cellSize.h === 0) {
-    throw new Error("composeWithGridTemplate: could not probe input dimensions");
-  }
-  const cellW = cellSize.w;
-  const cellH = cellSize.h;
-
   // Find bounding box for each unique pane index
   const paneBoxes = new Map<number, { minRow: number; maxRow: number; minCol: number; maxCol: number }>();
   for (let r = 0; r < gridRows; r++) {
@@ -232,6 +224,19 @@ function composeWithGridTemplate(
 
   // Sort pane indices to build deterministic filter chains
   const paneIndices = [...paneBoxes.keys()].sort((a, b) => a - b);
+
+  // Probe first input to determine cell dimensions.
+  // The first input may span multiple cells, so divide by its span to
+  // recover the single-cell size.
+  const firstSize = probeSize(inputs[0], ffmpeg);
+  if (firstSize.w === 0 || firstSize.h === 0) {
+    throw new Error("composeWithGridTemplate: could not probe input dimensions");
+  }
+  const firstBox = paneBoxes.get(paneIndices[0])!;
+  const firstSpanCols = firstBox.maxCol - firstBox.minCol + 1;
+  const firstSpanRows = firstBox.maxRow - firstBox.minRow + 1;
+  const cellW = Math.round(firstSize.w / firstSpanCols);
+  const cellH = Math.round(firstSize.h / firstSpanRows);
 
   // Build crop filter string (if cssCrop is set)
   let cropFilter = "";
@@ -258,7 +263,10 @@ function composeWithGridTemplate(
     const spanRows = box.maxRow - box.minRow + 1;
     const targetW = spanCols * cellW;
     const targetH = spanRows * cellH;
-    const needsScale = spanCols > 1 || spanRows > 1;
+
+    // Probe actual dimensions; scale if they differ from the target
+    const actualSize = probeSize(inputs[idx], ffmpeg);
+    const needsScale = actualSize.w !== targetW || actualSize.h !== targetH;
 
     const label = `s${idx}`;
     streamLabels.push(`[${label}]`);

@@ -70,6 +70,8 @@ function spawnPty(cmd: string | undefined, initialCols: number, initialRows: num
       'PS1="\\$ "',
       'PROMPT_COMMAND=\'printf "\\033]0;Shell\\007"\'',
       'trap \'case "$BASH_COMMAND" in "$PROMPT_COMMAND") ;; *) printf "\\033]0;%s\\007" "$BASH_COMMAND";; esac\' DEBUG',
+      // Enable vim syntax highlighting and line numbers by default (better for video)
+      'export VIMINIT="syntax on | set number | filetype on | set background=dark"',
     ].join("\n") + "\n", "utf-8");
 
     const p = pty.spawn("bash", ["--init-file", initFile, "-i"], {
