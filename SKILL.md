@@ -239,6 +239,21 @@ Print environment diagnostics: Node.js, ffmpeg, platform.
 | `actor.moveCursorTo(x, y)` | Smooth cursor move to coordinates |
 | `actor.drag(from, to)` | Drag from one selector to another |
 | `actor.waitFor(selector)` | Wait for an element to appear |
+| `session.createTerminal(cmd?, opts?)` | Create a terminal pane — returns a `TerminalActor` |
+
+**TerminalActor** (returned by `createTerminal`):
+
+| Method | Description |
+|--------|-------------|
+| `term.click(relX, relY)` | Click at relative position in the terminal |
+| `term.type(text)` | Type text into the terminal |
+| `term.typeAndEnter(text)` | Type text and press Enter |
+| `term.waitForText(includes)` | Wait for text to appear |
+| `term.waitForPrompt()` | Wait for a shell prompt (`$`/`#`) |
+| `term.isBusy()` | Check if terminal is running a command |
+| `term.waitUntilIdle()` | Wait until terminal is idle |
+| `term.read()` | Read all visible terminal text |
+| `term.readNew()` | Read only new lines since last read |
 
 ## When to use `b2v_click` vs `b2v_add_step`
 

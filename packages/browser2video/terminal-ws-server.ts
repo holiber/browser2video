@@ -11,8 +11,10 @@ import { WebSocketServer, type WebSocket } from "ws";
 import * as pty from "node-pty";
 
 export type TerminalServer = {
-  /** Base URL (without trailing slash), e.g. ws://127.0.0.1:12345 */
+  /** Base WebSocket URL (without trailing slash), e.g. ws://127.0.0.1:12345 */
   baseWsUrl: string;
+  /** Base HTTP URL (without trailing slash), e.g. http://127.0.0.1:12345 */
+  baseHttpUrl: string;
   close: () => Promise<void>;
 };
 
@@ -92,7 +94,57 @@ function isResizeMessage(v: unknown): v is { type: "resize"; cols: number; rows:
 export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   ensureNodePtySpawnHelperExecutable();
 
-  const server = http.createServer((_req, res) => {
+  // Resolve xterm static file paths once
+  const require = createRequire(import.meta.url);
+  const xtermStaticPaths: Record<string, { file: string; mime: string }> = {};
+  try {
+    xtermStaticPaths["/static/xterm.js"] = { file: require.resolve("@xterm/xterm/lib/xterm.js"), mime: "text/javascript" };
+    xtermStaticPaths["/static/xterm.css"] = { file: require.resolve("@xterm/xterm/css/xterm.css"), mime: "text/css" };
+    xtermStaticPaths["/static/addon-fit.js"] = { file: require.resolve("@xterm/addon-fit/lib/addon-fit.js"), mime: "text/javascript" };
+  } catch {
+    // xterm packages not installed — terminal page won't work
+  }
+
+  let _terminalPageHtml: ((wsUrl: string, testId: string, title: string) => string) | null = null;
+
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url ?? "/", "http://localhost");
+
+    // Serve xterm static files from node_modules
+    const staticEntry = xtermStaticPaths[u.pathname];
+    if (staticEntry) {
+      try {
+        const content = fs.readFileSync(staticEntry.file, "utf-8");
+        res.statusCode = 200;
+        res.setHeader("content-type", `${staticEntry.mime}; charset=utf-8`);
+        res.setHeader("cache-control", "public, max-age=86400");
+        res.end(content);
+      } catch {
+        res.statusCode = 500;
+        res.end("Failed to read static file");
+      }
+      return;
+    }
+
+    if (u.pathname === "/terminal") {
+      // Serve standalone xterm.js terminal page
+      const cmd = u.searchParams.get("cmd") || undefined;
+      const testId = u.searchParams.get("testId") || "xterm-term-0";
+      const title = u.searchParams.get("title") || cmd || "Shell";
+      const baseWsUrl = `ws://localhost:${(server.address() as any)?.port ?? 0}`;
+      const wsUrl = cmd
+        ? `${baseWsUrl}/term?cmd=${encodeURIComponent(cmd)}`
+        : `${baseWsUrl}/term`;
+
+      if (!_terminalPageHtml) {
+        _terminalPageHtml = buildXtermPageHtmlFn();
+      }
+
+      res.statusCode = 200;
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.end(_terminalPageHtml(wsUrl, testId, title));
+      return;
+    }
     res.statusCode = 404;
     res.setHeader("content-type", "text/plain; charset=utf-8");
     res.end("Not found");
@@ -204,9 +256,11 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   }
 
   const baseWsUrl = `ws://localhost:${addr.port}`;
+  const baseHttpUrl = `http://localhost:${addr.port}`;
 
   return {
     baseWsUrl,
+    baseHttpUrl,
     close: async () => {
       for (const client of wss.clients) {
         try {
@@ -219,6 +273,68 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+//  Standalone xterm.js HTML page builder
+// ---------------------------------------------------------------------------
+
+function buildXtermPageHtmlFn() {
+  return (wsUrl: string, testId: string, title: string) => `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="/static/xterm.css">
+<script src="/static/xterm.js"><\/script>
+<script src="/static/addon-fit.js"><\/script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1e1e1e; color: #d4d4d4; overflow: hidden; height: 100vh; display: flex; flex-direction: column; }
+  .bar { background: #2d2d2d; color: #cccccc; padding: 4px 12px; font-size: 12px; border-bottom: 1px solid #3e3e3e; flex-shrink: 0; font-family: system-ui, sans-serif; }
+  #term { flex: 1; min-height: 0; padding: 4px; }
+</style></head><body>
+  <div class="bar">${title}</div>
+  <div id="term" data-testid="${testId}" data-b2v-ws-state="connecting"></div>
+  <script>
+    var el = document.getElementById('term');
+    var term = new Terminal({
+      convertEol: false, cursorBlink: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontSize: 13, lineHeight: 1.15, disableStdin: false,
+    });
+    var fit = new FitAddon.FitAddon();
+    term.loadAddon(fit);
+    term.open(el);
+    try { fit.fit(); } catch(e) {}
+
+    var encoder = new TextEncoder();
+    var ws = new WebSocket('${wsUrl}');
+    ws.binaryType = 'arraybuffer';
+
+    function sendResize() {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    }
+
+    ws.onopen = function() {
+      el.dataset.b2vWsState = 'open';
+      sendResize();
+      term.focus();
+    };
+    ws.onmessage = function(ev) {
+      if (ev.data instanceof ArrayBuffer) {
+        try { term.write(new Uint8Array(ev.data)); } catch(e) {}
+      }
+    };
+    ws.onerror = function() { el.dataset.b2vWsState = 'error'; };
+    ws.onclose = function(e) { el.dataset.b2vWsState = 'closed:' + (e.code || '?'); };
+
+    term.onData(function(data) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
+    });
+
+    var ro = new ResizeObserver(function() { try { fit.fit(); sendResize(); } catch(e) {} });
+    ro.observe(el);
+  <\/script>
+</body></html>`;
 }
 
 // ---------------------------------------------------------------------------

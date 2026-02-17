@@ -12,19 +12,16 @@
  * TTS narration is warmed up in a dedicated step before playback.
  */
 import { createSession, startServer, type Actor, type Page } from "browser2video";
-import { startTerminalWsServer } from "browser2video/terminal";
 
 // ── Server setup ────────────────────────────────────────────────────────
 const server = await startServer({ type: "vite", root: "apps/demo" });
 if (!server) throw new Error("Failed to start Vite server");
-const termSrv = await startTerminalWsServer();
 
 const session = await createSession({
   record: true,
   mode: "human",
   narration: { enabled: true },
 });
-session.addCleanup(() => termSrv.close());
 session.addCleanup(() => server.stop());
 
 const { step } = session;
@@ -73,49 +70,6 @@ async function dragKanbanCard(a: Actor, p: Page, cardTitle: string, toColumnId: 
   }, cardTitle);
   if (!cardId) throw new Error(`Card "${cardTitle}" not found`);
   await a.drag(`[data-card-id="${cardId}"]`, `[data-testid="column-${toColumnId}"]`);
-}
-
-async function waitForXtermText(p: Page, rootSelector: string, includes: string[], timeoutMs: number) {
-  await p.waitForFunction(
-    ([sel, inc]: [string, string[]]) => {
-      const root = document.querySelector(sel);
-      if (!root) return false;
-      const rows = root.querySelector(".xterm-rows");
-      const text = String((rows as any)?.textContent ?? (root as any)?.textContent ?? "");
-      return inc.every((s: string) => text.includes(s));
-    },
-    [rootSelector, includes] as [string, string[]],
-    { timeout: timeoutMs },
-  );
-}
-
-async function waitForWsOpen(p: Page, selector: string, timeoutMs = 15000) {
-  await p.waitForFunction(
-    (sel: string) => (document.querySelector(sel) as any)?.dataset?.b2vWsState === "open",
-    selector,
-    { timeout: timeoutMs },
-  );
-}
-
-async function waitForPrompt(p: Page, testId: string, timeoutMs = 30000) {
-  await p.waitForFunction(
-    ([sel]: [string, number]) => {
-      const root = document.querySelector(sel);
-      if (!root) return false;
-      const text = root.querySelector(".xterm-rows")?.textContent ?? "";
-      return text.includes("$") || text.includes("#");
-    },
-    [`[data-testid="${testId}"]`, 0] as [string, number],
-    { timeout: timeoutMs },
-  );
-}
-
-async function termCoords(p: Page, testId: string, relX: number, relY: number) {
-  const box = await p.$eval(`[data-testid="${testId}"]`, (el: any) => {
-    const r = el.getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
-  });
-  return { x: Math.round(box.x + box.width * relX), y: Math.round(box.y + box.height * relY) };
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -228,40 +182,31 @@ async function termCoords(p: Page, testId: string, relX: number, relY: number) {
   //  PART 4: TUI terminals
   // ════════════════════════════════════════════════════════════════════════
 
-  await step("Open terminals", narrations.tuiIntro, async () => {
-    const url = `${server.baseURL}/terminals?termWs=${encodeURIComponent(termSrv.baseWsUrl)}`;
-    await actor.goto(url);
-    await actor.waitFor('[data-testid="terminals-page"]');
-    await actor.waitFor('[data-testid="xterm-term1"] .xterm');
-    await actor.waitFor('[data-testid="xterm-term2"] .xterm');
-    await actor.waitFor('[data-testid="xterm-term4"] .xterm');
-  });
+  const mc = await session.createTerminal("mc", { label: "Midnight Commander" });
+  const _htop = await session.createTerminal("htop", { label: "htop" });
+  const shell = await session.createTerminal(undefined, { label: "Shell" });
 
-  await step("Wait for terminal apps", async () => {
-    await waitForWsOpen(page, '[data-testid="xterm-term1"]');
-    await waitForWsOpen(page, '[data-testid="xterm-term2"]');
-    await waitForWsOpen(page, '[data-testid="xterm-term4"]');
-    await waitForXtermText(page, '[data-testid="xterm-term1"]', ["1Help"], 20000);
-    await waitForXtermText(page, '[data-testid="xterm-term2"]', ["CPU"], 20000);
+  await step("Open terminals", narrations.tuiIntro, async () => {
+    await mc.waitForText(["1Help"]);
+    await _htop.waitForText(["CPU"]);
   });
 
   await step("Navigate Midnight Commander", narrations.tuiMc, async () => {
-    const pos = await termCoords(page, "xterm-term1", 0.25, 0.25);
-    await actor.clickAt(pos.x, pos.y);
-    for (let i = 0; i < 3; i++) await actor.pressKey("ArrowDown");
-    await actor.pressKey("Tab");
-    for (let i = 0; i < 2; i++) await actor.pressKey("ArrowDown");
-    await actor.pressKey("Tab");
+    await mc.click(0.25, 0.25);
+    for (let i = 0; i < 3; i++) await mc.pressKey("ArrowDown");
+    await mc.pressKey("Tab");
+    for (let i = 0; i < 2; i++) await mc.pressKey("ArrowDown");
+    await mc.pressKey("Tab");
   });
 
   await step("Use Vim in terminal", narrations.tuiVim, async () => {
-    await waitForPrompt(page, "xterm-term4");
-    await actor.type('[data-testid="xterm-term4"]', "vim\n");
-    await waitForXtermText(page, '[data-testid="xterm-term4"]', ["~"], 10000);
-    await actor.pressKey("i");
-    await actor.type('[data-testid="xterm-term4"]', "Hello from browser2video!");
-    await actor.pressKey("Escape");
-    await actor.type('[data-testid="xterm-term4"]', ":q!\n");
+    await shell.waitForPrompt();
+    await shell.typeAndEnter("vim");
+    await shell.waitForText(["~"], 10000);
+    await shell.pressKey("i");
+    await shell.type("Hello from browser2video!");
+    await shell.pressKey("Escape");
+    await shell.typeAndEnter(":q!");
   });
 
   // ════════════════════════════════════════════════════════════════════════

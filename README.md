@@ -66,7 +66,7 @@ Records **two browser windows** side-by-side sharing a real-time synced todo lis
 
 ### Terminal UI (mc, htop, vim)
 
-Interactive TUI apps (Midnight Commander, htop, vim) running in real PTY terminals rendered via xterm.js in the browser. Uses `actor.clickAt()` and `actor.pressKey()` for terminal interactions.
+Interactive TUI apps (Midnight Commander, htop, vim) running in real PTY terminals via `session.createTerminal()`. Each terminal is its own pane with a scoped `TerminalActor`.
 
 [Scenario source](tests/scenarios/tui-terminals.test.ts)
 
@@ -251,19 +251,19 @@ const { page, actor } = await session.openPage({
 });
 ```
 
-### `session.openTerminal(opts?): Promise<{ terminal, page }>`
+### `session.createTerminal(cmd?, opts?): Promise<TerminalActor>`
 
-Open an in-browser terminal (xterm.js) running a shell command.
+Create a terminal pane running a command (or an interactive shell). Auto-starts a PTY server on first call, cleans up on `finish()`.
 
 ```ts
-const { terminal } = await session.openTerminal({
-  command: "node scripts/approve.js",
-  viewport: { width: 500, height: 400 },
-});
-await terminal.send("approve 1");
-```
+const mc = await session.createTerminal("mc");       // run mc
+const shell = await session.createTerminal();         // interactive shell
 
-In human mode, `terminal.send()` simulates character-by-character typing.
+await mc.click(0.25, 0.25);                          // click in mc
+await shell.typeAndEnter("ls -la");                   // run a command
+await shell.waitForPrompt();                          // wait until idle
+const output = await shell.readNew();                 // read new output
+```
 
 ### `session.step(caption, fn)` / `session.step(caption, narration, fn)`
 
@@ -328,6 +328,21 @@ The `Actor` provides human-like browser interactions:
 | `actor.moveCursorTo(x, y)` | Move the cursor overlay to coordinates |
 | `actor.goto(url)` | Navigate to a URL (auto-injects cursor) |
 | `actor.waitFor(selector)` | Wait for an element to appear |
+### TerminalActor methods
+
+`session.createTerminal(cmd?, opts?)` returns a `TerminalActor` scoped to its terminal pane:
+
+| Method | Description |
+|--------|-------------|
+| `term.click(relX, relY)` | Click at relative position within the terminal |
+| `term.type(text)` | Type text into the terminal |
+| `term.typeAndEnter(text)` | Type text and press Enter |
+| `term.waitForText(includes)` | Wait for text to appear in terminal output |
+| `term.waitForPrompt()` | Wait for a shell prompt (`$` or `#`) |
+| `term.isBusy()` | Check if terminal is running a command |
+| `term.waitUntilIdle()` | Wait until terminal is idle (prompt visible) |
+| `term.read()` | Read all visible terminal text |
+| `term.readNew()` | Read only new lines since last `read()`/`readNew()` |
 
 ### `startServer(config): Promise<ManagedServer>`
 

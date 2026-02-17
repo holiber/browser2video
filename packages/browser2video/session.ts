@@ -22,6 +22,7 @@ import type {
 } from "./types.ts";
 
 import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
+import { TerminalActor } from "./terminal-actor.ts";
 import { composeVideos } from "./video-compositor.ts";
 import {
   type AudioDirectorAPI,
@@ -30,6 +31,7 @@ import {
   mixAudioIntoVideo,
   type NarrationOptions,
 } from "./narrator.ts";
+import { startTerminalWsServer, type TerminalServer } from "./terminal-ws-server.ts";
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -140,6 +142,8 @@ export class Session {
   private startTime = 0;
   private finished = false;
   private cleanupFns: Array<() => Promise<void> | void> = [];
+  private terminalServer: TerminalServer | null = null;
+  private terminalCounter = 0;
 
   // Resolved options
   readonly mode: Mode;
@@ -499,6 +503,155 @@ export class Session {
     this.paneOrder.push(id);
 
     return { terminal: termHandle, page };
+  }
+
+  // -----------------------------------------------------------------------
+  //  Public: createTerminal — high-level xterm.js terminal pane
+  // -----------------------------------------------------------------------
+
+  /**
+   * Create an in-browser terminal pane running a command (or an interactive shell).
+   * Auto-starts the terminal WS server on first call and cleans up on finish().
+   *
+   * The returned TerminalActor is ready to use immediately — no manual
+   * waitForTerminalReady, addCleanup, or URL construction needed.
+   *
+   * ```ts
+   * const mc = await session.createTerminal("mc");
+   * const shell = await session.createTerminal(); // interactive shell
+   *
+   * await mc.click(0.25, 0.25);
+   * await shell.typeAndEnter("ls -la");
+   * await shell.waitForPrompt();
+   * ```
+   */
+  async createTerminal(command?: string, opts?: {
+    viewport?: { width: number; height: number };
+    label?: string;
+  }): Promise<TerminalActor> {
+    if (!this.browser) throw new Error("Session not initialized. Use createSession().");
+
+    // Lazy-start terminal WS server (singleton)
+    if (!this.terminalServer) {
+      this.terminalServer = await startTerminalWsServer();
+      // Auto-cleanup: no manual addCleanup needed
+      this.cleanupFns.push(() => this.terminalServer!.close());
+    }
+
+    const idx = this.terminalCounter++;
+    const safeName = command
+      ? command.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 30)
+      : `shell-${idx}`;
+    const testId = `xterm-term-${safeName}`;
+    const label = opts?.label ?? command ?? `shell-${idx}`;
+
+    const vpW = opts?.viewport?.width ?? 800;
+    const vpH = opts?.viewport?.height ?? 500;
+
+    const id = `pane-${this.panes.size}`;
+
+    const ctxOpts: {
+      viewport: { width: number; height: number };
+      recordVideo?: { dir: string; size: { width: number; height: number } };
+    } = {
+      viewport: { width: vpW, height: vpH },
+    };
+
+    let rawVideoPath: string | undefined;
+    if (this.record) {
+      rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+      ctxOpts.recordVideo = {
+        dir: path.dirname(rawVideoPath),
+        size: { width: vpW, height: vpH },
+      };
+    }
+
+    const context = await this.browser.newContext(ctxOpts);
+    const page = await context.newPage();
+
+    // Dark background to avoid white flash
+    await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
+
+    // Init scripts
+    if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+    if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
+
+    // Navigate to the terminal page served by the WS server
+    const termPageUrl = new URL(`${this.terminalServer.baseHttpUrl}/terminal`);
+    if (command) termPageUrl.searchParams.set("cmd", command);
+    termPageUrl.searchParams.set("testId", testId);
+    termPageUrl.searchParams.set("title", label);
+    await page.goto(termPageUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    const selector = `[data-testid="${testId}"]`;
+
+    // Wait for WebSocket connection to be established
+    await page.waitForFunction(
+      (sel: string) => {
+        const el = document.querySelector(sel) as any;
+        return String(el?.dataset?.b2vWsState ?? "") === "open";
+      },
+      selector,
+      { timeout: 15000 },
+    );
+
+    // Wait for initial content (prompt for shell, any output for commands)
+    if (!command) {
+      // Shell: wait for prompt
+      await page.waitForFunction(
+        (sel: string) => {
+          const root = document.querySelector(sel);
+          if (!root) return false;
+          const rows = root.querySelector(".xterm-rows");
+          if (!rows) return false;
+          const text = rows.textContent ?? "";
+          return text.includes("$") || text.includes("#");
+        },
+        selector,
+        { timeout: 30000 },
+      );
+    } else {
+      // Command: wait for any rendered content
+      await page.waitForFunction(
+        (sel: string) => {
+          const root = document.querySelector(sel);
+          if (!root) return false;
+          const rows = root.querySelector(".xterm-rows");
+          const text = String((rows as any)?.textContent ?? "").trim();
+          return text.length > 10;
+        },
+        selector,
+        { timeout: 30000 },
+      );
+    }
+
+    // Create the scoped TerminalActor
+    const actor = new TerminalActor(page, this.mode, selector, { delays: this.delays });
+
+    // Auto-inject cursor overlay after every navigation (human mode)
+    if (this.mode === "human") {
+      page.on("framenavigated", (frame) => {
+        if (frame === page.mainFrame()) {
+          actor.injectCursor().catch(() => {});
+        }
+      });
+      // Inject cursor now
+      await actor.injectCursor();
+    }
+
+    // Register pane for video composition
+    const pane: PaneState = {
+      id, type: "terminal", label, context, page, actor,
+      rawVideoPath, createdAtMs: Date.now(),
+    };
+    this.panes.set(id, pane);
+    this.paneOrder.push(id);
+
+    if (this.record) {
+      console.error(`  Terminal started: ${label} (${vpW}x${vpH})`);
+    }
+
+    return actor;
   }
 
   // -----------------------------------------------------------------------

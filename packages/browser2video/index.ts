@@ -24,6 +24,7 @@ export { createSession, Session } from "./session.ts";
 // ---------------------------------------------------------------------------
 
 export { Actor, generateWebVTT } from "./actor.ts";
+export { TerminalActor } from "./terminal-actor.ts";
 
 // ---------------------------------------------------------------------------
 //  Standalone helpers for complex scenarios

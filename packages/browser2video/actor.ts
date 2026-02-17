@@ -815,6 +815,7 @@ export class Actor {
   async breathe() {
     await sleep(pickMs(this.delays.breatheMs));
   }
+
 }
 
 // ---------------------------------------------------------------------------
