@@ -41,10 +41,12 @@ export const ActorDelaysSchema = z.object({
 export type ActorDelays = z.infer<typeof ActorDelaysSchema>;
 
 export const LayoutConfigSchema = z.union([
-  z.literal("auto").describe("Automatically choose layout based on pane count."),
-  z.literal("row").describe("Side-by-side horizontal layout."),
-  z.literal("grid").describe("Grid layout."),
+  z.literal("auto").describe("Automatically choose grid layout based on pane count (2 cols for 2-4, ceil(sqrt(n)) for 5+)."),
+  z.literal("row").describe("Side-by-side horizontal layout (hstack)."),
+  z.literal("column").describe("Vertical stacked layout (vstack)."),
+  z.literal("grid").describe("Grid layout with auto-calculated columns."),
   z.object({ cols: z.number().int().positive().describe("Number of columns in a custom grid.") }),
+  z.array(z.array(z.number().int().min(0))).describe("Grid template: 2D array of pane indices. Repeated indices create spans."),
 ]).describe("Layout for multi-pane video composition.");
 
 export type LayoutConfig = z.infer<typeof LayoutConfigSchema>;

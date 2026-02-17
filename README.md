@@ -235,7 +235,7 @@ const session = await createSession({
 | `record` | `boolean` | auto | Enable video recording |
 | `outputDir` | `string` | auto | Artifacts output directory |
 | `headed` | `boolean` | auto | Show browser window |
-| `layout` | `"auto"` \| `"row"` \| `"grid"` | `"row"` | Multi-pane layout |
+| `layout` | `"auto"` \| `"row"` \| `"column"` \| `"grid"` \| `{ cols: N }` | `"auto"` | Multi-pane layout (auto = grid) |
 | `delays` | `Partial<ActorDelays>` | - | Override actor timing |
 | `ffmpegPath` | `string` | `"ffmpeg"` | Path to ffmpeg binary |
 | `narration` | `NarrationOptions` | - | TTS narration config |
@@ -302,6 +302,7 @@ Stop recording, compose video, mix narration audio, generate subtitles, and run 
 ```ts
 const result = await session.finish();
 // result.video     — path to MP4
+// result.thumbnail — path to PNG (last-frame screenshot)
 // result.subtitles — path to WebVTT
 // result.metadata  — path to JSON
 // result.durationMs

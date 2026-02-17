@@ -174,7 +174,7 @@ export class Session {
     this.artifactDir = opts.outputDir
       ?? path.resolve("artifacts", `${resolveCallerFilename()}-${timestamp()}`);
 
-    this.layout = opts.layout ?? "row";
+    this.layout = opts.layout ?? "auto";
     this.ffmpeg = opts.ffmpegPath ?? "ffmpeg";
     this.delays = opts.delays;
     this.cdpPort = opts.cdpPort
@@ -655,6 +655,204 @@ export class Session {
   }
 
   // -----------------------------------------------------------------------
+  //  Public: createTerminalGrid — multiple terminals in one CSS grid page
+  // -----------------------------------------------------------------------
+
+  /**
+   * Create multiple terminal panes arranged in a CSS grid on a single page.
+   * Each terminal runs in its own iframe for keyboard isolation.
+   * Only ONE video is recorded (the grid page), so no ffmpeg composition
+   * is needed for terminal-only scenarios.
+   *
+   * ```ts
+   * const [mc, htop, shell] = await session.createTerminalGrid(
+   *   [
+   *     { command: "mc", label: "Midnight Commander" },
+   *     { command: "htop", label: "htop" },
+   *     { label: "Shell" },
+   *   ],
+   *   { viewport: { width: 1280, height: 720 }, grid: [[0, 2], [1, 2]] },
+   * );
+   * ```
+   */
+  async createTerminalGrid(
+    terminals: Array<{
+      command?: string;
+      label?: string;
+    }>,
+    opts?: {
+      viewport?: { width: number; height: number };
+      grid?: number[][];
+    },
+  ): Promise<TerminalActor[]> {
+    if (!this.browser) throw new Error("Session not initialized. Use createSession().");
+
+    // Lazy-start terminal WS server (singleton)
+    if (!this.terminalServer) {
+      this.terminalServer = await startTerminalWsServer();
+      this.cleanupFns.push(() => this.terminalServer!.close());
+    }
+
+    const vpW = opts?.viewport?.width ?? 1280;
+    const vpH = opts?.viewport?.height ?? 720;
+
+    // Build terminal configs
+    const termConfigs = terminals.map((t, i) => {
+      const idx = this.terminalCounter++;
+      const safeName = t.command
+        ? t.command.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 30)
+        : `shell-${idx}`;
+      const testId = `xterm-term-${safeName}`;
+      const label = t.label ?? t.command ?? `shell-${idx}`;
+      return { cmd: t.command, testId, title: label, safeName };
+    });
+
+    // Create a single pane for the grid page
+    const id = `pane-${this.panes.size}`;
+    const label = "terminal-grid";
+
+    const ctxOpts: {
+      viewport: { width: number; height: number };
+      recordVideo?: { dir: string; size: { width: number; height: number } };
+    } = {
+      viewport: { width: vpW, height: vpH },
+    };
+
+    let rawVideoPath: string | undefined;
+    if (this.record) {
+      rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+      ctxOpts.recordVideo = {
+        dir: path.dirname(rawVideoPath),
+        size: { width: vpW, height: vpH },
+      };
+    }
+
+    const context = await this.browser.newContext(ctxOpts);
+    const page = await context.newPage();
+
+    // Dark background to avoid white flash
+    await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
+
+    // Init scripts
+    if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+    if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
+
+    // Build config parameter for the grid endpoint
+    const gridConfig = {
+      terminals: termConfigs.map((t) => ({
+        cmd: t.cmd,
+        testId: t.testId,
+        title: t.title,
+      })),
+      grid: opts?.grid,
+    };
+    const gridUrl = new URL(`${this.terminalServer.baseHttpUrl}/terminal-grid`);
+    gridUrl.searchParams.set("config", JSON.stringify(gridConfig));
+    await page.goto(gridUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    // Wait for all iframes to load and their WebSocket connections to be established
+    for (let i = 0; i < termConfigs.length; i++) {
+      const iframeName = `term-${i}`;
+
+      // Wait for the iframe element to appear in the DOM
+      await page.waitForSelector(`iframe[name="${iframeName}"]`, { timeout: 10000 });
+
+      // Wait for Playwright to recognise the frame (may lag behind DOM)
+      let frame: import("playwright").Frame | null = null;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        frame = page.frame(iframeName);
+        if (frame) break;
+        await sleep(250);
+      }
+      if (!frame) throw new Error(`Iframe '${iframeName}' not found in grid page`);
+
+      const selector = `[data-testid="${termConfigs[i].testId}"]`;
+
+      // Wait for WS connection in this iframe
+      await frame.waitForFunction(
+        (sel: string) => {
+          const el = document.querySelector(sel) as any;
+          return String(el?.dataset?.b2vWsState ?? "") === "open";
+        },
+        selector,
+        { timeout: 15000 },
+      );
+
+      // Wait for initial content
+      const cmd = termConfigs[i].cmd;
+      if (!cmd) {
+        // Shell: wait for prompt
+        await frame.waitForFunction(
+          (sel: string) => {
+            const root = document.querySelector(sel);
+            if (!root) return false;
+            const rows = root.querySelector(".xterm-rows");
+            if (!rows) return false;
+            const text = rows.textContent ?? "";
+            return text.includes("$") || text.includes("#");
+          },
+          selector,
+          { timeout: 30000 },
+        );
+      } else {
+        // Command: wait for any rendered content
+        await frame.waitForFunction(
+          (sel: string) => {
+            const root = document.querySelector(sel);
+            if (!root) return false;
+            const rows = root.querySelector(".xterm-rows");
+            const text = String((rows as any)?.textContent ?? "").trim();
+            return text.length > 10;
+          },
+          selector,
+          { timeout: 30000 },
+        );
+      }
+    }
+
+    // Create TerminalActors — one per terminal, all sharing the same page
+    const actors: TerminalActor[] = [];
+    for (let i = 0; i < termConfigs.length; i++) {
+      const iframeName = `term-${i}`;
+      const frame = page.frame(iframeName);
+      if (!frame) throw new Error(`Iframe '${iframeName}' not found`);
+
+      const selector = `[data-testid="${termConfigs[i].testId}"]`;
+      const actor = new TerminalActor(page, this.mode, selector, {
+        delays: this.delays,
+        frame,
+        iframeName,
+      });
+
+      // Human mode: inject cursor on the main page (shared)
+      if (this.mode === "human" && i === 0) {
+        page.on("framenavigated", (f) => {
+          if (f === page.mainFrame()) {
+            actor.injectCursor().catch(() => {});
+          }
+        });
+        await actor.injectCursor();
+      }
+
+      actors.push(actor);
+    }
+
+    // Register as a single pane for video recording
+    const pane: PaneState = {
+      id, type: "terminal", label, context, page,
+      rawVideoPath, createdAtMs: Date.now(),
+    };
+    this.panes.set(id, pane);
+    this.paneOrder.push(id);
+
+    if (this.record) {
+      console.error(`  Terminal grid started: ${termConfigs.length} terminals (${vpW}x${vpH})`);
+    }
+
+    return actors;
+  }
+
+  // -----------------------------------------------------------------------
   //  Public: step tracking and audio
   // -----------------------------------------------------------------------
 
@@ -735,9 +933,22 @@ export class Session {
     const subtitlesPath = path.join(this.artifactDir, "captions.vtt");
     const metadataPath = path.join(this.artifactDir, "run.json");
 
-    // Tail capture — wait for the last frame to render before closing pages
+    // Tail capture — screenshot forces Chromium to composite the latest visual state
+    // (deterministic render flush) and produces a thumbnail for the video.
+    let thumbnailPath: string | undefined;
     if (this.record) {
-      await sleep(this.mode === "human" ? 300 : 150);
+      for (const pane of this.panes.values()) {
+        try {
+          const buf = await pane.page.screenshot({ type: "png" });
+          if (!thumbnailPath) {
+            thumbnailPath = path.join(this.artifactDir, "thumbnail.png");
+            fs.writeFileSync(thumbnailPath, buf);
+          }
+        } catch { /* page may already be closed */ }
+      }
+      // Small buffer for the screencast pipeline to capture the flushed frame
+      // (Playwright records at ~25fps = 40ms/frame; 80ms covers 2 intervals)
+      await sleep(80);
     }
 
     // Close pages to flush screencast recordings
@@ -787,7 +998,7 @@ export class Session {
             inputs: rawPaths,
             outputPath: videoPath,
             ffmpeg: this.ffmpeg,
-            layout: this.layout === "auto" ? "auto" : this.layout,
+            layout: this.layout,
             targetDurationSec: durationMs / 1000,
             startOffsets,
           });
@@ -816,6 +1027,23 @@ export class Session {
     const audioEvents = this.audioDirector.getEvents?.() ?? [];
     if (audioEvents.length > 0 && videoPath && fs.existsSync(videoPath)) {
       mixAudioIntoVideo({ videoPath, events: audioEvents, ffmpegPath: this.ffmpeg });
+    }
+
+    // Embed thumbnail as MP4 poster frame (attached_pic)
+    if (thumbnailPath && videoPath && fs.existsSync(videoPath) && fs.existsSync(thumbnailPath)) {
+      const tmpPath = videoPath + ".tmp.mp4";
+      try {
+        execFileSync(this.ffmpeg, [
+          "-y", "-i", videoPath, "-i", thumbnailPath,
+          "-map", "0", "-map", "1", "-c", "copy",
+          "-disposition:v:1", "attached_pic",
+          tmpPath,
+        ], { stdio: "pipe" });
+        fs.renameSync(tmpPath, videoPath);
+      } catch {
+        // Non-critical: video still works without poster frame
+        try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+      }
     }
 
     // Generate subtitles
@@ -848,6 +1076,7 @@ export class Session {
 
     return {
       video: videoPath,
+      thumbnail: thumbnailPath,
       subtitles: subtitlesPath,
       metadata: metadataPath,
       artifactDir: this.artifactDir,

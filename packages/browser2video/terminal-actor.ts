@@ -1,15 +1,22 @@
 /**
  * @description TerminalActor — scoped actor for interacting with a terminal pane.
  * All methods are selector-free: the actor knows which terminal it controls.
+ * Supports both standalone terminal pages and iframe-embedded terminals in a grid.
  * Created by session.createTerminal().
  */
-import type { Page } from "playwright";
+import type { Page, Frame } from "playwright";
 import type { Mode, ActorDelays } from "./types.ts";
 import { Actor, pickMs } from "./actor.ts";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/** DOM context for queries — either the page itself or an iframe frame */
+type DOMContext = Page | Frame;
+
+/** Track which iframe is currently focused on a given page */
+const _focusedIframe = new WeakMap<Page, string>();
 
 export class TerminalActor extends Actor {
   /** CSS selector for the terminal container element */
@@ -18,14 +25,26 @@ export class TerminalActor extends Actor {
   /** Watermark for readNew() — tracks lines already returned */
   private _readWatermark = 0;
 
+  /** DOM context: iframe Frame (grid mode) or Page (standalone mode) */
+  private _dom: DOMContext;
+
+  /** Iframe name — set when running inside a grid page */
+  private _iframeName: string | undefined;
+
   constructor(
     page: Page,
     mode: Mode,
     selector: string,
-    opts?: { delays?: Partial<ActorDelays> },
+    opts?: {
+      delays?: Partial<ActorDelays>;
+      frame?: Frame;
+      iframeName?: string;
+    },
   ) {
     super(page, mode, opts);
     this.selector = selector;
+    this._dom = opts?.frame ?? page;
+    this._iframeName = opts?.iframeName;
   }
 
   // ─── Overrides (selector-free) ────────────────────────────────────
@@ -39,16 +58,35 @@ export class TerminalActor extends Actor {
   async click(relX: number, relY: number): Promise<void>;
   async click(relXOrSelector: string | number, relY?: number): Promise<void> {
     if (typeof relXOrSelector === "string") {
-      // Delegate to parent Actor.click(selector) for regular CSS selector clicks
       return super.click(relXOrSelector);
     }
-    const box = await this.page.$eval(this.selector, (el: any) => {
+
+    // When inside an iframe, we need to offset by the iframe's position in the grid page
+    let iframeOffsetX = 0;
+    let iframeOffsetY = 0;
+    if (this._iframeName) {
+      const iframeBox = await this.page.$eval(
+        `iframe[name="${this._iframeName}"]`,
+        (el: any) => {
+          const r = el.getBoundingClientRect();
+          return { x: r.x, y: r.y };
+        },
+      );
+      iframeOffsetX = iframeBox.x;
+      iframeOffsetY = iframeBox.y;
+    }
+
+    const box = await this._dom.$eval(this.selector, (el: any) => {
       const r = el.getBoundingClientRect();
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     });
-    const x = Math.round(box.x + box.width * relXOrSelector);
-    const y = Math.round(box.y + box.height * (relY ?? 0.5));
+    const x = Math.round(iframeOffsetX + box.x + box.width * relXOrSelector);
+    const y = Math.round(iframeOffsetY + box.y + box.height * (relY ?? 0.5));
     await this.clickAt(x, y);
+    // Track focus — this iframe is now focused
+    if (this._iframeName) {
+      _focusedIframe.set(this.page, this._iframeName);
+    }
   }
 
   /**
@@ -60,11 +98,11 @@ export class TerminalActor extends Actor {
   async type(text: string): Promise<void>;
   async type(selectorOrText: string, text?: string): Promise<void> {
     if (text !== undefined) {
-      // Called as type(selector, text) — delegate to parent
+      // Called as type(selector, text) — delegate to parent for regular DOM
       return super.type(selectorOrText, text);
     }
-    // Called as type(text) — type into this terminal
-    return super.type(this.selector, selectorOrText);
+    await this._ensureFocus();
+    await this._typeIntoTerminal(selectorOrText);
   }
 
   /**
@@ -77,7 +115,61 @@ export class TerminalActor extends Actor {
     if (text !== undefined) {
       return super.typeAndEnter(selectorOrText, text);
     }
-    return super.typeAndEnter(this.selector, selectorOrText);
+    await this._ensureFocus();
+    await this._typeIntoTerminal(selectorOrText + "\n");
+  }
+
+  /**
+   * Internal: type text into the terminal's xterm textarea,
+   * using the correct DOM context (iframe frame or main page).
+   */
+  private async _typeIntoTerminal(text: string) {
+    const xtermTextarea = await this._dom.$(`${this.selector} .xterm-helper-textarea`);
+    if (xtermTextarea) {
+      await xtermTextarea.focus();
+    }
+    const charDelay = this.mode === "fast" ? 0 : pickMs(this.delays.keyDelayMs);
+    for (const ch of text) {
+      if (ch === "\n") {
+        await this.page.keyboard.press("Enter");
+      } else {
+        await this.page.keyboard.type(ch, { delay: 0 });
+      }
+      if (charDelay) await sleep(charDelay);
+    }
+    await sleep(pickMs(this.delays.afterTypeMs));
+  }
+
+  /**
+   * Ensure this terminal's iframe is focused on the grid page.
+   * Only clicks if focus needs to change (avoids redundant clicks).
+   */
+  private async _ensureFocus() {
+    if (!this._iframeName) return;
+    if (_focusedIframe.get(this.page) === this._iframeName) return;
+
+    const iframeBox = await this.page.$eval(
+      `iframe[name="${this._iframeName}"]`,
+      (el: any) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height };
+      },
+    );
+    await this.page.mouse.click(
+      Math.round(iframeBox.x + iframeBox.width / 2),
+      Math.round(iframeBox.y + iframeBox.height / 2),
+    );
+    _focusedIframe.set(this.page, this._iframeName);
+    await sleep(this.mode === "fast" ? 0 : 30);
+  }
+
+  /**
+   * Press a key in this terminal.
+   * In grid mode, focuses the correct iframe first.
+   */
+  async pressKey(key: string) {
+    await this._ensureFocus();
+    return super.pressKey(key);
   }
 
   // ─── Terminal-specific methods ────────────────────────────────────
@@ -88,7 +180,7 @@ export class TerminalActor extends Actor {
    * @param timeout   Timeout in ms (default 20s)
    */
   async waitForText(includes: string[], timeout = 20000) {
-    await this.page.waitForFunction(
+    await this._dom.waitForFunction(
       ([sel, inc]: [string, string[]]) => {
         const root = document.querySelector(sel);
         if (!root) return false;
@@ -107,7 +199,7 @@ export class TerminalActor extends Actor {
    * @param timeout  Timeout in ms (default 30s)
    */
   async waitForPrompt(timeout = 30000) {
-    await this.page.waitForFunction(
+    await this._dom.waitForFunction(
       (sel: string) => {
         const root = document.querySelector(sel);
         if (!root) return false;
@@ -131,7 +223,7 @@ export class TerminalActor extends Actor {
    * Returns `true` if the terminal appears to be executing a command.
    */
   async isBusy(): Promise<boolean> {
-    return this.page.evaluate((sel: string) => {
+    return this._dom.evaluate((sel: string) => {
       const root = document.querySelector(sel);
       if (!root) return true;
       const rows = root.querySelector(".xterm-rows");
@@ -140,7 +232,6 @@ export class TerminalActor extends Actor {
       for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i].trim();
         if (!line) continue;
-        // Prompt detected = idle
         if (line.endsWith("$") || line.endsWith("#") || line.includes("$ ")) {
           return false;
         }
@@ -163,7 +254,7 @@ export class TerminalActor extends Actor {
    * Updates the watermark for readNew().
    */
   async read(): Promise<string> {
-    const text = await this.page.evaluate((sel: string) => {
+    const text = await this._dom.evaluate((sel: string) => {
       const root = document.querySelector(sel);
       if (!root) return "";
       const rows = root.querySelector(".xterm-rows");
@@ -179,7 +270,7 @@ export class TerminalActor extends Actor {
    * On first call, returns all text (same as read()).
    */
   async readNew(): Promise<string> {
-    const text = await this.page.evaluate((sel: string) => {
+    const text = await this._dom.evaluate((sel: string) => {
       const root = document.querySelector(sel);
       if (!root) return "";
       const rows = root.querySelector(".xterm-rows");

@@ -10,7 +10,7 @@ export const SessionOptionsSchema = z.object({
   record: z.boolean().optional().describe("Enable video recording. Default: false under Playwright, true otherwise."),
   outputDir: z.string().optional().describe("Output directory for video/subtitles/metadata. Default: auto-generated."),
   headed: z.boolean().optional().describe("Force headed/headless browser. Default: headed in human, headless in fast."),
-  layout: LayoutConfigSchema.optional().describe("Layout for multi-pane video composition. Default: 'row'."),
+  layout: LayoutConfigSchema.optional().describe("Layout for multi-pane video composition. Default: 'auto' (grid)."),
   delays: ActorDelaysSchema.partial().optional().describe("Override actor timing delays."),
   ffmpegPath: z.string().optional().describe("Path to ffmpeg binary. Default: 'ffmpeg'."),
   screenIndex: z.number().int().optional().describe("macOS screen index for screen recording."),
@@ -50,6 +50,7 @@ export type StepRecord = z.infer<typeof StepRecordSchema>;
 
 export const SessionResultSchema = z.object({
   video: z.string().optional().describe("Path to the composed video (undefined if recording was off)."),
+  thumbnail: z.string().optional().describe("Path to the video thumbnail PNG (last frame screenshot)."),
   subtitles: z.string().describe("Path to the WebVTT subtitles file."),
   metadata: z.string().describe("Path to the JSON metadata file."),
   artifactDir: z.string().describe("Output directory containing all artifacts."),

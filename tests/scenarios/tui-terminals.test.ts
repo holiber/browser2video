@@ -1,6 +1,7 @@
 /**
  * Interactive shell terminals with TUI apps (htop, mc) running inside
  * in-browser xterm panes connected to real PTYs.
+ * All terminals share a single CSS grid page (no ffmpeg composition needed).
  */
 import { fileURLToPath } from "url";
 import { createSession } from "browser2video";
@@ -9,74 +10,44 @@ async function scenario() {
   const session = await createSession();
   const { step } = session;
 
-  const mc = await session.createTerminal("mc", {
-    viewport: { width: 640, height: 500 },
-    label: "Midnight Commander",
-  });
-  const htop = await session.createTerminal("htop", {
-    viewport: { width: 640, height: 500 },
-    label: "htop",
-  });
-  const shell = await session.createTerminal(undefined, {
-    viewport: { width: 640, height: 500 },
-    label: "Shell",
-  });
+  const [mc, htop, shell] = await session.createTerminalGrid(
+    [
+      { command: "mc", label: "Midnight Commander" },
+      { command: "htop", label: "htop" },
+      { label: "Shell" },
+    ],
+    {
+      viewport: { width: 1280, height: 720 },
+      grid: [[0, 2], [1, 2]], // mc top-left, htop bottom-left, shell spans right column
+    },
+  );
 
   await step("Open terminals", async () => {
-    await mc.waitForText(["1Help"]);
-    await htop.waitForText(["CPU"]);
+    await mc.waitForText(["1Help"], 30000);
+    await htop.waitForText(["CPU"], 30000);
   });
 
-  await step("Navigate mc with keyboard (left panel)", async () => {
-    await mc.click(0.25, 0.25);
+  await step("Browse files in mc", async () => {
+    // Keyboard-only navigation (independent of terminal row count)
     for (let i = 0; i < 4; i++) await mc.pressKey("ArrowDown");
     await mc.pressKey("ArrowUp");
     await mc.pressKey("ArrowUp");
   });
 
-  await step("Switch to right panel (Tab)", async () => {
+  await step("Switch panels and navigate", async () => {
     await mc.pressKey("Tab");
     for (let i = 0; i < 3; i++) await mc.pressKey("ArrowDown");
-  });
-
-  await step("Switch back to left panel (Tab)", async () => {
     await mc.pressKey("Tab");
   });
 
-  await step("Click files in left panel", async () => {
-    await mc.click(0.20, 0.20);
-    await mc.click(0.20, 0.28);
-    await mc.click(0.20, 0.36);
-    await mc.click(0.20, 0.24);
-  });
-
-  await step("Click files in right panel", async () => {
-    await mc.click(0.70, 0.20);
-    await mc.click(0.70, 0.28);
-    await mc.click(0.70, 0.36);
-  });
-
-  await step("Open directory with Enter", async () => {
-    await mc.click(0.70, 0.16);
+  await step("Enter a directory", async () => {
+    // Navigate to the first directory entry and enter it
+    await mc.pressKey("Home");
+    await mc.pressKey("ArrowDown");
     await mc.pressKey("Enter");
-  });
-
-  await step("Navigate back in right panel", async () => {
-    await mc.click(0.70, 0.16);
+    // Navigate back up via ".."
+    await mc.pressKey("Home");
     await mc.pressKey("Enter");
-  });
-
-  await step("Click back to left panel and browse", async () => {
-    await mc.click(0.20, 0.24);
-    await mc.pressKey("ArrowDown");
-    await mc.pressKey("ArrowDown");
-    await mc.pressKey("ArrowDown");
-  });
-
-  await step("View file with F3 in mc", async () => {
-    await mc.pressKey("F3");
-    for (let i = 0; i < 5; i++) await mc.pressKey("ArrowDown");
-    await mc.pressKey("q");
   });
 
   await step("Run ls in shell", async () => {

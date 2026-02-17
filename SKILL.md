@@ -177,7 +177,7 @@ Export accumulated steps as a standalone `.ts` scenario file.
 
 End session, compose video, return artifact paths.
 
-**Returns:** `videoPath`, `subtitlesPath`, `metadataPath`, `artifactDir`, `durationMs`.
+**Returns:** `videoPath`, `thumbnailPath`, `subtitlesPath`, `metadataPath`, `artifactDir`, `durationMs`.
 
 ### b2v_status
 
