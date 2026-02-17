@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ── 1. Record scenario videos ──
-  record-videos:
+  # ── 1a. Record human-mode scenario videos (with narration) ──
+  record-human:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -44,7 +44,7 @@ jobs:
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
-      - name: Record all scenarios
+      - name: Record all scenarios (human mode)
         env:
           NODE_OPTIONS: '--experimental-transform-types'
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -56,7 +56,7 @@ jobs:
           scenarios=(basic-ui collab kanban tui-terminals console-logs github-mobile)
           for s in "${scenarios[@]}"; do
             echo "════════════════════════════════════════"
-            echo " Recording: $s"
+            echo " Recording: $s (human mode)"
             echo "════════════════════════════════════════"
             node tests/scenarios/$s.test.ts \
               || echo "⚠ Scenario $s failed (non-fatal)"
@@ -71,17 +71,66 @@ jobs:
             cp "$dir"/captions.vtt "videos/$name/captions.vtt" 2>/dev/null || true
           done
 
-      - name: Upload recorded videos
+      - name: Upload human-mode videos
         uses: actions/upload-artifact@v4
         with:
-          name: scenario-videos
+          name: scenario-videos-human
           path: videos/
+          if-no-files-found: warn
+
+  # ── 1b. Record fast-mode scenario videos in Docker (no narration) ──
+  record-fast-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (cached)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: b2v-pages:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Record all scenarios (fast mode, Docker)
+        run: |
+          mkdir -p artifacts
+          docker run --rm \
+            --ipc=host \
+            -e B2V_MODE=fast \
+            -e DISPLAY=:99 \
+            -v ${{ github.workspace }}/artifacts:/app/artifacts \
+            b2v-pages \
+            bash -c 'Xvfb :99 -screen 0 1920x1080x24 &
+                     sleep 2
+                     npx playwright test --retries=1 --reporter=list'
+
+          # Flatten artifact dirs into videos-fast/<name>/
+          mkdir -p videos-fast
+          for dir in artifacts/*.test-*; do
+            name=$(basename "$dir" | sed 's/\.test-.*//')
+            mkdir -p "videos-fast/$name"
+            cp "$dir"/run.mp4 "videos-fast/$name/run.mp4" 2>/dev/null || true
+            cp "$dir"/captions.vtt "videos-fast/$name/captions.vtt" 2>/dev/null || true
+          done
+
+      - name: Upload fast-mode videos
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-videos-fast
+          path: videos-fast/
           if-no-files-found: warn
 
   # ── 2. Build site + assemble with videos ──
   build:
     runs-on: ubuntu-latest
-    needs: record-videos
+    needs: [record-human, record-fast-docker]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -102,11 +151,17 @@ jobs:
       - name: Build Docusaurus site
         run: pnpm --filter browser2video-website build
 
-      - name: Download scenario videos
+      - name: Download human-mode videos
         uses: actions/download-artifact@v4
         with:
-          name: scenario-videos
+          name: scenario-videos-human
           path: website/build/videos
+
+      - name: Download fast-mode videos
+        uses: actions/download-artifact@v4
+        with:
+          name: scenario-videos-fast
+          path: website/build/videos-fast
 
       - name: Generate videos index page
         run: |
@@ -122,12 +177,15 @@ jobs:
               * { margin: 0; padding: 0; box-sizing: border-box; }
               body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; padding: 2rem; }
               h1 { font-size: 1.75rem; font-weight: 700; margin-bottom: 0.5rem; }
+              h2 { font-size: 1.35rem; font-weight: 600; margin: 2.5rem 0 0.5rem; }
               .subtitle { color: var(--muted); margin-bottom: 2rem; font-size: 0.95rem; }
+              .section-desc { color: var(--muted); margin-bottom: 1rem; font-size: 0.9rem; }
               .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); gap: 1.5rem; }
               .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
               .card video { width: 100%; display: block; background: #000; }
               .card-info { padding: 0.75rem 1rem; display: flex; justify-content: space-between; align-items: center; }
               .card-title { font-weight: 600; font-size: 1rem; }
+              .card-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 6px; background: #2a2a2a; color: var(--muted); margin-left: 0.5rem; }
               .card-links { display: flex; gap: 0.75rem; }
               .card-links a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
               .card-links a:hover { text-decoration: underline; }
@@ -139,30 +197,44 @@ jobs:
           <body>
             <a class="back" href="/">← Back to docs</a>
             <h1>Scenario Demo Videos</h1>
-            <p class="subtitle">Auto-generated from the latest <code>main</code> branch. Each video shows a scenario running in human mode.</p>
-            <div class="grid" id="grid"></div>
+            <p class="subtitle">Auto-generated from the latest <code>main</code> branch.</p>
+
+            <h2>Human Mode (with narration)</h2>
+            <p class="section-desc">Recorded with human-like cursor movement, typing delays, and TTS narration.</p>
+            <div class="grid" id="grid-human"></div>
+
+            <h2>Fast Mode — Docker (no narration)</h2>
+            <p class="section-desc">Same scenarios running in fast mode inside a Docker container. No animations or narration.</p>
+            <div class="grid" id="grid-fast"></div>
+
             <script>
               const scenarios = ['basic-ui','collab','kanban','tui-terminals','console-logs','github-mobile'];
-              const grid = document.getElementById('grid');
-              scenarios.forEach(s => {
-                const mp4 = s + '/run.mp4';
-                const vtt = s + '/captions.vtt';
-                const card = document.createElement('div');
-                card.className = 'card';
-                card.innerHTML = `
-                  <video controls preload="metadata" poster="">
-                    <source src="${mp4}" type="video/mp4" />
-                    <track kind="subtitles" src="${vtt}" srclang="en" label="Steps" default />
-                  </video>
-                  <div class="card-info">
-                    <span class="card-title">${s}</span>
-                    <span class="card-links">
-                      <a href="${mp4}" download>Download MP4</a>
-                      <a href="${vtt}">Subtitles</a>
-                    </span>
-                  </div>`;
-                grid.appendChild(card);
-              });
+
+              function buildCards(gridId, baseDir) {
+                const grid = document.getElementById(gridId);
+                scenarios.forEach(s => {
+                  const mp4 = baseDir + '/' + s + '/run.mp4';
+                  const vtt = baseDir + '/' + s + '/captions.vtt';
+                  const card = document.createElement('div');
+                  card.className = 'card';
+                  card.innerHTML =
+                    '<video controls preload="metadata">' +
+                      '<source src="' + mp4 + '" type="video/mp4" />' +
+                      '<track kind="subtitles" src="' + vtt + '" srclang="en" label="Steps" default />' +
+                    '</video>' +
+                    '<div class="card-info">' +
+                      '<span class="card-title">' + s + '</span>' +
+                      '<span class="card-links">' +
+                        '<a href="' + mp4 + '" download>Download MP4</a>' +
+                        '<a href="' + vtt + '">Subtitles</a>' +
+                      '</span>' +
+                    '</div>';
+                  grid.appendChild(card);
+                });
+              }
+
+              buildCards('grid-human', '/videos');
+              buildCards('grid-fast', '/videos-fast');
             </script>
           </body>
           </html>

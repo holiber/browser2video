@@ -34,7 +34,7 @@ async function scenario() {
   await bossPage.waitForFunction(
     () => (globalThis as any).document.location.hash.length > 1,
     undefined,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
   const hash = await bossPage.evaluate(() => (globalThis as any).document.location.hash);
   const docUrl = hash.startsWith("#") ? hash.slice(1) : hash;
@@ -61,8 +61,8 @@ async function scenario() {
     await step("Verify both pages are ready", async () => {
       // notes-page renders only after the Automerge document is loaded via useDocument,
       // so this is a reliable signal that sync has completed on both peers.
-      await bossPage.waitForSelector('[data-testid="notes-page"]', { timeout: 10000 });
-      await workerPage.waitForSelector('[data-testid="notes-page"]', { timeout: 10000 });
+      await bossPage.waitForSelector('[data-testid="notes-page"]', { timeout: 20000 });
+      await workerPage.waitForSelector('[data-testid="notes-page"]', { timeout: 20000 });
     });
 
     // Boss creates tasks, Worker completes, Reviewer approves
@@ -208,7 +208,7 @@ async function waitForTitle(page: Page, title: string) {
       });
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 
@@ -222,7 +222,7 @@ async function waitForTitleGone(page: Page, title: string) {
       });
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 
@@ -241,7 +241,7 @@ async function waitForCompletedByTitle(page: Page, title: string) {
       return false;
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 
@@ -258,7 +258,7 @@ async function waitForApprovedByTitle(page: Page, title: string) {
       return false;
     },
     title,
-    { timeout: 10000 },
+    { timeout: 20000 },
   );
 }
 

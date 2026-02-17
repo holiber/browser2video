@@ -26,6 +26,7 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json tsconfig
 COPY packages/browser2video/package.json ./packages/browser2video/
 COPY apps/demo/package.json ./apps/demo/
 COPY tests/scenarios/package.json ./tests/scenarios/
+COPY tests/mcp-proof/package.json ./tests/mcp-proof/
 
 RUN pnpm install --frozen-lockfile
 
