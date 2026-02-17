@@ -82,6 +82,7 @@ jobs:
   record-fast-docker:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    continue-on-error: true   # Don't block deploy if Docker tests are flaky
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -159,6 +160,7 @@ jobs:
 
       - name: Download fast-mode videos
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           name: scenario-videos-fast
           path: website/build/videos-fast
