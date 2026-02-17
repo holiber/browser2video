@@ -10,7 +10,7 @@ import { ModeSchema } from "../schemas/common.ts";
 // Shared input schema for the "run" tool — the single source of truth
 // for CLI flags, MCP inputSchema, and docs parameter tables.
 export const RunInputSchema = z.object({
-  scenarioFile: z.string().describe("Path to a *.test.ts scenario file (relative to repo root or absolute)."),
+  scenarioFile: z.string().describe("Path to a scenario .ts or .js file (relative to current working directory or absolute)."),
   mode: ModeSchema.default("human").describe("Execution speed mode."),
   voice: z.string().optional().describe("OpenAI TTS voice: alloy | ash | coral | echo | fable | nova | onyx | sage | shimmer."),
   language: z.string().optional().describe("Auto-translate narration to this language (e.g. 'ru', 'es', 'de', 'fr')."),
@@ -36,7 +36,7 @@ export const runTool = defineOp({
   category: "tool",
   summary: "Run a scenario with video recording.",
   description:
-    "Execute a *.test.ts scenario file as a subprocess with video recording " +
+    "Execute a scenario file (.ts or .js) as a subprocess with video recording " +
     "and optional TTS narration. Supports auto-translation of narration to any language.",
   input: RunInputSchema,
   output: RunOutputSchema,
@@ -59,7 +59,7 @@ export const listTool = defineOp({
   name: "b2v_list_scenarios",
   category: "tool",
   summary: "List available scenario files.",
-  description: "List *.test.ts scenario files in the scenarios directory.",
+  description: "List scenario files in the scenarios directory.",
   input: z.object({
     dir: z.string().optional().describe("Directory to scan (default: tests/scenarios)."),
   }),

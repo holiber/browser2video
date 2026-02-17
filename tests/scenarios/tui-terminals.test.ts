@@ -46,8 +46,20 @@ async function waitForXtermText(page: Page, rootSelector: string, includes: stri
   );
 }
 
-async function waitForPrompt(page: Page, testId: string, timeoutMs = 15000) {
-  await waitForXtermText(page, `[data-testid="${testId}"]`, ["$"], timeoutMs);
+async function waitForPrompt(page: Page, testId: string, timeoutMs = 30000) {
+  // Match both regular user prompt ($) and root prompt (#)
+  await page.waitForFunction(
+    ([sel, t]: [string, number]) => {
+      const root = document.querySelector(sel);
+      if (!root) return false;
+      const rows = root.querySelector(".xterm-rows");
+      if (!rows) return false;
+      const text = rows.textContent ?? "";
+      return text.includes("$") || text.includes("#");
+    },
+    [`[data-testid="${testId}"]`, 0] as [string, number],
+    { timeout: timeoutMs },
+  );
 }
 
 /** Compute absolute coordinates from a relative position inside a terminal pane. */

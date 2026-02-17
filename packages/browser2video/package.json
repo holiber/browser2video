@@ -1,16 +1,46 @@
 {
   "name": "browser2video",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "private": false,
   "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holiber/browser2video.git",
+    "directory": "packages/browser2video"
+  },
+  "homepage": "https://github.com/holiber/browser2video#readme",
+  "bugs": {
+    "url": "https://github.com/holiber/browser2video/issues"
+  },
+  "keywords": [
+    "playwright",
+    "automation",
+    "video",
+    "screen-recording",
+    "mcp",
+    "cli",
+    "testing"
+  ],
   "exports": {
     ".": "./index.ts",
     "./terminal": "./terminal-ws-server.ts"
   },
   "bin": {
-    "b2v": "./cli.ts",
-    "b2v-mcp": "./mcp-server.ts"
+    "b2v": "./bin/b2v.js",
+    "b2v-mcp": "./bin/b2v-mcp.js"
   },
+  "files": [
+    "bin/",
+    "*.ts",
+    "ops/",
+    "schemas/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit"
   },

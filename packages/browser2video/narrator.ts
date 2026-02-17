@@ -89,7 +89,7 @@ class TTSEngine {
       return fs.readFileSync(cacheFile, "utf-8");
     }
 
-    console.log(`    [TTS] Translating to ${this.language}: "${text.slice(0, 50)}${text.length > 50 ? "..." : ""}"`);
+    console.error(`    [TTS] Translating to ${this.language}: "${text.slice(0, 50)}${text.length > 50 ? "..." : ""}"`);
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -119,7 +119,7 @@ class TTSEngine {
     const translated: string = data.choices?.[0]?.message?.content?.trim() ?? text;
 
     fs.writeFileSync(cacheFile, translated, "utf-8");
-    console.log(`    [TTS] Translated: "${translated.slice(0, 60)}${translated.length > 60 ? "..." : ""}"`);
+    console.error(`    [TTS] Translated: "${translated.slice(0, 60)}${translated.length > 60 ? "..." : ""}"`);
     return translated;
   }
 
@@ -149,7 +149,7 @@ class TTSEngine {
     }
 
     // Call OpenAI TTS API
-    console.log(`    [TTS] Generating: "${ttsText.slice(0, 60)}${ttsText.length > 60 ? "..." : ""}"`);
+    console.error(`    [TTS] Generating: "${ttsText.slice(0, 60)}${ttsText.length > 60 ? "..." : ""}"`);
     const response = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
@@ -176,7 +176,7 @@ class TTSEngine {
     fs.writeFileSync(audioPath, buffer);
 
     const durationMs = getAudioDurationMs(audioPath, ffmpegPath);
-    console.log(`    [TTS] Generated ${(durationMs / 1000).toFixed(1)}s audio`);
+    console.error(`    [TTS] Generated ${(durationMs / 1000).toFixed(1)}s audio`);
     return { audioPath, durationMs };
   }
 }
@@ -402,7 +402,7 @@ export function mixAudioIntoVideo(opts: {
     opts.outputPath ??
     videoPath.replace(/\.mp4$/, ".narrated.mp4");
 
-  console.log(`\n  Mixing ${events.length} audio clip(s) into video...`);
+  console.error(`\n  Mixing ${events.length} audio clip(s) into video...`);
 
   // Build the ffmpeg command with a complex filter graph.
   // Strategy:
@@ -455,11 +455,11 @@ export function mixAudioIntoVideo(opts: {
 
   try {
     execFileSync(ffmpegPath, args, { stdio: "pipe" });
-    console.log(`  Narrated video: ${outputPath}`);
+    console.error(`  Narrated video: ${outputPath}`);
 
     // Replace original with narrated version
     fs.renameSync(outputPath, videoPath);
-    console.log(`  Replaced original video with narrated version`);
+    console.error(`  Replaced original video with narrated version`);
     return videoPath;
   } catch (err) {
     console.warn(

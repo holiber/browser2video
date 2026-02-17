@@ -1,64 +1,25 @@
 #!/usr/bin/env node
 /**
  * @description Browser2Video CLI — yargs-based command parser.
- * Commands: run <file>, list [dir], doctor.
+ * Commands: run <file>, doctor.
  * Schemas for run options come from the operation registry (single source of truth).
  */
-import path from "path";
-import fs from "fs";
-import { execFile } from "child_process";
-import { fileURLToPath } from "url";
 import yargs, { type Argv } from "yargs";
 import { hideBin } from "yargs/helpers";
 import { RunInputSchema } from "./ops/tools.ts";
+import { runScenarioAsNodeTs } from "./runner.ts";
 
 // ---------------------------------------------------------------------------
 //  Paths
 // ---------------------------------------------------------------------------
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "../..");
-const defaultScenariosDir = path.join(repoRoot, "tests", "scenarios");
+const cwd = process.cwd();
 
 // ---------------------------------------------------------------------------
 //  Helpers
 // ---------------------------------------------------------------------------
 
-/**
- * Run a test file as a subprocess via `node` (native TS support).
- * CLI options are passed as B2V_* environment variables.
- */
-function runTestFile(
-  filePath: string,
-  env: Record<string, string>,
-): Promise<{ code: number }> {
-  const abs = path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(process.cwd(), filePath);
-
-  if (!fs.existsSync(abs)) {
-    throw new Error(`File not found: ${abs}`);
-  }
-
-  return new Promise((resolve) => {
-    const proc = execFile(
-      process.execPath,
-      [abs],
-      {
-        cwd: repoRoot,
-        env: { ...process.env, ...env },
-        maxBuffer: 10 * 1024 * 1024,
-      },
-      (err) => {
-        resolve({ code: err?.code ? Number(err.code) : 0 });
-      },
-    );
-
-    // Stream stdout/stderr to the terminal in real time
-    proc.stdout?.pipe(process.stdout);
-    proc.stderr?.pipe(process.stderr);
-  });
-}
+// Scenario running is handled by runner.ts (no monorepo assumptions).
 
 // ---------------------------------------------------------------------------
 //  Shared CLI options (derived from RunInputSchema)
@@ -121,7 +82,7 @@ const cli = yargs(hideBin(process.argv))
   .scriptName("b2v")
   .usage("$0 <command> [options]")
   .strict()
-  .demandCommand(1, "Please specify a command: run, list, or doctor")
+  .demandCommand(1, "Please specify a command: run or doctor")
   .help();
 
 // ---- run <file> -----------------------------------------------------------
@@ -132,7 +93,7 @@ cli.command(
   (y) => {
     const withFile = y.positional("file", {
       type: "string",
-      describe: "Path to a *.test.ts file",
+      describe: "Path to a scenario .ts or .js file",
       demandOption: true,
     });
     return addRunOptions(withFile);
@@ -148,50 +109,20 @@ cli.command(
     if (argv.headed === true) env.B2V_HEADED = "true";
     if (argv.headless === true) env.B2V_HEADED = "false";
 
+    if (argv.narrate === true) env.B2V_NARRATE = "true";
     if (argv.voice) env.B2V_VOICE = argv.voice as string;
     if (argv.narrateSpeed) env.B2V_NARRATION_SPEED = String(argv.narrateSpeed);
     if (argv.realtimeAudio) env.B2V_REALTIME_AUDIO = "true";
     if (argv.language) env.B2V_NARRATION_LANGUAGE = argv.language as string;
 
-    const { code } = await runTestFile(filePath, env);
+    const res = await runScenarioAsNodeTs({
+      scenarioFile: filePath,
+      cwd,
+      env,
+      streamOutput: true,
+    });
 
-    process.exit(code);
-  },
-);
-
-// ---- list [dir] -----------------------------------------------------------
-
-cli.command(
-  "list [dir]",
-  "List *.test.ts scenario files in a directory",
-  (y) =>
-    y.positional("dir", {
-      type: "string",
-      default: defaultScenariosDir,
-      describe: "Directory to scan (default: tests/scenarios)",
-    }),
-  (argv) => {
-    const dir = path.isAbsolute(argv.dir as string)
-      ? (argv.dir as string)
-      : path.resolve(process.cwd(), argv.dir as string);
-
-    if (!fs.existsSync(dir)) {
-      console.error(`Directory not found: ${dir}`);
-      process.exit(1);
-    }
-
-    const files = fs
-      .readdirSync(dir)
-      .filter((f) => f.endsWith(".test.ts"))
-      .sort();
-
-    if (files.length === 0) {
-      console.log("(no test files found)");
-    } else {
-      for (const f of files) {
-        console.log(f);
-      }
-    }
+    process.exit(res.code);
   },
 );
 

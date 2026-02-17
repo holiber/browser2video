@@ -6,7 +6,7 @@
   "packageManager": "pnpm@10.29.3",
   "scripts": {
     "dev": "pnpm -C apps/demo dev",
-    "dev:terminals": "node packages/browser2video/terminal-ws-server.ts 9800",
+    "dev:terminals": "node packages/browser2video/terminal-ws-server.ts",
     "dev:full": "pnpm dev:terminals & pnpm dev",
     "typecheck": "pnpm -r --filter '!browser2video-website' typecheck",
     "preview": "pnpm -C apps/demo preview",

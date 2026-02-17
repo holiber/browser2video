@@ -148,6 +148,7 @@ export class Session {
   readonly layout: LayoutConfig;
   private readonly ffmpeg: string;
   private readonly delays?: Partial<ActorDelays>;
+  private readonly cdpPort: number;
   private narrationOpts?: NarrationOptions;
   private audioDirector!: AudioDirectorAPI & { getEvents?: () => AudioEvent[] };
 
@@ -161,7 +162,9 @@ export class Session {
     this.record = opts.record
       ?? (process.env.B2V_RECORD !== undefined ? process.env.B2V_RECORD !== "false" : !underPW);
 
-    this.headed = opts.headed ?? (this.mode === "human");
+    const headedEnv = process.env.B2V_HEADED;
+    this.headed = opts.headed
+      ?? (headedEnv !== undefined ? headedEnv !== "false" : this.mode === "human");
 
     this.artifactDir = opts.outputDir
       ?? path.resolve("artifacts", `${resolveCallerFilename()}-${timestamp()}`);
@@ -169,6 +172,8 @@ export class Session {
     this.layout = opts.layout ?? "row";
     this.ffmpeg = opts.ffmpegPath ?? "ffmpeg";
     this.delays = opts.delays;
+    this.cdpPort = opts.cdpPort
+      ?? (process.env.B2V_CDP_PORT ? parseInt(process.env.B2V_CDP_PORT, 10) : 0);
 
     // Store explicit narration opts; auto-enable happens in _init() after .env is loaded
     if (opts.narration) {
@@ -182,7 +187,7 @@ export class Session {
     loadDotenv();
 
     // Auto-enable narration when OPENAI_API_KEY is present and not explicitly configured
-    if (!this.narrationOpts && process.env.OPENAI_API_KEY) {
+    if (!this.narrationOpts && (process.env.B2V_NARRATE === "true" || process.env.OPENAI_API_KEY)) {
       this.narrationOpts = { enabled: true };
     }
 
@@ -196,18 +201,23 @@ export class Session {
 
     fs.mkdirSync(this.artifactDir, { recursive: true });
 
+    const launchArgs = [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-gpu",
+      "--hide-scrollbars",
+      "--disable-extensions",
+      "--disable-sync",
+      "--no-first-run",
+      "--disable-background-networking",
+    ];
+    if (this.cdpPort > 0) {
+      launchArgs.push(`--remote-debugging-port=${this.cdpPort}`);
+    }
+
     this.browser = await chromium.launch({
       headless: !this.headed,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-gpu",
-        "--hide-scrollbars",
-        "--disable-extensions",
-        "--disable-sync",
-        "--no-first-run",
-        "--disable-background-networking",
-      ],
+      args: launchArgs,
     });
 
     this.startTime = Date.now();
@@ -218,10 +228,96 @@ export class Session {
       ffmpegPath: this.ffmpeg,
     });
 
-    console.log(`\n  Mode:      ${this.mode}`);
-    console.log(`  Record:    ${this.record ? "screencast" : "none"}`);
-    console.log(`  Headed:    ${this.headed}`);
-    console.log(`  Artifacts: ${this.artifactDir}\n`);
+    console.error(`\n  Mode:      ${this.mode}`);
+    console.error(`  Record:    ${this.record ? "screencast" : "none"}`);
+    console.error(`  Headed:    ${this.headed}`);
+    console.error(`  Artifacts: ${this.artifactDir}\n`);
+  }
+
+  // -----------------------------------------------------------------------
+  //  Public: accessors for MCP / external integrations
+  // -----------------------------------------------------------------------
+
+  /**
+   * The Playwright WebSocket endpoint for the browser.
+   * Useful for connecting external tools (e.g. Playwright MCP) via CDP.
+   */
+  get wsEndpoint(): string | undefined {
+    try {
+      return (this.browser as any)?.wsEndpoint?.();
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Return the Actor for a given pane ID (or the first one if only one exists).
+   * Throws if no matching pane/actor is found.
+   */
+  getActor(paneId?: string): Actor {
+    if (this.panes.size === 0) throw new Error("No pages open. Call openPage() first.");
+    if (!paneId && this.panes.size === 1) {
+      const actor = [...this.panes.values()][0].actor;
+      if (!actor) throw new Error("The only pane has no Actor (is it a terminal?).");
+      return actor;
+    }
+    if (!paneId) throw new Error("Multiple panes open — specify a pageId.");
+    const pane = this.panes.get(paneId);
+    if (!pane) throw new Error(`Pane not found: ${paneId}`);
+    if (!pane.actor) throw new Error(`Pane ${paneId} has no Actor (is it a terminal?).`);
+    return pane.actor;
+  }
+
+  /**
+   * Return the Playwright Page for a given pane ID.
+   */
+  getPage(paneId?: string): Page {
+    if (this.panes.size === 0) throw new Error("No pages open.");
+    if (!paneId && this.panes.size === 1) return [...this.panes.values()][0].page;
+    if (!paneId) throw new Error("Multiple panes open — specify a pageId.");
+    const pane = this.panes.get(paneId);
+    if (!pane) throw new Error(`Pane not found: ${paneId}`);
+    return pane.page;
+  }
+
+  /**
+   * Return the TerminalHandle for a given pane ID.
+   */
+  getTerminal(paneId?: string): TerminalHandle {
+    const terminals = [...this.panes.values()].filter((p) => p.terminal);
+    if (terminals.length === 0) throw new Error("No terminals open.");
+    if (!paneId && terminals.length === 1) return terminals[0].terminal!;
+    if (!paneId) throw new Error("Multiple terminals open — specify a terminalId.");
+    const pane = this.panes.get(paneId);
+    if (!pane?.terminal) throw new Error(`Terminal not found: ${paneId}`);
+    return pane.terminal;
+  }
+
+  /**
+   * Return the terminal output log content for a given terminal pane.
+   */
+  getTerminalOutput(paneId?: string): string {
+    const terminals = [...this.panes.values()].filter((p) => p.type === "terminal");
+    if (terminals.length === 0) throw new Error("No terminals open.");
+    const pane = paneId ? this.panes.get(paneId) : (terminals.length === 1 ? terminals[0] : undefined);
+    if (!pane) throw new Error(paneId ? `Pane not found: ${paneId}` : "Multiple terminals open — specify a terminalId.");
+    const logPath = path.join(this.artifactDir, `${pane.id}.log`);
+    if (!fs.existsSync(logPath)) return "";
+    return fs.readFileSync(logPath, "utf-8");
+  }
+
+  /** Return a summary of current panes. */
+  getPanesSummary(): Array<{ id: string; type: string; label: string }> {
+    return [...this.panes.values()].map((p) => ({
+      id: p.id,
+      type: p.type,
+      label: p.label,
+    }));
+  }
+
+  /** Return recorded steps so far. */
+  getSteps(): StepRecord[] {
+    return [...this.steps];
   }
 
   // -----------------------------------------------------------------------
@@ -268,10 +364,10 @@ export class Session {
 
     // Console/error listeners
     page.on("console", (msg) => {
-      if (msg.type() === "error") console.log(`  [${label} Error] ${msg.text()}`);
+      if (msg.type() === "error") console.error(`  [${label} Error] ${msg.text()}`);
     });
     page.on("pageerror", (err) => {
-      console.log(`  [${label} Error] ${(err as Error).message}`);
+      console.error(`  [${label} Error] ${(err as Error).message}`);
     });
 
     const actor = new Actor(page, this.mode, { delays: this.delays });
@@ -295,7 +391,7 @@ export class Session {
     this.paneOrder.push(id);
 
     if (this.record) {
-      console.log(`  Recording started: ${label} (${vpW}x${vpH})`);
+      console.error(`  Recording started: ${label} (${vpW}x${vpH})`);
     }
 
     return { page, actor };
@@ -430,7 +526,7 @@ export class Session {
     this.stepIndex++;
     const idx = this.stepIndex;
     const startMs = Date.now() - this.startTime;
-    console.log(`  [Step ${idx}] ${caption}`);
+    console.error(`  [Step ${idx}] ${caption}`);
 
     // Pre-generate TTS so speak() starts playback instantly
     if (narration) await this.audioDirector.warmup(narration);
@@ -513,7 +609,7 @@ export class Session {
         const earliestMs = Math.min(...paneCreationTimes);
         const startOffsets = paneCreationTimes.map((t) => t - earliestMs);
 
-        console.log(`  Compositing ${rawPaths.length} pane(s)...`);
+        console.error(`  Compositing ${rawPaths.length} pane(s)...`);
         try {
           composeVideos({
             inputs: rawPaths,
@@ -523,7 +619,7 @@ export class Session {
             targetDurationSec: durationMs / 1000,
             startOffsets,
           });
-          console.log(`  Video saved: ${videoPath}`);
+          console.error(`  Video saved: ${videoPath}`);
         } catch (err) {
           console.warn("  Video composition failed:", (err as Error).message);
           if (rawPaths[0]) {
@@ -553,7 +649,7 @@ export class Session {
     // Generate subtitles
     const vtt = generateWebVTT(this.steps);
     fs.writeFileSync(subtitlesPath, vtt, "utf-8");
-    console.log(`  Subtitles:  ${subtitlesPath}`);
+    console.error(`  Subtitles:  ${subtitlesPath}`);
 
     // Generate metadata
     const metadata = {
@@ -570,8 +666,8 @@ export class Session {
       timestamp: new Date().toISOString(),
     };
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
-    console.log(`  Metadata:   ${metadataPath}`);
-    console.log(`  Duration:   ${(durationMs / 1000).toFixed(1)}s\n`);
+    console.error(`  Metadata:   ${metadataPath}`);
+    console.error(`  Duration:   ${(durationMs / 1000).toFixed(1)}s\n`);
 
     return {
       video: videoPath,
