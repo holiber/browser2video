@@ -38,7 +38,7 @@ async function scenario() {
   );
   const hash = await bossPage.evaluate(() => (globalThis as any).document.location.hash);
   const docUrl = hash.startsWith("#") ? hash.slice(1) : hash;
-  console.log(`  Doc hash: ${hash}`);
+  console.error(`  Doc hash: ${hash}`);
 
   // Navigate Worker with the shared hash
   const workerUrl = new URL(`${server.baseURL}/notes?role=worker`);
@@ -153,7 +153,7 @@ async function scenario() {
           );
         }
       }
-      console.log(`    Boss: all ${expectedOrder.length} items in correct order`);
+      console.error(`    Boss: all ${expectedOrder.length} items in correct order`);
     });
 
     await step("Verify final order (Worker)", async () => {
@@ -166,7 +166,7 @@ async function scenario() {
           );
         }
       }
-      console.log(`    Worker: all ${expectedOrder.length} items in correct order`);
+      console.error(`    Worker: all ${expectedOrder.length} items in correct order`);
     });
 
     await session.finish();
