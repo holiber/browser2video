@@ -31,9 +31,11 @@ jobs:
           docker run --rm \
             --ipc=host \
             -e B2V_MODE=fast \
+            -e DISPLAY=:99 \
             b2v-test \
-            xvfb-run -a --server-args="-screen 0 1920x1080x24" \
-              npx playwright test --reporter=list
+            bash -c 'Xvfb :99 -screen 0 1920x1080x24 &
+                     sleep 2
+                     npx playwright test --reporter=list'
 
   # ── Human-mode: run scenarios directly with video recording ──
   test-human:
