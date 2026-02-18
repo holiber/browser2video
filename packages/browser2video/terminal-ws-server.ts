@@ -19,6 +19,10 @@ export type TerminalServer = {
   close: () => Promise<void>;
 };
 
+export type GridPaneConfig =
+  | { type: "terminal"; cmd?: string; testId: string; title: string }
+  | { type: "browser"; url: string; title: string };
+
 function safeLocale(): string {
   return (
     process.env.LC_ALL ??
@@ -112,7 +116,7 @@ function isResizeMessage(v: unknown): v is { type: "resize"; cols: number; rows:
 export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   ensureNodePtySpawnHelperExecutable();
 
-  // Resolve xterm static file paths once
+  // Resolve xterm and dockview static file paths once
   const require = createRequire(import.meta.url);
   const xtermStaticPaths: Record<string, { file: string; mime: string }> = {};
   try {
@@ -122,9 +126,14 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   } catch {
     // xterm packages not installed — terminal page won't work
   }
+  try {
+    xtermStaticPaths["/static/dockview.js"] = { file: require.resolve("dockview-core/dist/dockview-core.js"), mime: "text/javascript" };
+  } catch {
+    // dockview-core not installed — grid page will fall back
+  }
 
   let _terminalPageHtml: ((wsUrl: string, testId: string, title: string) => string) | null = null;
-  let _terminalGridHtml: ((baseWsUrl: string, terminals: Array<{ cmd?: string; testId: string; title: string }>, grid?: number[][]) => string) | null = null;
+  let _terminalGridHtml: ((baseWsUrl: string, panes: GridPaneConfig[], grid?: number[][]) => string) | null = null;
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://localhost");
@@ -165,14 +174,13 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
       return;
     }
     if (u.pathname === "/terminal-grid") {
-      // Serve multi-terminal page with CSS grid layout
       const configParam = u.searchParams.get("config");
       if (!configParam) {
         res.statusCode = 400;
         res.end("Missing config parameter");
         return;
       }
-      let config: { terminals: Array<{ cmd?: string; testId: string; title: string }>; grid?: number[][] };
+      let config: { panes: GridPaneConfig[]; grid?: number[][] };
       try {
         config = JSON.parse(decodeURIComponent(configParam));
       } catch {
@@ -186,7 +194,7 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
       }
       res.statusCode = 200;
       res.setHeader("content-type", "text/html; charset=utf-8");
-      res.end(_terminalGridHtml(baseWsUrl, config.terminals, config.grid));
+      res.end(_terminalGridHtml(baseWsUrl, config.panes, config.grid));
       return;
     }
 
@@ -338,11 +346,15 @@ function buildXtermPageHtmlFn() {
   html { height: 100%; }
   body { background: #1e1e1e; color: #d4d4d4; overflow: hidden; height: 100%; display: flex; flex-direction: column; }
   .bar { background: #2d2d2d; color: #cccccc; padding: 4px 12px; font-size: 12px; border-bottom: 1px solid #3e3e3e; flex-shrink: 0; font-family: system-ui, sans-serif; }
+  .bar.hidden { display: none; }
   #term { flex: 1; min-height: 0; padding: 4px; }
 </style></head><body>
-  <div class="bar">${title}</div>
+  <div class="bar" id="titlebar">${title}</div>
   <div id="term" data-testid="${testId}" data-b2v-ws-state="connecting"></div>
   <script>
+    var inIframe = window !== window.top;
+    if (inIframe) document.getElementById('titlebar').classList.add('hidden');
+
     var el = document.getElementById('term');
     var term = new Terminal({
       convertEol: false, cursorBlink: true,
@@ -365,13 +377,8 @@ function buildXtermPageHtmlFn() {
     }
 
     function fitTerminal() {
-      // Try FitAddon first (works when xterm render service is initialized)
       try { fit.fit(); sendResize(); return; } catch(e) {}
 
-      // Fallback: manual measurement for headless Chromium where the
-      // render service never initializes (no paint cycles in headless mode).
-      // Use the actual rendered xterm row height (includes internal line spacing)
-      // and a test span for character width.
       var xtermRows = el.querySelector('.xterm-rows');
       var firstRow = xtermRows && xtermRows.children[0];
       if (!firstRow) return;
@@ -402,8 +409,6 @@ function buildXtermPageHtmlFn() {
 
     ws.onopen = function() {
       el.dataset.b2vWsState = 'open';
-      // Fit AFTER the WebSocket is open so the PTY resize is sent
-      // in sync with the xterm.js resize (avoids garbled initial display).
       fitTerminal();
       term.focus();
     };
@@ -411,8 +416,6 @@ function buildXtermPageHtmlFn() {
     ws.onmessage = function(ev) {
       if (ev.data instanceof ArrayBuffer) {
         try { term.write(new Uint8Array(ev.data)); } catch(e) {}
-        // After the first data write, xterm.js has rendered content and
-        // the cell dimensions are established. Re-fit to ensure accuracy.
         if (!fitted) {
           fitted = true;
           setTimeout(fitTerminal, 10);
@@ -427,7 +430,13 @@ function buildXtermPageHtmlFn() {
     });
 
     term.onTitleChange(function(t) {
-      if (t) document.querySelector('.bar').textContent = t;
+      if (!t) return;
+      var bar = document.getElementById('titlebar');
+      if (bar) bar.textContent = t;
+      // Notify parent dockview page to update panel tab title
+      if (inIframe) {
+        try { parent.postMessage({ type: 'b2v-title', testId: '${testId}', title: t }, '*'); } catch(e) {}
+      }
     });
 
     var ro = new ResizeObserver(function() { fitTerminal(); });
@@ -437,67 +446,257 @@ function buildXtermPageHtmlFn() {
 }
 
 // ---------------------------------------------------------------------------
-//  Multi-terminal CSS grid page builder (iframes for keyboard isolation)
+//  Multi-pane dockview grid page builder (iframes for keyboard isolation)
 // ---------------------------------------------------------------------------
+
+/**
+ * Convert a grid layout (number[][]) to a sequence of dockview addPanel() calls.
+ * Returns an ordered list of { index, position } where position is undefined
+ * for the first panel, and { referencePanel, direction } for subsequent ones.
+ */
+function gridToAddPanelOrder(grid: number[][], paneCount: number): Array<{
+  index: number;
+  position?: { referencePanel: string; direction: string };
+}> {
+  // Find bounding box for each unique pane index
+  const boxes = new Map<number, { minRow: number; maxRow: number; minCol: number; maxCol: number }>();
+  for (let r = 0; r < grid.length; r++) {
+    for (let c = 0; c < grid[r].length; c++) {
+      const idx = grid[r][c];
+      const box = boxes.get(idx);
+      if (!box) {
+        boxes.set(idx, { minRow: r, maxRow: r, minCol: c, maxCol: c });
+      } else {
+        box.minRow = Math.min(box.minRow, r);
+        box.maxRow = Math.max(box.maxRow, r);
+        box.minCol = Math.min(box.minCol, c);
+        box.maxCol = Math.max(box.maxCol, c);
+      }
+    }
+  }
+
+  // Sort panes by their top-left position (row-major)
+  const indices = [...boxes.keys()].sort((a, b) => {
+    const ba = boxes.get(a)!;
+    const bb = boxes.get(b)!;
+    return ba.minRow !== bb.minRow ? ba.minRow - bb.minRow : ba.minCol - bb.minCol;
+  });
+
+  const result: Array<{ index: number; position?: { referencePanel: string; direction: string } }> = [];
+  const placed = new Set<number>();
+
+  for (const idx of indices) {
+    if (idx >= paneCount) continue;
+    if (placed.size === 0) {
+      result.push({ index: idx });
+      placed.add(idx);
+      continue;
+    }
+
+    const box = boxes.get(idx)!;
+    let bestRef: number | undefined;
+    let bestDir: string | undefined;
+
+    // Find an already-placed pane that is adjacent
+    for (const placedIdx of placed) {
+      const pBox = boxes.get(placedIdx)!;
+      // This pane is directly to the right of placedIdx
+      if (box.minCol === pBox.maxCol + 1 && box.minRow <= pBox.maxRow && box.maxRow >= pBox.minRow) {
+        bestRef = placedIdx;
+        bestDir = "right";
+        break;
+      }
+      // This pane is directly below placedIdx
+      if (box.minRow === pBox.maxRow + 1 && box.minCol <= pBox.maxCol && box.maxCol >= pBox.minCol) {
+        bestRef = placedIdx;
+        bestDir = "below";
+        break;
+      }
+      // This pane is directly to the left of placedIdx
+      if (box.maxCol === pBox.minCol - 1 && box.minRow <= pBox.maxRow && box.maxRow >= pBox.minRow) {
+        bestRef = placedIdx;
+        bestDir = "left";
+        break;
+      }
+      // This pane is directly above placedIdx
+      if (box.maxRow === pBox.minRow - 1 && box.minCol <= pBox.maxCol && box.maxCol >= pBox.minCol) {
+        bestRef = placedIdx;
+        bestDir = "above";
+        break;
+      }
+    }
+
+    if (bestRef !== undefined && bestDir) {
+      result.push({
+        index: idx,
+        position: { referencePanel: `panel-${bestRef}`, direction: bestDir },
+      });
+    } else {
+      // Fallback: place to the right of the first panel
+      result.push({
+        index: idx,
+        position: { referencePanel: `panel-${indices[0]}`, direction: "right" },
+      });
+    }
+    placed.add(idx);
+  }
+
+  return result;
+}
 
 function buildXtermGridPageHtmlFn() {
   return (
     baseWsUrl: string,
-    terminals: Array<{ cmd?: string; testId: string; title: string }>,
+    panes: GridPaneConfig[],
     grid?: number[][],
   ) => {
-    // Build CSS grid template from the layout array
-    const gridRows = grid ? grid.length : 1;
-    const gridCols = grid ? Math.max(...grid.map((r) => r.length)) : terminals.length;
+    // Build pane data as JSON for the client-side script
+    const paneDataJson = JSON.stringify(panes.map((p, i) => {
+      if (p.type === "browser") {
+        return { type: "browser", url: p.url, title: p.title, index: i };
+      }
+      const src = `/terminal?${new URLSearchParams({
+        ...(p.cmd ? { cmd: p.cmd } : {}),
+        testId: p.testId,
+        title: p.title,
+      }).toString()}`;
+      return { type: "terminal", src, testId: p.testId, title: p.title, index: i };
+    }));
 
-    // Generate grid-template-areas from the number[][] layout
-    let gridTemplateAreas = "";
-    if (grid) {
-      gridTemplateAreas = grid
-        .map((row) => `"${row.map((idx) => `p${idx}`).join(" ")}"`)
-        .join(" ");
-    } else {
-      // Default: all in a single row
-      gridTemplateAreas = `"${terminals.map((_, i) => `p${i}`).join(" ")}"`;
-    }
-
-    const gridTemplateRows = `repeat(${gridRows}, 1fr)`;
-    const gridTemplateCols = `repeat(${gridCols}, 1fr)`;
-
-    // Build iframes
-    const iframes = terminals
-      .map((t, i) => {
-        const wsUrl = t.cmd
-          ? `${baseWsUrl}/term?cmd=${encodeURIComponent(t.cmd)}`
-          : `${baseWsUrl}/term`;
-        const src = `/terminal?${new URLSearchParams({
-          ...(t.cmd ? { cmd: t.cmd } : {}),
-          testId: t.testId,
-          title: t.title,
-        }).toString()}`;
-        return `<iframe name="term-${i}" data-pane-index="${i}" src="${src}" style="grid-area: p${i}; border: none; width: 100%; height: 100%; min-height: 0; min-width: 0;"></iframe>`;
-      })
-      .join("\n  ");
+    // Compute the addPanel ordering from the grid layout
+    const effectiveGrid = grid ?? [panes.map((_, i) => i)];
+    const addOrder = gridToAddPanelOrder(effectiveGrid, panes.length);
+    const addOrderJson = JSON.stringify(addOrder);
 
     return `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
+<script src="/static/dockview.js"><\/script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: #1e1e1e;
-    overflow: hidden;
-    height: 100vh;
-    display: grid;
-    grid-template-areas: ${gridTemplateAreas};
-    grid-template-rows: ${gridTemplateRows};
-    grid-template-columns: ${gridTemplateCols};
-    align-items: stretch;
-    justify-items: stretch;
-    gap: 1px;
+  html, body { height: 100%; overflow: hidden; background: #1e1e1e; }
+  #dockview-root { width: 100%; height: 100%; }
+  iframe { border: none; width: 100%; height: 100%; }
+
+  /* Dark theme overrides for dockview */
+  :root {
+    --dv-group-view-background-color: #1e1e1e;
+    --dv-tabs-and-actions-container-background-color: #252526;
+    --dv-activegroup-visiblepanel-tab-background-color: #1e1e1e;
+    --dv-activegroup-hiddenpanel-tab-background-color: #2d2d2d;
+    --dv-activegroup-visiblepanel-tab-color: #ffffff;
+    --dv-activegroup-hiddenpanel-tab-color: #969696;
+    --dv-inactivegroup-visiblepanel-tab-background-color: #2d2d2d;
+    --dv-inactivegroup-hiddenpanel-tab-background-color: #2d2d2d;
+    --dv-inactivegroup-visiblepanel-tab-color: #cccccc;
+    --dv-inactivegroup-hiddenpanel-tab-color: #969696;
+    --dv-separator-border: #3e3e3e;
+    --dv-paneview-header-border-color: #3e3e3e;
   }
-  iframe { border: none; width: 100%; height: 100%; min-height: 0; min-width: 0; }
 </style></head><body>
-  ${iframes}
+  <div id="dockview-root"></div>
+  <script>
+    var dv = window["dockview-core"];
+    var paneData = ${paneDataJson};
+    var addOrder = ${addOrderJson};
+    var panelMap = {};
+
+    var component = new dv.DockviewComponent(document.getElementById('dockview-root'), {
+      createComponent: function(options) {
+        var el = document.createElement('div');
+        el.style.height = '100%';
+        el.style.width = '100%';
+        el.style.overflow = 'hidden';
+        return {
+          element: el,
+          init: function(params) {
+            var p = params.params || {};
+            var iframe = document.createElement('iframe');
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            iframe.style.border = 'none';
+            iframe.name = p.iframeName || '';
+            if (p.src) iframe.src = p.src;
+            el.appendChild(iframe);
+          },
+        };
+      },
+      defaultRenderer: 'always',
+      disableFloatingGroups: true,
+    });
+
+    // Add panels in the computed order
+    for (var i = 0; i < addOrder.length; i++) {
+      var entry = addOrder[i];
+      var pane = paneData[entry.index];
+      var panelOpts = {
+        id: 'panel-' + entry.index,
+        component: 'iframe',
+        title: pane.title,
+        params: {
+          iframeName: 'term-' + entry.index,
+          src: pane.type === 'browser' ? pane.url : pane.src,
+        },
+      };
+      if (entry.position) {
+        panelOpts.position = entry.position;
+      }
+      var panel = component.api.addPanel(panelOpts);
+      panelMap['panel-' + entry.index] = panel;
+    }
+
+    // Listen for title updates from terminal iframes via postMessage
+    window.addEventListener('message', function(ev) {
+      if (!ev.data || ev.data.type !== 'b2v-title') return;
+      var testId = ev.data.testId;
+      var newTitle = ev.data.title;
+      // Find the panel whose iframe matches this testId
+      for (var pi = 0; pi < paneData.length; pi++) {
+        if (paneData[pi].testId === testId) {
+          var p = panelMap['panel-' + pi];
+          if (p && p.api) p.api.updateParameters({ title: newTitle });
+          if (p) p.setTitle(newTitle);
+          break;
+        }
+      }
+    });
+
+    // Dynamic tab management API for Playwright
+    var tabCounter = paneData.length;
+
+    window.__b2v_addTab = function(config) {
+      var idx = tabCounter++;
+      var testId = config.testId || ('xterm-dyn-' + idx);
+      var title = config.title || 'Shell';
+      var src = '/terminal?' + new URLSearchParams(
+        Object.assign({ testId: testId, title: title }, config.cmd ? { cmd: config.cmd } : {})
+      ).toString();
+      var iframeName = 'term-' + idx;
+      var refPanel = config.referencePanel || null;
+      var panelOpts = {
+        id: 'panel-' + idx,
+        component: 'iframe',
+        title: title,
+        params: { iframeName: iframeName, src: src },
+      };
+      if (refPanel) {
+        panelOpts.position = { referencePanel: refPanel, direction: 'within' };
+      }
+      var panel = component.api.addPanel(panelOpts);
+      panelMap['panel-' + idx] = panel;
+      paneData.push({ type: 'terminal', src: src, testId: testId, title: title, index: idx });
+      return { panelId: 'panel-' + idx, iframeName: iframeName, testId: testId };
+    };
+
+    window.__b2v_closeTab = function(panelId) {
+      var panel = panelMap[panelId];
+      if (panel) {
+        component.api.removePanel(panel);
+        delete panelMap[panelId];
+      }
+    };
+
+    window.__b2v_dockview = component;
+  <\/script>
 </body></html>`;
   };
 }
