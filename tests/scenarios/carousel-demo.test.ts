@@ -170,29 +170,24 @@ async function scenario() {
   try { fs.unlinkSync(path.join(fixtureDir, "package-lock.json")); } catch {}
 
   const session = await createSession({
-    layout: [[0, 1], [0, 2]],
     narration: { enabled: true },
   });
   const { step } = session;
 
-  // Grid [[0,1],[0,2]] — cell size 640x360, total 1280x720
-  // Pane 0: browser preview (left column, spans 2 rows = 640x720)
-  const { page, actor: browser } = await session.openPage({
-    viewport: { width: 640, height: 720 },
-    label: "Preview",
-  });
-
-  // Pane 1: work terminal (right-top, 1 cell = 640x360)
-  const editor = await session.createTerminal(undefined, {
-    viewport: { width: 640, height: 360 },
-    label: "Editor",
-  });
-
-  // Pane 2: dev server terminal (right-bottom, 1 cell = 640x360)
-  const server = await session.createTerminal(undefined, {
-    viewport: { width: 640, height: 360 },
-    label: "Dev Server",
-  });
+  // Dockview grid: browser (left, 2 rows), editor (top-right), dev server (bottom-right)
+  const grid = await session.createGrid(
+    [
+      { url: "about:blank", label: "Preview" },
+      { label: "Editor" },
+      { label: "Dev Server" },
+    ],
+    {
+      viewport: { width: 1280, height: 720 },
+      grid: [[0, 1], [0, 2]],
+    },
+  );
+  const [, editor, server] = grid.actors;
+  const gridPage = grid.page;
 
   // Navigate terminals to the fixture directory
   await editor.typeAndEnter(`cd ${fixtureDir}`);
@@ -237,12 +232,16 @@ async function scenario() {
   const portMatch = serverText.match(/localhost:(\d+)/);
   const port = portMatch ? portMatch[1] : "5173";
 
+  // Navigate the browser iframe to the dev server
+  const browserFrame = gridPage.frame("term-0");
+  if (!browserFrame) throw new Error("Browser iframe 'term-0' not found");
+
   await step(
     "Open in browser",
     "Our app is running with a placeholder. Let's open the component file and start building.",
     async () => {
-      await browser.goto(`http://localhost:${port}`);
-      await page.waitForSelector("h1", { timeout: 15000 });
+      await browserFrame.goto(`http://localhost:${port}`);
+      await browserFrame.waitForSelector("h1", { timeout: 15000 });
     },
   );
 
@@ -312,7 +311,7 @@ async function scenario() {
     "Let's try it out. We click the arrows to navigate between slides. The transitions are smooth thanks to Tailwind. We can also click the dots to jump to any slide directly. And that's it: a fully working image carousel in about 40 lines of React and Tailwind CSS.",
     async () => {
       // Click next arrow several times
-      const nextBtn = page.locator("button:has-text('›')");
+      const nextBtn = browserFrame.locator("button:has-text('›')");
       if ((await nextBtn.count()) > 0) {
         for (let i = 0; i < 3; i++) {
           await nextBtn.first().click();
@@ -320,7 +319,7 @@ async function scenario() {
         }
       }
       // Click dots to jump
-      const allBtns = page.locator("button");
+      const allBtns = browserFrame.locator("button");
       const dotCount = await allBtns.count();
       if (dotCount > 4) {
         // Dots are the last buttons (after prev/next)

@@ -20,7 +20,8 @@
     "run:github-mobile": "node tests/scenarios/github-mobile.test.ts",
     "run:tui-terminals": "node tests/scenarios/tui-terminals.test.ts",
     "run:console-logs": "node tests/scenarios/console-logs.test.ts",
-    "gen:docs": "node scripts/gen-docs.ts"
+    "gen:docs": "node scripts/gen-docs.ts",
+    "gen:video-page": "node scripts/gen-video-page.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

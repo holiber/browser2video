@@ -17,7 +17,7 @@
 //  Session API (primary)
 // ---------------------------------------------------------------------------
 
-export { createSession, Session } from "./session.ts";
+export { createSession, Session, type GridHandle } from "./session.ts";
 
 // ---------------------------------------------------------------------------
 //  Actor (cursor, clicks, typing, scrolling, drawing)

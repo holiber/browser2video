@@ -1,7 +1,8 @@
 /**
  * Interactive shell terminals with TUI apps (htop, mc) running inside
  * in-browser xterm panes connected to real PTYs.
- * All terminals share a single CSS grid page (no ffmpeg composition needed).
+ * All terminals share a single dockview grid page (no ffmpeg composition needed).
+ * Demonstrates dynamic tab creation and closure.
  */
 import { fileURLToPath } from "url";
 import { createSession } from "browser2video";
@@ -10,25 +11,25 @@ async function scenario() {
   const session = await createSession();
   const { step } = session;
 
-  const [mc, htop, shell] = await session.createTerminalGrid(
+  const grid = await session.createGrid(
     [
       { command: "mc", label: "Midnight Commander" },
       { command: "htop", label: "htop" },
-      { label: "Shell" },
+      { label: "Shell", allowAddTab: true },
     ],
     {
       viewport: { width: 1280, height: 720 },
       grid: [[0, 2], [1, 2]], // mc top-left, htop bottom-left, shell spans right column
     },
   );
+  const [mc, htop, shell] = grid.actors;
 
   await step("Open terminals", async () => {
     await mc.waitForText(["1Help"], 30000);
-    await htop.waitForText(["CPU"], 30000);
+    await htop.waitForText(["PID"], 30000);
   });
 
   await step("Browse files in mc", async () => {
-    // Keyboard-only navigation (independent of terminal row count)
     for (let i = 0; i < 4; i++) await mc.pressKey("ArrowDown");
     await mc.pressKey("ArrowUp");
     await mc.pressKey("ArrowUp");
@@ -41,11 +42,9 @@ async function scenario() {
   });
 
   await step("Enter a directory", async () => {
-    // Navigate to the first directory entry and enter it
     await mc.pressKey("Home");
     await mc.pressKey("ArrowDown");
     await mc.pressKey("Enter");
-    // Navigate back up via ".."
     await mc.pressKey("Home");
     await mc.pressKey("Enter");
   });
@@ -76,6 +75,25 @@ async function scenario() {
     await shell.pressKey("Escape");
     await shell.typeAndEnter(":q!");
     await shell.waitForPrompt();
+  });
+
+  // Dynamic tab management: click "+" to add a tab, run a command, close it
+  let newTab: Awaited<ReturnType<typeof grid.addTab>>;
+
+  await step("Add a new shell tab", async () => {
+    await shell.click('[data-testid="b2v-add-tab"]');
+    await grid.page.waitForTimeout(300);
+    newTab = await grid.wrapLatestTab();
+    await newTab.waitForPrompt();
+  });
+
+  await step("Run command in new tab", async () => {
+    await newTab.typeAndEnter('echo "hello world"');
+    await newTab.waitForPrompt();
+  });
+
+  await step("Close the new tab", async () => {
+    await shell.click('.b2v-closable .dv-default-tab-action');
   });
 
   await session.finish();

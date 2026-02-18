@@ -31,7 +31,7 @@ import {
   mixAudioIntoVideo,
   type NarrationOptions,
 } from "./narrator.ts";
-import { startTerminalWsServer, type TerminalServer } from "./terminal-ws-server.ts";
+import { startTerminalWsServer, type TerminalServer, type GridPaneConfig } from "./terminal-ws-server.ts";
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -85,6 +85,29 @@ function resolveCallerFilename(): string {
 
 function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+}
+
+// ---------------------------------------------------------------------------
+//  Grid handle for dynamic tab management
+// ---------------------------------------------------------------------------
+
+export interface GridHandle {
+  /** Terminal/browser actors for the initial panes, in the same order as the input config */
+  actors: TerminalActor[];
+  /** The Playwright page rendering the dockview grid */
+  page: Page;
+  /** Add a new terminal tab (optionally inside an existing group) */
+  addTab: (opts: {
+    command?: string;
+    label?: string;
+    testId?: string;
+    /** Panel ID to add the tab into (as a sibling tab in the same group) */
+    referencePanel?: string;
+  }) => Promise<TerminalActor>;
+  /** Wrap the most recently added tab (e.g. created by clicking "+") into an actor */
+  wrapLatestTab: () => Promise<TerminalActor>;
+  /** Close a dynamically added tab. PTY cleanup is automatic (WebSocket closes). */
+  closeTab: (actor: TerminalActor) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -655,17 +678,18 @@ export class Session {
   }
 
   // -----------------------------------------------------------------------
-  //  Public: createTerminalGrid — multiple terminals in one CSS grid page
+  //  Public: createTerminalGrid — multiple terminals in one dockview page
   // -----------------------------------------------------------------------
 
   /**
-   * Create multiple terminal panes arranged in a CSS grid on a single page.
-   * Each terminal runs in its own iframe for keyboard isolation.
-   * Only ONE video is recorded (the grid page), so no ffmpeg composition
-   * is needed for terminal-only scenarios.
+   * Create multiple panes (terminals and/or browser pages) arranged in a
+   * dockview grid on a single Playwright page. Each pane runs in its own
+   * iframe for isolation. Only ONE video is recorded (the grid page).
+   *
+   * Returns a `GridHandle` with the actors and dynamic tab management methods.
    *
    * ```ts
-   * const [mc, htop, shell] = await session.createTerminalGrid(
+   * const grid = await session.createGrid(
    *   [
    *     { command: "mc", label: "Midnight Commander" },
    *     { command: "htop", label: "htop" },
@@ -673,18 +697,48 @@ export class Session {
    *   ],
    *   { viewport: { width: 1280, height: 720 }, grid: [[0, 2], [1, 2]] },
    * );
+   * const [mc, htop, shell] = grid.actors;
    * ```
    */
   async createTerminalGrid(
     terminals: Array<{
       command?: string;
       label?: string;
+      /** When set, embeds a browser page at this URL instead of a terminal */
+      url?: string;
+      allowAddTab?: boolean;
     }>,
     opts?: {
       viewport?: { width: number; height: number };
       grid?: number[][];
     },
-  ): Promise<TerminalActor[]> {
+  ): Promise<TerminalActor[]>;
+  async createTerminalGrid(
+    terminals: Array<{
+      command?: string;
+      label?: string;
+      url?: string;
+      allowAddTab?: boolean;
+    }>,
+    opts: {
+      viewport?: { width: number; height: number };
+      grid?: number[][];
+    } | undefined,
+    _returnGrid: true,
+  ): Promise<GridHandle>;
+  async createTerminalGrid(
+    terminals: Array<{
+      command?: string;
+      label?: string;
+      url?: string;
+      allowAddTab?: boolean;
+    }>,
+    opts?: {
+      viewport?: { width: number; height: number };
+      grid?: number[][];
+    },
+    _returnGrid?: true,
+  ): Promise<TerminalActor[] | GridHandle> {
     if (!this.browser) throw new Error("Session not initialized. Use createSession().");
 
     // Lazy-start terminal WS server (singleton)
@@ -696,16 +750,27 @@ export class Session {
     const vpW = opts?.viewport?.width ?? 1280;
     const vpH = opts?.viewport?.height ?? 720;
 
-    // Build terminal configs
-    const termConfigs = terminals.map((t, i) => {
-      const idx = this.terminalCounter++;
-      const safeName = t.command
-        ? t.command.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 30)
-        : `shell-${idx}`;
-      const testId = `xterm-term-${safeName}`;
-      const label = t.label ?? t.command ?? `shell-${idx}`;
-      return { cmd: t.command, testId, title: label, safeName };
-    });
+    // Build pane configs (terminals and browser pages)
+    const paneConfigs: Array<{ type: "terminal" | "browser"; cmd?: string; testId: string; title: string; url?: string; allowAddTab?: boolean }> = [];
+    for (const t of terminals) {
+      if (t.url) {
+        const idx = this.terminalCounter++;
+        paneConfigs.push({
+          type: "browser",
+          testId: `browser-pane-${idx}`,
+          title: t.label ?? "Browser",
+          url: t.url,
+        });
+      } else {
+        const idx = this.terminalCounter++;
+        const safeName = t.command
+          ? t.command.replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 30)
+          : `shell-${idx}`;
+        const testId = `xterm-term-${safeName}`;
+        const label = t.label ?? t.command ?? `shell-${idx}`;
+        paneConfigs.push({ type: "terminal", cmd: t.command, testId, title: label, allowAddTab: t.allowAddTab });
+      }
+    }
 
     // Create a single pane for the grid page
     const id = `pane-${this.panes.size}`;
@@ -738,23 +803,22 @@ export class Session {
     if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
 
     // Build config parameter for the grid endpoint
-    const gridConfig = {
-      terminals: termConfigs.map((t) => ({
-        cmd: t.cmd,
-        testId: t.testId,
-        title: t.title,
-      })),
-      grid: opts?.grid,
-    };
+    const gridPanes: GridPaneConfig[] = paneConfigs.map((p) => {
+      if (p.type === "browser") {
+        return { type: "browser" as const, url: p.url!, title: p.title };
+      }
+      return { type: "terminal" as const, cmd: p.cmd, testId: p.testId, title: p.title, allowAddTab: p.allowAddTab };
+    });
+
+    const gridConfig = { panes: gridPanes, grid: opts?.grid, viewport: { width: vpW, height: vpH } };
     const gridUrl = new URL(`${this.terminalServer.baseHttpUrl}/terminal-grid`);
     gridUrl.searchParams.set("config", JSON.stringify(gridConfig));
     await page.goto(gridUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
 
-    // Wait for all iframes to load and their WebSocket connections to be established
-    for (let i = 0; i < termConfigs.length; i++) {
+    // Wait for all iframes to load
+    for (let i = 0; i < paneConfigs.length; i++) {
       const iframeName = `term-${i}`;
 
-      // Wait for the iframe element to appear in the DOM
       await page.waitForSelector(`iframe[name="${iframeName}"]`, { timeout: 10000 });
 
       // Wait for Playwright to recognise the frame (may lag behind DOM)
@@ -766,75 +830,90 @@ export class Session {
       }
       if (!frame) throw new Error(`Iframe '${iframeName}' not found in grid page`);
 
-      const selector = `[data-testid="${termConfigs[i].testId}"]`;
+      // Only wait for terminal-specific readiness (WS open, content rendered)
+      if (paneConfigs[i].type === "terminal") {
+        const selector = `[data-testid="${paneConfigs[i].testId}"]`;
 
-      // Wait for WS connection in this iframe
-      await frame.waitForFunction(
-        (sel: string) => {
-          const el = document.querySelector(sel) as any;
-          return String(el?.dataset?.b2vWsState ?? "") === "open";
-        },
-        selector,
-        { timeout: 15000 },
-      );
-
-      // Wait for initial content
-      const cmd = termConfigs[i].cmd;
-      if (!cmd) {
-        // Shell: wait for prompt
         await frame.waitForFunction(
           (sel: string) => {
-            const root = document.querySelector(sel);
-            if (!root) return false;
-            const rows = root.querySelector(".xterm-rows");
-            if (!rows) return false;
-            const text = rows.textContent ?? "";
-            return text.includes("$") || text.includes("#");
+            const el = document.querySelector(sel) as any;
+            return String(el?.dataset?.b2vWsState ?? "") === "open";
           },
           selector,
-          { timeout: 30000 },
+          { timeout: 15000 },
         );
+
+        const cmd = paneConfigs[i].cmd;
+        if (!cmd) {
+          await frame.waitForFunction(
+            (sel: string) => {
+              const root = document.querySelector(sel);
+              if (!root) return false;
+              const rows = root.querySelector(".xterm-rows");
+              if (!rows) return false;
+              const text = rows.textContent ?? "";
+              return text.includes("$") || text.includes("#");
+            },
+            selector,
+            { timeout: 30000 },
+          );
+        } else {
+          await frame.waitForFunction(
+            (sel: string) => {
+              const root = document.querySelector(sel);
+              if (!root) return false;
+              const rows = root.querySelector(".xterm-rows");
+              const text = String((rows as any)?.textContent ?? "").trim();
+              return text.length > 10;
+            },
+            selector,
+            { timeout: 30000 },
+          );
+        }
       } else {
-        // Command: wait for any rendered content
-        await frame.waitForFunction(
-          (sel: string) => {
-            const root = document.querySelector(sel);
-            if (!root) return false;
-            const rows = root.querySelector(".xterm-rows");
-            const text = String((rows as any)?.textContent ?? "").trim();
-            return text.length > 10;
-          },
-          selector,
-          { timeout: 30000 },
-        );
+        // Browser iframe: wait for some content to load
+        try {
+          await frame.waitForLoadState("domcontentloaded", { timeout: 15000 });
+        } catch {
+          // Non-critical: external page might block load detection
+        }
       }
     }
 
-    // Create TerminalActors — one per terminal, all sharing the same page
+    // Create actors — TerminalActors for terminals, Actors for browser panes
     const actors: TerminalActor[] = [];
-    for (let i = 0; i < termConfigs.length; i++) {
+    for (let i = 0; i < paneConfigs.length; i++) {
       const iframeName = `term-${i}`;
       const frame = page.frame(iframeName);
       if (!frame) throw new Error(`Iframe '${iframeName}' not found`);
 
-      const selector = `[data-testid="${termConfigs[i].testId}"]`;
-      const actor = new TerminalActor(page, this.mode, selector, {
-        delays: this.delays,
-        frame,
-        iframeName,
-      });
+      if (paneConfigs[i].type === "terminal") {
+        const selector = `[data-testid="${paneConfigs[i].testId}"]`;
+        const actor = new TerminalActor(page, this.mode, selector, {
+          delays: this.delays,
+          frame,
+          iframeName,
+        });
+        actors.push(actor);
+      } else {
+        // Browser pane: create a TerminalActor-compatible wrapper (limited but functional)
+        const actor = new TerminalActor(page, this.mode, "body", {
+          delays: this.delays,
+          frame,
+          iframeName,
+        });
+        actors.push(actor);
+      }
 
       // Human mode: inject cursor on the main page (shared)
       if (this.mode === "human" && i === 0) {
         page.on("framenavigated", (f) => {
           if (f === page.mainFrame()) {
-            actor.injectCursor().catch(() => {});
+            actors[0].injectCursor().catch(() => {});
           }
         });
-        await actor.injectCursor();
+        await actors[0].injectCursor();
       }
-
-      actors.push(actor);
     }
 
     // Register as a single pane for video recording
@@ -846,10 +925,147 @@ export class Session {
     this.paneOrder.push(id);
 
     if (this.record) {
-      console.error(`  Terminal grid started: ${termConfigs.length} terminals (${vpW}x${vpH})`);
+      console.error(`  Grid started: ${paneConfigs.length} panes (${vpW}x${vpH})`);
     }
 
+    // Build the GridHandle for dynamic tab management
+    const gridHandle: GridHandle = {
+      actors,
+      page,
+
+      addTab: async (tabOpts) => {
+        if (!this.terminalServer) throw new Error("Terminal server not running");
+        const result = await page.evaluate((cfg: any) => {
+          return (window as any).__b2v_addTab(cfg);
+        }, {
+          cmd: tabOpts.command,
+          title: tabOpts.label ?? tabOpts.command ?? "Shell",
+          testId: tabOpts.testId,
+          referencePanel: tabOpts.referencePanel,
+        });
+
+        const iframeName = result.iframeName as string;
+        const testId = result.testId as string;
+
+        // Wait for iframe to appear
+        let frame: import("playwright").Frame | null = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          frame = page.frame(iframeName);
+          if (frame) break;
+          await sleep(250);
+        }
+        if (!frame) throw new Error(`Dynamic tab iframe '${iframeName}' not found`);
+
+        const selector = `[data-testid="${testId}"]`;
+
+        // Wait for WS open
+        await frame.waitForFunction(
+          (sel: string) => {
+            const el = document.querySelector(sel) as any;
+            return String(el?.dataset?.b2vWsState ?? "") === "open";
+          },
+          selector,
+          { timeout: 15000 },
+        );
+
+        // Wait for prompt if it's a shell
+        if (!tabOpts.command) {
+          await frame.waitForFunction(
+            (sel: string) => {
+              const root = document.querySelector(sel);
+              if (!root) return false;
+              const rows = root.querySelector(".xterm-rows");
+              return (rows?.textContent ?? "").includes("$");
+            },
+            selector,
+            { timeout: 30000 },
+          );
+        }
+
+        const actor = new TerminalActor(page, this.mode, selector, {
+          delays: this.delays,
+          frame,
+          iframeName,
+        });
+        (actor as any)._panelId = result.panelId;
+        return actor;
+      },
+
+      wrapLatestTab: async () => {
+        // Find the last iframe (most recently added by "+" button or __b2v_addTab)
+        const info = await page.evaluate(() => {
+          const iframes = document.querySelectorAll('iframe');
+          const last = iframes[iframes.length - 1];
+          if (!last) return null;
+          // Find the panel ID from paneData
+          const paneData = (window as any).__b2v_paneData;
+          const lastPane = paneData ? paneData[paneData.length - 1] : null;
+          return {
+            iframeName: last.name,
+            testId: lastPane?.testId || '',
+            panelId: lastPane ? 'panel-' + lastPane.index : '',
+          };
+        });
+        if (!info) throw new Error("No iframe found to wrap");
+
+        let frame: import("playwright").Frame | null = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          frame = page.frame(info.iframeName);
+          if (frame) break;
+          await sleep(250);
+        }
+        if (!frame) throw new Error(`Iframe '${info.iframeName}' not found`);
+
+        const selector = `[data-testid="${info.testId}"]`;
+        await frame.waitForFunction(
+          (sel: string) => {
+            const el = document.querySelector(sel) as any;
+            return String(el?.dataset?.b2vWsState ?? "") === "open";
+          },
+          selector,
+          { timeout: 15000 },
+        );
+
+        const actor = new TerminalActor(page, this.mode, selector, {
+          delays: this.delays,
+          frame,
+          iframeName: info.iframeName,
+        });
+        (actor as any)._panelId = info.panelId;
+        return actor;
+      },
+
+      closeTab: async (actor) => {
+        const panelId = (actor as any)._panelId;
+        if (!panelId) throw new Error("Actor does not have a panel ID (not created via addTab)");
+        await page.evaluate((pid: string) => {
+          (window as any).__b2v_closeTab(pid);
+        }, panelId);
+        await sleep(100);
+      },
+    };
+
+    if (_returnGrid) return gridHandle;
     return actors;
+  }
+
+  /**
+   * Create a dockview grid with support for dynamic tab management.
+   * Shorthand for createTerminalGrid(..., ..., true).
+   */
+  async createGrid(
+    panes: Array<{
+      command?: string;
+      label?: string;
+      url?: string;
+      allowAddTab?: boolean;
+    }>,
+    opts?: {
+      viewport?: { width: number; height: number };
+      grid?: number[][];
+    },
+  ): Promise<GridHandle> {
+    return this.createTerminalGrid(panes, opts, true);
   }
 
   // -----------------------------------------------------------------------
