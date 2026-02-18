@@ -104,6 +104,8 @@ export interface GridHandle {
     /** Panel ID to add the tab into (as a sibling tab in the same group) */
     referencePanel?: string;
   }) => Promise<TerminalActor>;
+  /** Wrap the most recently added tab (e.g. created by clicking "+") into an actor */
+  wrapLatestTab: () => Promise<TerminalActor>;
   /** Close a dynamically added tab. PTY cleanup is automatic (WebSocket closes). */
   closeTab: (actor: TerminalActor) => Promise<void>;
 }
@@ -704,6 +706,7 @@ export class Session {
       label?: string;
       /** When set, embeds a browser page at this URL instead of a terminal */
       url?: string;
+      allowAddTab?: boolean;
     }>,
     opts?: {
       viewport?: { width: number; height: number };
@@ -715,6 +718,7 @@ export class Session {
       command?: string;
       label?: string;
       url?: string;
+      allowAddTab?: boolean;
     }>,
     opts: {
       viewport?: { width: number; height: number };
@@ -727,6 +731,7 @@ export class Session {
       command?: string;
       label?: string;
       url?: string;
+      allowAddTab?: boolean;
     }>,
     opts?: {
       viewport?: { width: number; height: number };
@@ -746,7 +751,7 @@ export class Session {
     const vpH = opts?.viewport?.height ?? 720;
 
     // Build pane configs (terminals and browser pages)
-    const paneConfigs: Array<{ type: "terminal" | "browser"; cmd?: string; testId: string; title: string; url?: string }> = [];
+    const paneConfigs: Array<{ type: "terminal" | "browser"; cmd?: string; testId: string; title: string; url?: string; allowAddTab?: boolean }> = [];
     for (const t of terminals) {
       if (t.url) {
         const idx = this.terminalCounter++;
@@ -763,7 +768,7 @@ export class Session {
           : `shell-${idx}`;
         const testId = `xterm-term-${safeName}`;
         const label = t.label ?? t.command ?? `shell-${idx}`;
-        paneConfigs.push({ type: "terminal", cmd: t.command, testId, title: label });
+        paneConfigs.push({ type: "terminal", cmd: t.command, testId, title: label, allowAddTab: t.allowAddTab });
       }
     }
 
@@ -802,10 +807,10 @@ export class Session {
       if (p.type === "browser") {
         return { type: "browser" as const, url: p.url!, title: p.title };
       }
-      return { type: "terminal" as const, cmd: p.cmd, testId: p.testId, title: p.title };
+      return { type: "terminal" as const, cmd: p.cmd, testId: p.testId, title: p.title, allowAddTab: p.allowAddTab };
     });
 
-    const gridConfig = { panes: gridPanes, grid: opts?.grid };
+    const gridConfig = { panes: gridPanes, grid: opts?.grid, viewport: { width: vpW, height: vpH } };
     const gridUrl = new URL(`${this.terminalServer.baseHttpUrl}/terminal-grid`);
     gridUrl.searchParams.set("config", JSON.stringify(gridConfig));
     await page.goto(gridUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -986,6 +991,50 @@ export class Session {
         return actor;
       },
 
+      wrapLatestTab: async () => {
+        // Find the last iframe (most recently added by "+" button or __b2v_addTab)
+        const info = await page.evaluate(() => {
+          const iframes = document.querySelectorAll('iframe');
+          const last = iframes[iframes.length - 1];
+          if (!last) return null;
+          // Find the panel ID from paneData
+          const paneData = (window as any).__b2v_paneData;
+          const lastPane = paneData ? paneData[paneData.length - 1] : null;
+          return {
+            iframeName: last.name,
+            testId: lastPane?.testId || '',
+            panelId: lastPane ? 'panel-' + lastPane.index : '',
+          };
+        });
+        if (!info) throw new Error("No iframe found to wrap");
+
+        let frame: import("playwright").Frame | null = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          frame = page.frame(info.iframeName);
+          if (frame) break;
+          await sleep(250);
+        }
+        if (!frame) throw new Error(`Iframe '${info.iframeName}' not found`);
+
+        const selector = `[data-testid="${info.testId}"]`;
+        await frame.waitForFunction(
+          (sel: string) => {
+            const el = document.querySelector(sel) as any;
+            return String(el?.dataset?.b2vWsState ?? "") === "open";
+          },
+          selector,
+          { timeout: 15000 },
+        );
+
+        const actor = new TerminalActor(page, this.mode, selector, {
+          delays: this.delays,
+          frame,
+          iframeName: info.iframeName,
+        });
+        (actor as any)._panelId = info.panelId;
+        return actor;
+      },
+
       closeTab: async (actor) => {
         const panelId = (actor as any)._panelId;
         if (!panelId) throw new Error("Actor does not have a panel ID (not created via addTab)");
@@ -1009,6 +1058,7 @@ export class Session {
       command?: string;
       label?: string;
       url?: string;
+      allowAddTab?: boolean;
     }>,
     opts?: {
       viewport?: { width: number; height: number };

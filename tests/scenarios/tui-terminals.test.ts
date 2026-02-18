@@ -15,7 +15,7 @@ async function scenario() {
     [
       { command: "mc", label: "Midnight Commander" },
       { command: "htop", label: "htop" },
-      { label: "Shell" },
+      { label: "Shell", allowAddTab: true },
     ],
     {
       viewport: { width: 1280, height: 720 },
@@ -77,14 +77,13 @@ async function scenario() {
     await shell.waitForPrompt();
   });
 
-  // Dynamic tab management: add a new tab, run a command, close it
+  // Dynamic tab management: click "+" to add a tab, run a command, close it
   let newTab: Awaited<ReturnType<typeof grid.addTab>>;
 
   await step("Add a new shell tab", async () => {
-    newTab = await grid.addTab({
-      label: "New Shell",
-      referencePanel: "panel-2", // add as sibling tab in the Shell group
-    });
+    await shell.click('[data-testid="b2v-add-tab"]');
+    await grid.page.waitForTimeout(300);
+    newTab = await grid.wrapLatestTab();
     await newTab.waitForPrompt();
   });
 
@@ -94,7 +93,7 @@ async function scenario() {
   });
 
   await step("Close the new tab", async () => {
-    await grid.closeTab(newTab);
+    await shell.click('.b2v-closable .dv-default-tab-action');
   });
 
   await session.finish();

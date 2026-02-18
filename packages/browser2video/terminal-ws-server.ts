@@ -20,7 +20,7 @@ export type TerminalServer = {
 };
 
 export type GridPaneConfig =
-  | { type: "terminal"; cmd?: string; testId: string; title: string }
+  | { type: "terminal"; cmd?: string; testId: string; title: string; allowAddTab?: boolean }
   | { type: "browser"; url: string; title: string };
 
 function safeLocale(): string {
@@ -133,7 +133,7 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   }
 
   let _terminalPageHtml: ((wsUrl: string, testId: string, title: string) => string) | null = null;
-  let _terminalGridHtml: ((baseWsUrl: string, panes: GridPaneConfig[], grid?: number[][]) => string) | null = null;
+  let _terminalGridHtml: ((baseWsUrl: string, panes: GridPaneConfig[], grid?: number[][], viewport?: { width: number; height: number }) => string) | null = null;
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://localhost");
@@ -180,7 +180,7 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
         res.end("Missing config parameter");
         return;
       }
-      let config: { panes: GridPaneConfig[]; grid?: number[][] };
+      let config: { panes: GridPaneConfig[]; grid?: number[][]; viewport?: { width: number; height: number } };
       try {
         config = JSON.parse(decodeURIComponent(configParam));
       } catch {
@@ -194,7 +194,7 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
       }
       res.statusCode = 200;
       res.setHeader("content-type", "text/html; charset=utf-8");
-      res.end(_terminalGridHtml(baseWsUrl, config.panes, config.grid));
+      res.end(_terminalGridHtml(baseWsUrl, config.panes, config.grid, config.viewport));
       return;
     }
 
@@ -454,13 +454,18 @@ function buildXtermPageHtmlFn() {
  * Returns an ordered list of { index, position } where position is undefined
  * for the first panel, and { referencePanel, direction } for subsequent ones.
  */
-function gridToAddPanelOrder(grid: number[][], paneCount: number): Array<{
+function gridToAddPanelOrder(grid: number[][], paneCount: number, viewportW: number, viewportH: number): Array<{
   index: number;
   position?: { referencePanel: string; direction: string };
+  initialWidth?: number;
+  initialHeight?: number;
 }> {
+  const gridRows = grid.length;
+  const gridCols = Math.max(...grid.map((r) => r.length));
+
   // Find bounding box for each unique pane index
   const boxes = new Map<number, { minRow: number; maxRow: number; minCol: number; maxCol: number }>();
-  for (let r = 0; r < grid.length; r++) {
+  for (let r = 0; r < gridRows; r++) {
     for (let c = 0; c < grid[r].length; c++) {
       const idx = grid[r][c];
       const box = boxes.get(idx);
@@ -475,6 +480,9 @@ function gridToAddPanelOrder(grid: number[][], paneCount: number): Array<{
     }
   }
 
+  const cellW = Math.round(viewportW / gridCols);
+  const cellH = Math.round(viewportH / gridRows);
+
   // Sort panes by their top-left position (row-major)
   const indices = [...boxes.keys()].sort((a, b) => {
     const ba = boxes.get(a)!;
@@ -482,60 +490,91 @@ function gridToAddPanelOrder(grid: number[][], paneCount: number): Array<{
     return ba.minRow !== bb.minRow ? ba.minRow - bb.minRow : ba.minCol - bb.minCol;
   });
 
-  const result: Array<{ index: number; position?: { referencePanel: string; direction: string } }> = [];
+  const result: Array<{
+    index: number;
+    position?: { referencePanel: string; direction: string };
+    initialWidth?: number;
+    initialHeight?: number;
+  }> = [];
   const placed = new Set<number>();
 
   for (const idx of indices) {
     if (idx >= paneCount) continue;
+    const box = boxes.get(idx)!;
+    const spanCols = box.maxCol - box.minCol + 1;
+    const spanRows = box.maxRow - box.minRow + 1;
+    const targetW = spanCols * cellW;
+    const targetH = spanRows * cellH;
+
     if (placed.size === 0) {
       result.push({ index: idx });
       placed.add(idx);
       continue;
     }
 
-    const box = boxes.get(idx)!;
     let bestRef: number | undefined;
     let bestDir: string | undefined;
+    let bestScore = -1;
 
-    // Find an already-placed pane that is adjacent
+    // Find the placed panel with the best edge overlap for adjacency.
+    // Score = (edge overlap ratio) * (perpendicular span similarity).
+    // The perpendicular similarity breaks ties: e.g. for grid [[0,1],[0,2]],
+    // "below Pane 1" (col ranges match exactly) beats "right of Pane 0"
+    // (row ranges differ: 1 vs 2 rows).
     for (const placedIdx of placed) {
       const pBox = boxes.get(placedIdx)!;
-      // This pane is directly to the right of placedIdx
+      const refSpanRows = pBox.maxRow - pBox.minRow + 1;
+      const refSpanCols = pBox.maxCol - pBox.minCol + 1;
+      const candidates: Array<{ dir: string; score: number }> = [];
+
       if (box.minCol === pBox.maxCol + 1 && box.minRow <= pBox.maxRow && box.maxRow >= pBox.minRow) {
-        bestRef = placedIdx;
-        bestDir = "right";
-        break;
+        const overlap = Math.min(box.maxRow, pBox.maxRow) - Math.max(box.minRow, pBox.minRow) + 1;
+        const maxOverlap = box.maxRow - box.minRow + 1;
+        const perpSim = Math.min(spanRows, refSpanRows) / Math.max(spanRows, refSpanRows);
+        candidates.push({ dir: "right", score: (overlap / maxOverlap) * perpSim });
       }
-      // This pane is directly below placedIdx
       if (box.minRow === pBox.maxRow + 1 && box.minCol <= pBox.maxCol && box.maxCol >= pBox.minCol) {
-        bestRef = placedIdx;
-        bestDir = "below";
-        break;
+        const overlap = Math.min(box.maxCol, pBox.maxCol) - Math.max(box.minCol, pBox.minCol) + 1;
+        const maxOverlap = box.maxCol - box.minCol + 1;
+        const perpSim = Math.min(spanCols, refSpanCols) / Math.max(spanCols, refSpanCols);
+        candidates.push({ dir: "below", score: (overlap / maxOverlap) * perpSim });
       }
-      // This pane is directly to the left of placedIdx
       if (box.maxCol === pBox.minCol - 1 && box.minRow <= pBox.maxRow && box.maxRow >= pBox.minRow) {
-        bestRef = placedIdx;
-        bestDir = "left";
-        break;
+        const overlap = Math.min(box.maxRow, pBox.maxRow) - Math.max(box.minRow, pBox.minRow) + 1;
+        const maxOverlap = box.maxRow - box.minRow + 1;
+        const perpSim = Math.min(spanRows, refSpanRows) / Math.max(spanRows, refSpanRows);
+        candidates.push({ dir: "left", score: (overlap / maxOverlap) * perpSim });
       }
-      // This pane is directly above placedIdx
       if (box.maxRow === pBox.minRow - 1 && box.minCol <= pBox.maxCol && box.maxCol >= pBox.minCol) {
-        bestRef = placedIdx;
-        bestDir = "above";
-        break;
+        const overlap = Math.min(box.maxCol, pBox.maxCol) - Math.max(box.minCol, pBox.minCol) + 1;
+        const maxOverlap = box.maxCol - box.minCol + 1;
+        const perpSim = Math.min(spanCols, refSpanCols) / Math.max(spanCols, refSpanCols);
+        candidates.push({ dir: "above", score: (overlap / maxOverlap) * perpSim });
+      }
+
+      for (const c of candidates) {
+        if (c.score > bestScore) {
+          bestScore = c.score;
+          bestRef = placedIdx;
+          bestDir = c.dir;
+        }
       }
     }
+
+    const sizeForDirection = (dir: string) =>
+      dir === "right" || dir === "left" ? { initialWidth: targetW } : { initialHeight: targetH };
 
     if (bestRef !== undefined && bestDir) {
       result.push({
         index: idx,
         position: { referencePanel: `panel-${bestRef}`, direction: bestDir },
+        ...sizeForDirection(bestDir),
       });
     } else {
-      // Fallback: place to the right of the first panel
       result.push({
         index: idx,
         position: { referencePanel: `panel-${indices[0]}`, direction: "right" },
+        initialWidth: targetW,
       });
     }
     placed.add(idx);
@@ -549,7 +588,11 @@ function buildXtermGridPageHtmlFn() {
     baseWsUrl: string,
     panes: GridPaneConfig[],
     grid?: number[][],
+    viewport?: { width: number; height: number },
   ) => {
+    const vpW = viewport?.width ?? 1280;
+    const vpH = viewport?.height ?? 720;
+
     // Build pane data as JSON for the client-side script
     const paneDataJson = JSON.stringify(panes.map((p, i) => {
       if (p.type === "browser") {
@@ -560,12 +603,12 @@ function buildXtermGridPageHtmlFn() {
         testId: p.testId,
         title: p.title,
       }).toString()}`;
-      return { type: "terminal", src, testId: p.testId, title: p.title, index: i };
+      return { type: "terminal", src, testId: p.testId, title: p.title, index: i, allowAddTab: !!p.allowAddTab };
     }));
 
     // Compute the addPanel ordering from the grid layout
     const effectiveGrid = grid ?? [panes.map((_, i) => i)];
-    const addOrder = gridToAddPanelOrder(effectiveGrid, panes.length);
+    const addOrder = gridToAddPanelOrder(effectiveGrid, panes.length, vpW, vpH);
     const addOrderJson = JSON.stringify(addOrder);
 
     return `<!DOCTYPE html>
@@ -592,6 +635,17 @@ function buildXtermGridPageHtmlFn() {
     --dv-separator-border: #3e3e3e;
     --dv-paneview-header-border-color: #3e3e3e;
   }
+  /* Hide close button on all tabs by default */
+  .dv-default-tab .dv-default-tab-action { display: none !important; }
+  /* Show close button only on dynamically added (closable) tabs */
+  .dv-default-tab.b2v-closable .dv-default-tab-action { display: flex !important; }
+  /* "+" button styling */
+  .b2v-add-tab-btn {
+    background: none; border: 1px solid #555; color: #ccc; cursor: pointer;
+    width: 22px; height: 22px; border-radius: 4px; font-size: 16px; line-height: 1;
+    display: flex; align-items: center; justify-content: center; margin-right: 4px;
+  }
+  .b2v-add-tab-btn:hover { background: #3e3e3e; color: #fff; }
 </style></head><body>
   <div id="dockview-root"></div>
   <script>
@@ -599,6 +653,8 @@ function buildXtermGridPageHtmlFn() {
     var paneData = ${paneDataJson};
     var addOrder = ${addOrderJson};
     var panelMap = {};
+
+    var hasAddTabPanes = paneData.some(function(p) { return p.allowAddTab; });
 
     var component = new dv.DockviewComponent(document.getElementById('dockview-root'), {
       createComponent: function(options) {
@@ -620,8 +676,25 @@ function buildXtermGridPageHtmlFn() {
           },
         };
       },
+      createRightHeaderActionComponent: !hasAddTabPanes ? undefined : function(groupPanel) {
+        var el = document.createElement('div');
+        return {
+          element: el,
+          init: function(params) {
+            var grp = params.group || groupPanel;
+            // Track this group and show/hide "+" after all panels are placed
+            var groupId = grp.id;
+            if (!window.__b2v_addTabGroups) window.__b2v_addTabGroups = {};
+            window.__b2v_addTabGroups[groupId] = { el: el, group: grp };
+          },
+          dispose: function() { el.innerHTML = ''; },
+        };
+      },
       defaultRenderer: 'always',
+      singleTabMode: 'fullwidth',
       disableFloatingGroups: true,
+      locked: true,
+      disableDnd: true,
     });
 
     // Add panels in the computed order
@@ -637,11 +710,53 @@ function buildXtermGridPageHtmlFn() {
           src: pane.type === 'browser' ? pane.url : pane.src,
         },
       };
-      if (entry.position) {
-        panelOpts.position = entry.position;
-      }
+      if (entry.position) panelOpts.position = entry.position;
       var panel = component.api.addPanel(panelOpts);
       panelMap['panel-' + entry.index] = panel;
+    }
+
+    // Resize panels to their target dimensions after all are placed
+    for (var i = 0; i < addOrder.length; i++) {
+      var entry = addOrder[i];
+      var p = panelMap['panel-' + entry.index];
+      if (p && (entry.initialWidth || entry.initialHeight)) {
+        var sz = {};
+        if (entry.initialWidth) sz.width = entry.initialWidth;
+        if (entry.initialHeight) sz.height = entry.initialHeight;
+        p.api.setSize(sz);
+      }
+    }
+
+    // Lock all groups to prevent drops
+    for (var pid in panelMap) {
+      var grp = panelMap[pid].group;
+      if (grp && !grp.locked) grp.locked = 'no-drop-target';
+    }
+
+    // Create "+" buttons for groups that contain allowAddTab panels
+    if (hasAddTabPanes && window.__b2v_addTabGroups) {
+      for (var gid in window.__b2v_addTabGroups) {
+        var info = window.__b2v_addTabGroups[gid];
+        var grp = info.group;
+        var panels = grp.panels || [];
+        var showAdd = panels.some(function(p) {
+          var pd = paneData.find(function(d) { return 'panel-' + d.index === p.id; });
+          return pd && pd.allowAddTab;
+        });
+        if (!showAdd) continue;
+        (function(container, group) {
+          var btn = document.createElement('button');
+          btn.className = 'b2v-add-tab-btn';
+          btn.setAttribute('data-testid', 'b2v-add-tab');
+          btn.textContent = '+';
+          btn.onclick = function() {
+            var activePanel = group.activePanel;
+            var refId = activePanel ? activePanel.id : null;
+            window.__b2v_addTab({ referencePanel: refId });
+          };
+          container.appendChild(btn);
+        })(info.el, grp);
+      }
     }
 
     // Listen for title updates from terminal iframes via postMessage
@@ -684,6 +799,11 @@ function buildXtermGridPageHtmlFn() {
       var panel = component.api.addPanel(panelOpts);
       panelMap['panel-' + idx] = panel;
       paneData.push({ type: 'terminal', src: src, testId: testId, title: title, index: idx });
+      // Mark the new tab as closable via the panel's tab DOM element
+      try {
+        var tabEl = panel.view && panel.view.tab && panel.view.tab.element;
+        if (tabEl) tabEl.classList.add('b2v-closable');
+      } catch(e) {}
       return { panelId: 'panel-' + idx, iframeName: iframeName, testId: testId };
     };
 
@@ -696,6 +816,7 @@ function buildXtermGridPageHtmlFn() {
     };
 
     window.__b2v_dockview = component;
+    window.__b2v_paneData = paneData;
   <\/script>
 </body></html>`;
   };
