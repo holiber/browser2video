@@ -8,7 +8,7 @@ const WS_URL = `ws://${window.location.host}/ws`;
 
 export default function App() {
   const { state, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts } = usePlayer(WS_URL);
-  const { scenario, scenarioFiles, stepStates, screenshots, activeStep, liveFrame, connected, error, stepDurations, stepHasAudio, viewMode, paneLayout, videoPath, importing, importResult } = state;
+  const { scenario, scenarioFiles, stepStates, screenshots, activeStep, liveFrame, liveFrames, connected, error, stepDurations, stepHasAudio, viewMode, paneLayout, videoPath, importing, importResult } = state;
 
   const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
   const activeCaption = activeStep >= 0 && scenario ? scenario.steps[activeStep]?.caption : undefined;
@@ -48,6 +48,7 @@ export default function App() {
               <Preview
                 screenshot={activeScreenshot}
                 liveFrame={liveFrame}
+                liveFrames={liveFrames}
                 activeStep={activeStep}
                 stepCaption={activeCaption}
                 viewMode={viewMode}

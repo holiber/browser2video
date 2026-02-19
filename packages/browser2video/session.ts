@@ -1125,14 +1125,21 @@ export class Session {
 
   /**
    * Retrieve the live layout info for use by the player's embedded preview.
-   * Returns the terminal-ws-server URL, grid config, and the first pane's page URL.
+   * Returns per-pane metadata, layout mode, terminal server URL, and grid config.
    */
   getLayoutInfo(): {
+    panes: Array<{ id: string; type: "browser" | "terminal"; label: string }>;
+    layout: LayoutConfig;
     terminalServerUrl?: string;
     gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number } };
     pageUrl?: string;
     viewport: { width: number; height: number };
   } {
+    const paneList = [...this.panes.values()].map((p) => ({
+      id: p.id,
+      type: p.type,
+      label: p.label,
+    }));
     let pageUrl: string | undefined;
     try {
       const firstPane = this.panes.size > 0 ? [...this.panes.values()][0] : undefined;
@@ -1140,6 +1147,8 @@ export class Session {
       if (url && url !== "about:blank") pageUrl = url;
     } catch { /* page may be closed */ }
     return {
+      panes: paneList,
+      layout: this.layout,
       terminalServerUrl: this.terminalServer?.baseHttpUrl,
       gridConfig: this.lastGridConfig ?? undefined,
       pageUrl,

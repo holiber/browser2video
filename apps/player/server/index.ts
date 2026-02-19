@@ -76,7 +76,7 @@ type ServerMsg =
   | { type: "error"; message: string }
   | { type: "status"; loaded: boolean; executedUpTo: number }
   | { type: "scenarioFiles"; files: string[] }
-  | { type: "liveFrame"; data: string }
+  | { type: "liveFrame"; data: string; paneId?: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
   | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared" }
@@ -302,7 +302,7 @@ wss.on("connection", (ws) => {
           const descriptor = await loadScenarioDescriptor(msg.file);
           executor = new Executor(descriptor, { projectRoot: PROJECT_ROOT });
           executor.viewMode = currentViewMode;
-          executor.onLiveFrame = (data) => send(ws, { type: "liveFrame", data });
+          executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
           executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
 
           const absPath = path.isAbsolute(msg.file) ? msg.file : path.resolve(PROJECT_ROOT, msg.file);
@@ -345,7 +345,7 @@ wss.on("connection", (ws) => {
           if (msg.index <= executor.lastExecutedIndex) {
             await executor.reset();
             executor.viewMode = currentViewMode;
-            executor.onLiveFrame = (data) => send(ws, { type: "liveFrame", data });
+            executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
             currentStepMetas = [];
           }
@@ -421,7 +421,7 @@ wss.on("connection", (ws) => {
           if (executor) {
             await executor.reset();
             executor.viewMode = currentViewMode;
-            executor.onLiveFrame = (data) => send(ws, { type: "liveFrame", data });
+            executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
             currentStepMetas = [];
           }

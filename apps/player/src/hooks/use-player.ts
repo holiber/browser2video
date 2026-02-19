@@ -14,6 +14,8 @@ export interface StepInfo {
 export type ViewMode = "live" | "video";
 
 export interface PaneLayoutInfo {
+  panes?: Array<{ id: string; type: "browser" | "terminal"; label: string }>;
+  layout?: string;
   terminalServerUrl?: string;
   gridConfig?: {
     panes: Array<{
@@ -41,6 +43,7 @@ export interface PlayerState {
   stepHasAudio: boolean[];
   activeStep: number;
   liveFrame: string | null;
+  liveFrames: Record<string, string>;
   paneLayout: PaneLayoutInfo | null;
   videoPath: string | null;
   viewMode: ViewMode;
@@ -56,7 +59,7 @@ type Action =
   | { type: "scenario"; name: string; steps: StepInfo[] }
   | { type: "stepStart"; index: number; fastForward: boolean }
   | { type: "stepComplete"; index: number; screenshot: string; mode: string; durationMs: number }
-  | { type: "liveFrame"; data: string }
+  | { type: "liveFrame"; data: string; paneId?: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
   | { type: "finished"; videoPath?: string }
   | { type: "error"; message: string }
@@ -77,6 +80,7 @@ const initial: PlayerState = {
   stepHasAudio: [],
   activeStep: -1,
   liveFrame: null,
+  liveFrames: {},
   paneLayout: null,
   videoPath: null,
   viewMode: "live",
@@ -102,6 +106,8 @@ function reducer(state: PlayerState, action: Action): PlayerState {
         stepDurations: action.steps.map(() => null),
         stepHasAudio: action.steps.map(() => false),
         activeStep: -1,
+        liveFrame: null,
+        liveFrames: {},
         paneLayout: null,
         videoPath: null,
         error: null,
@@ -139,14 +145,20 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       if (action.screenshot) screenshots[action.index] = action.screenshot;
       const stepDurations = [...state.stepDurations];
       if (action.durationMs) stepDurations[action.index] = action.durationMs;
-      return { ...state, stepStates, screenshots, stepDurations, activeStep: action.index, liveFrame: null };
+      return { ...state, stepStates, screenshots, stepDurations, activeStep: action.index, liveFrame: null, liveFrames: {} };
     }
-    case "liveFrame":
-      return { ...state, liveFrame: action.data };
+    case "liveFrame": {
+      const paneId = action.paneId ?? "pane-0";
+      return {
+        ...state,
+        liveFrame: action.data,
+        liveFrames: { ...state.liveFrames, [paneId]: action.data },
+      };
+    }
     case "paneLayout":
       return { ...state, paneLayout: action.layout };
     case "finished":
-      return { ...state, liveFrame: null, videoPath: action.videoPath ?? null, error: null };
+      return { ...state, liveFrame: null, liveFrames: {}, videoPath: action.videoPath ?? null, error: null };
     case "error":
       return { ...state, error: action.message };
     case "viewMode":
@@ -162,6 +174,7 @@ function reducer(state: PlayerState, action: Action): PlayerState {
         screenshots: state.scenario?.steps.map(() => null) ?? [],
         activeStep: -1,
         liveFrame: null,
+        liveFrames: {},
         paneLayout: null,
         videoPath: null,
         error: null,
@@ -210,7 +223,7 @@ export function usePlayer(wsUrl: string) {
             dispatch({ type: "stepComplete", index: msg.index, screenshot: msg.screenshot, mode: msg.mode, durationMs: msg.durationMs ?? 0 });
             break;
           case "liveFrame":
-            dispatch({ type: "liveFrame", data: msg.data });
+            dispatch({ type: "liveFrame", data: msg.data, paneId: msg.paneId });
             break;
           case "paneLayout":
             dispatch({ type: "paneLayout", layout: msg.layout });

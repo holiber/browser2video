@@ -18,6 +18,8 @@ import type { GridPaneConfig } from "browser2video/terminal";
 export type ViewMode = "live" | "video";
 
 export interface PaneLayoutInfo {
+  panes?: Array<{ id: string; type: "browser" | "terminal"; label: string }>;
+  layout?: string;
   terminalServerUrl?: string;
   gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number } };
   pageUrl?: string;
@@ -38,11 +40,11 @@ export class Executor<T = any> {
   private descriptor: ScenarioDescriptor<T>;
   private sessionOpts: Partial<SessionOptions>;
   private projectRoot: string | null;
-  private cdpSession: any = null;
+  private cdpSessions: Map<string, any> = new Map();
   private lastVideoPath: string | null = null;
 
   viewMode: ViewMode = "live";
-  onLiveFrame: ((data: string) => void) | null = null;
+  onLiveFrame: ((data: string, paneId?: string) => void) | null = null;
   onPaneLayout: ((layout: PaneLayoutInfo) => void) | null = null;
 
   constructor(descriptor: ScenarioDescriptor<T>, opts?: { sessionOpts?: Partial<SessionOptions>; projectRoot?: string }) {
@@ -95,7 +97,8 @@ export class Executor<T = any> {
           const layout = this.session.getLayoutInfo();
           const hasGrid = !!layout.gridConfig;
           const hasTermSrv = !!layout.terminalServerUrl;
-          console.error(`[executor] paneLayout: grid=${hasGrid} termSrv=${hasTermSrv} pageUrl=${layout.pageUrl ?? "none"}`);
+          const paneCount = layout.panes?.length ?? 0;
+          console.error(`[executor] paneLayout: panes=${paneCount} layout=${JSON.stringify(layout.layout)} grid=${hasGrid} termSrv=${hasTermSrv} pageUrl=${layout.pageUrl ?? "none"}`);
           this.onPaneLayout?.(layout);
         } catch (err) {
           console.error("[executor] Failed to get layout info:", err);
@@ -113,40 +116,46 @@ export class Executor<T = any> {
   }
 
   private async startScreencast(): Promise<void> {
-    const page = this.getActivePage();
-    if (!page || !this.onLiveFrame) return;
+    if (!this.session || !this.onLiveFrame) return;
 
-    try {
-      this.cdpSession = await page.context().newCDPSession(page);
-      const callback = this.onLiveFrame;
+    const panes: Map<string, any> = (this.session as any).panes;
+    if (!panes || panes.size === 0) return;
 
-      this.cdpSession.on("Page.screencastFrame", (params: any) => {
-        callback(params.data);
-        this.cdpSession?.send("Page.screencastFrameAck", {
-          sessionId: params.sessionId,
-        }).catch(() => {});
-      });
+    const callback = this.onLiveFrame;
+    for (const [, pane] of panes) {
+      const paneId = pane.id as string;
+      try {
+        const cdp = await pane.page.context().newCDPSession(pane.page);
 
-      await this.cdpSession.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: 70,
-        maxWidth: 1280,
-        maxHeight: 960,
-        everyNthFrame: 2,
-      });
-    } catch (err) {
-      console.error("[executor] Failed to start screencast:", err);
+        cdp.on("Page.screencastFrame", (params: any) => {
+          callback(params.data, paneId);
+          cdp.send("Page.screencastFrameAck", {
+            sessionId: params.sessionId,
+          }).catch(() => {});
+        });
+
+        await cdp.send("Page.startScreencast", {
+          format: "jpeg",
+          quality: 70,
+          maxWidth: 1280,
+          maxHeight: 960,
+          everyNthFrame: 2,
+        });
+        this.cdpSessions.set(paneId, cdp);
+      } catch (err) {
+        console.error(`[executor] Failed to start screencast for ${paneId}:`, err);
+      }
     }
   }
 
   private async stopScreencast(): Promise<void> {
-    if (this.cdpSession) {
+    for (const [paneId, cdp] of this.cdpSessions) {
       try {
-        await this.cdpSession.send("Page.stopScreencast");
-        await this.cdpSession.detach();
+        await cdp.send("Page.stopScreencast");
+        await cdp.detach();
       } catch { /* already closed */ }
-      this.cdpSession = null;
     }
+    this.cdpSessions.clear();
   }
 
   private async executeStep(
@@ -165,23 +174,17 @@ export class Executor<T = any> {
     }
 
     const durationMs = Date.now() - t0;
-    const page = this.getActivePage();
     let screenshot = "";
-    if (page) {
-      const buf = await page.screenshot({ type: "png" });
-      screenshot = buf.toString("base64");
-    }
+    try {
+      const panes: Map<string, any> = (this.session as any).panes;
+      const firstPane = panes?.values().next().value;
+      if (firstPane?.page) {
+        const buf = await firstPane.page.screenshot({ type: "png" });
+        screenshot = buf.toString("base64");
+      }
+    } catch { /* page may be closed */ }
 
     return { screenshot, durationMs };
-  }
-
-  private getActivePage() {
-    if (!this.session) return null;
-    try {
-      return (this.session as any).panes?.values().next().value?.page ?? null;
-    } catch {
-      return null;
-    }
   }
 
   async runTo(

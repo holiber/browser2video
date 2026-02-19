@@ -34,21 +34,22 @@ export default defineScenario<Ctx>("TUI Terminals", (s) => {
     await htop.waitForText(["PID"], 30000);
   });
 
-  s.step("Browse files in mc", async ({ mc }) => {
-    for (let i = 0; i < 4; i++) await mc.pressKey("ArrowDown");
-    await mc.pressKey("ArrowUp");
-    await mc.pressKey("ArrowUp");
+  s.step("Click files in left panel", async ({ mc }) => {
+    await mc.click(0.15, 0.25);
+    await mc.click(0.15, 0.35);
+    await mc.click(0.15, 0.45);
+    await mc.click(0.15, 0.30);
   });
 
-  s.step("Switch panels and navigate", async ({ mc }) => {
-    await mc.pressKey("Tab");
-    for (let i = 0; i < 3; i++) await mc.pressKey("ArrowDown");
-    await mc.pressKey("Tab");
+  s.step("Click into right panel", async ({ mc }) => {
+    await mc.click(0.65, 0.25);
+    await mc.click(0.65, 0.35);
+    await mc.click(0.65, 0.45);
   });
 
-  s.step("Enter a directory", async ({ mc }) => {
-    await mc.pressKey("Home");
-    await mc.pressKey("ArrowDown");
+  s.step("Double-click to enter a directory", async ({ mc }) => {
+    await mc.click(0.15, 0.15);
+    await mc.click(0.15, 0.25);
     await mc.pressKey("Enter");
     await mc.pressKey("Home");
     await mc.pressKey("Enter");

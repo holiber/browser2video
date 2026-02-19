@@ -150,7 +150,7 @@ async function startStaticServer(root: string, preferredPort?: number, liveReloa
     ".svg": "image/svg+xml",
   };
 
-  const LIVE_RELOAD_SCRIPT = `<script>new EventSource("/__livereload").onmessage=()=>location.reload()</script>`;
+  const LIVE_RELOAD_SCRIPT = `<script>(function(){var es=new EventSource("/__livereload"),t=0;es.onmessage=function(){clearTimeout(t);t=setTimeout(function(){location.reload()},100)}})()</script>`;
 
   const sseClients = new Set<http.ServerResponse>();
 
@@ -207,7 +207,7 @@ async function startStaticServer(root: string, preferredPort?: number, liveReloa
         for (const client of sseClients) {
           client.write("data: reload\n\n");
         }
-      }, 100);
+      }, 500);
     });
   }
 
