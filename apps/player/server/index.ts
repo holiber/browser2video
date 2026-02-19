@@ -149,14 +149,15 @@ function proxyToVite(req: http.IncomingMessage, res: http.ServerResponse) {
   const proxyReq = http.request(
     { hostname: "localhost", port: VITE_PORT, path: req.url, method: req.method, headers: req.headers },
     (proxyRes) => {
+      proxyRes.on("error", () => { try { res.end(); } catch {} });
       res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
       proxyRes.pipe(res, { end: true });
     },
   );
   proxyReq.on("error", () => {
-    res.writeHead(502);
-    res.end("Vite dev server not ready");
+    try { res.writeHead(502); res.end("Vite dev server not ready"); } catch {}
   });
+  res.on("close", () => { proxyReq.destroy(); });
   req.pipe(proxyReq, { end: true });
 }
 
@@ -226,7 +227,10 @@ const httpServer = http.createServer((req, res) => {
       "content-length": stat.size,
       "cache-control": "no-cache",
     });
-    fs.createReadStream(videoPath).pipe(res);
+    const stream = fs.createReadStream(videoPath);
+    stream.on("error", () => { try { res.end(); } catch {} });
+    res.on("close", () => { stream.destroy(); });
+    stream.pipe(res);
     return;
   }
 
@@ -250,12 +254,16 @@ httpServer.on("upgrade", (req, socket, head) => {
       headers: req.headers,
     });
     proxyReq.on("upgrade", (proxyRes, proxySocket, proxyHead) => {
-      socket.write(
-        `HTTP/1.1 101 ${proxyRes.statusMessage}\r\n` +
-        Object.entries(proxyRes.headers).map(([k, v]) => `${k}: ${v}`).join("\r\n") +
-        "\r\n\r\n",
-      );
-      if (proxyHead.length) socket.write(proxyHead);
+      proxySocket.on("error", () => { socket.destroy(); });
+      socket.on("error", () => { proxySocket.destroy(); });
+      try {
+        socket.write(
+          `HTTP/1.1 101 ${proxyRes.statusMessage}\r\n` +
+          Object.entries(proxyRes.headers).map(([k, v]) => `${k}: ${v}`).join("\r\n") +
+          "\r\n\r\n",
+        );
+        if (proxyHead.length) socket.write(proxyHead);
+      } catch { socket.destroy(); proxySocket.destroy(); return; }
       proxySocket.pipe(socket);
       socket.pipe(proxySocket);
     });
@@ -535,4 +543,14 @@ process.on("SIGINT", async () => {
   if (executor) await executor.dispose();
   if (viteProcess) viteProcess.kill();
   process.exit(0);
+});
+
+process.on("uncaughtException", (err) => {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "ECONNRESET" || code === "EPIPE" || code === "ERR_STREAM_WRITE_AFTER_END") {
+    console.error("[player] Socket error (ignored):", err.message);
+    return;
+  }
+  console.error("[player] Uncaught exception:", err);
+  process.exit(1);
 });

@@ -85,6 +85,7 @@ export class Executor<T = any> {
           mode,
           record: mode === "human",
           narration: { enabled: true, realtime: true },
+          ...this.descriptor.sessionOpts,
           ...this.sessionOpts,
           headed: false,
         });

@@ -42,10 +42,13 @@ export interface ScenarioDescriptor<T = any> {
   name: string;
   setupFn: (session: Session) => Promise<T>;
   steps: StepDescriptor<T>[];
+  sessionOpts?: Partial<import("./types.ts").SessionOptions>;
 }
 
 export interface ScenarioBuilder<T> {
   setup(fn: (session: Session) => Promise<T>): void;
+  /** Declare session-level options (layout, narration, etc.) applied when creating the session. */
+  options(opts: Partial<import("./types.ts").SessionOptions>): void;
   step(caption: string, run: (ctx: T) => Promise<void>): void;
   step(caption: string, narration: string, run: (ctx: T) => Promise<void>): void;
 }
@@ -67,6 +70,9 @@ export function defineScenario<T>(
   const s: ScenarioBuilder<T> = {
     setup(fn) {
       descriptor.setupFn = fn;
+    },
+    options(opts) {
+      descriptor.sessionOpts = { ...descriptor.sessionOpts, ...opts };
     },
     step(
       caption: string,
@@ -113,6 +119,7 @@ export async function runScenario<T>(
 
   const session = await createSession({
     outputDir: defaultOutputDir,
+    ...descriptor.sessionOpts,
     ...opts,
   });
   const { step } = session;
