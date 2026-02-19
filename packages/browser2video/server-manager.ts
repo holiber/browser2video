@@ -132,9 +132,10 @@ async function startCommandServer(
   };
 }
 
-/** Start a static file server using a simple Node.js HTTP server. */
-async function startStaticServer(root: string, preferredPort?: number): Promise<ManagedServer> {
+/** Start a static file server with optional SSE-based live-reload. */
+async function startStaticServer(root: string, preferredPort?: number, liveReload = false): Promise<ManagedServer> {
   const http = await import("http");
+  const fs = await import("fs");
   const fsPromises = await import("fs/promises");
   const path = await import("path");
 
@@ -149,26 +150,74 @@ async function startStaticServer(root: string, preferredPort?: number): Promise<
     ".svg": "image/svg+xml",
   };
 
+  const LIVE_RELOAD_SCRIPT = `<script>new EventSource("/__livereload").onmessage=()=>location.reload()</script>`;
+
+  const sseClients = new Set<http.ServerResponse>();
+
   const server = http.createServer(async (req, res) => {
+    if (liveReload && req.url === "/__livereload") {
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      res.write("data: connected\n\n");
+      sseClients.add(res);
+      req.on("close", () => sseClients.delete(res));
+      return;
+    }
+
     let filePath = path.join(root, decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname));
     try {
       const stat = await fsPromises.stat(filePath);
       if (stat.isDirectory()) filePath = path.join(filePath, "index.html");
       const ext = path.extname(filePath);
-      res.setHeader("Content-Type", mimeTypes[ext] ?? "application/octet-stream");
-      const data = await fsPromises.readFile(filePath);
+      const contentType = mimeTypes[ext] ?? "application/octet-stream";
+      let data = await fsPromises.readFile(filePath);
+
+      if (liveReload && ext === ".html") {
+        const html = data.toString();
+        const injected = html.includes("</body>")
+          ? html.replace("</body>", `${LIVE_RELOAD_SCRIPT}</body>`)
+          : html + LIVE_RELOAD_SCRIPT;
+        data = Buffer.from(injected);
+      }
+
+      res.setHeader("Content-Type", contentType);
       res.end(data);
     } catch {
       res.statusCode = 404;
-      res.end("Not found");
+      if (liveReload) {
+        res.setHeader("Content-Type", "text/html");
+        res.end(`<!DOCTYPE html><html><body style="background:#1e1e1e;color:#888;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><p>Waiting for content\u2026</p>${LIVE_RELOAD_SCRIPT}</body></html>`);
+      } else {
+        res.end("Not found");
+      }
     }
   });
 
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
+
+  let watcher: fs.FSWatcher | null = null;
+  if (liveReload) {
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    watcher = fs.watch(root, { recursive: true }, () => {
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        for (const client of sseClients) {
+          client.write("data: reload\n\n");
+        }
+      }, 100);
+    });
+  }
+
   const baseURL = `http://localhost:${port}`;
   return {
     baseURL,
     stop: async () => {
+      watcher?.close();
+      for (const client of sseClients) client.end();
+      sseClients.clear();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
@@ -191,7 +240,7 @@ export async function startServer(config: ServerConfig | null | undefined): Prom
     case "command":
       return startCommandServer(config.cmd, config.port, config.readyPattern);
     case "static":
-      return startStaticServer(config.root, config.port);
+      return startStaticServer(config.root, config.port, config.liveReload);
     default:
       return null;
   }

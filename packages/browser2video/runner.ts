@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 export type RunScenarioResult = {
   code: number;
@@ -39,9 +40,27 @@ export function listScenarioFiles(dir: string): string[] {
 }
 
 function nodeTypeStripArgs(): string[] {
-  // Node >=22 supports type-stripping behind a flag on some versions.
-  // Passing it is safe for Node >=22 and makes TS execution reliable.
   return ["--experimental-strip-types", "--no-warnings"];
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SCENARIO_MODULE_PATH = path.resolve(__dirname, "scenario.ts");
+
+/**
+ * Build a wrapper script that imports the scenario file,
+ * detects whether it exports a ScenarioDescriptor (from defineScenario),
+ * and runs it via runScenario() if so — otherwise the file self-executes.
+ */
+function buildWrapperScript(absPath: string): string {
+  const esc = (p: string) => p.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+  return `
+    const mod = await import('${esc(absPath)}');
+    const def = mod.default ?? mod;
+    if (def && typeof def === 'object' && typeof def.setupFn === 'function' && Array.isArray(def.steps)) {
+      const { runScenario } = await import('${esc(SCENARIO_MODULE_PATH)}');
+      await runScenario(def);
+    }
+  `;
 }
 
 export async function runScenarioAsNodeTs(opts: {
@@ -62,10 +81,12 @@ export async function runScenarioAsNodeTs(opts: {
     env[k] = String(v);
   }
 
+  const wrapper = buildWrapperScript(abs);
+
   return await new Promise<RunScenarioResult>((resolve) => {
     const child = spawn(
       process.execPath,
-      [...nodeTypeStripArgs(), abs],
+      [...nodeTypeStripArgs(), "--input-type=module", "-e", wrapper],
       {
         cwd: opts.cwd,
         env,

@@ -11,26 +11,18 @@
  *
  * TTS narration is warmed up in a dedicated step before playback.
  */
-import { createSession, startServer, type Actor, type Page } from "browser2video";
+import { defineScenario, startServer, type Session, type Actor, type Page, type TerminalActor } from "browser2video";
 
-// ── Server setup ────────────────────────────────────────────────────────
-const server = await startServer({ type: "vite", root: "apps/demo" });
-if (!server) throw new Error("Failed to start Vite server");
+interface Ctx {
+  session: Session;
+  page: Page;
+  actor: Actor;
+  baseURL: string;
+  mc?: TerminalActor;
+  htop?: TerminalActor;
+  shell?: TerminalActor;
+}
 
-const session = await createSession({
-  record: true,
-  mode: "human",
-  narration: { enabled: true },
-});
-session.addCleanup(() => server.stop());
-
-const { step } = session;
-const { page, actor } = await session.openPage({
-  url: server.baseURL,
-  viewport: { width: 1060, height: 720 },
-});
-
-// ── Narration texts ─────────────────────────────────────────────────────
 const narrations = {
   intro: "Welcome to browser2video! This demo showcases every capability in one recording.",
   form: "First, we fill out a form with human-like typing and click behavior.",
@@ -48,12 +40,6 @@ const narrations = {
   summary: "That's everything! browser2video records all of this into a single composed video with subtitles and narration.",
 };
 
-// ── Warm up all narration audio ─────────────────────────────────────────
-await step("Warm up narration cache", async () => {
-  await Promise.all(Object.values(narrations).map((text) => session.audio.warmup(text)));
-});
-
-// ── Helpers ──────────────────────────────────────────────────────────────
 async function addKanbanCard(a: Actor, columnId: string, title: string) {
   await a.click(`[data-testid="add-card-btn-${columnId}"]`);
   await a.type(`[data-testid="add-card-input-${columnId}"]`, title);
@@ -72,30 +58,46 @@ async function dragKanbanCard(a: Actor, p: Page, cardTitle: string, toColumnId: 
   await a.drag(`[data-card-id="${cardId}"]`, `[data-testid="column-${toColumnId}"]`);
 }
 
-// ════════════════════════════════════════════════════════════════════════
-//  PART 1: Form, scroll, drag, graph, drawing
-// ════════════════════════════════════════════════════════════════════════
+export default defineScenario<Ctx>("All-in-One Demo", (s) => {
+  s.setup(async (session) => {
+    const server = await startServer({ type: "vite", root: "apps/demo" });
+    if (!server) throw new Error("Failed to start Vite server");
+    session.addCleanup(() => server.stop());
 
-  await step("Introduction", narrations.intro, async () => {
-    await actor.goto(`${server.baseURL}/`);
+    const { page, actor } = await session.openPage({
+      url: server.baseURL,
+      viewport: { width: 1060, height: 720 },
+    });
+
+    return { session, page, actor, baseURL: server.baseURL };
+  });
+
+  s.step("Warm up narration cache", async ({ session }) => {
+    await Promise.all(Object.values(narrations).map((text) => session.audio.warmup(text)));
+  });
+
+  // PART 1: Form, scroll, drag, graph, drawing
+
+  s.step("Introduction", narrations.intro, async ({ actor, baseURL }) => {
+    await actor.goto(`${baseURL}/`);
     await actor.waitFor('[data-testid="app-page"]');
   });
 
-  await step("Fill form fields", narrations.form, async () => {
+  s.step("Fill form fields", narrations.form, async ({ actor }) => {
     await actor.type('[data-testid="form-name"]', "Jane Doe");
     await actor.type('[data-testid="form-email"]', "jane@example.com");
     await actor.click('[data-testid="form-pref-updates"]');
     await actor.click('[data-testid="form-notifications"]');
   });
 
-  await step("Scroll and drag", narrations.scroll, async () => {
+  s.step("Scroll and drag", narrations.scroll, async ({ actor }) => {
     await actor.scroll(null, 800);
     await actor.scroll('[data-testid="scroll-area"]', 400);
     await actor.scroll(null, 400);
     await actor.drag('[data-testid="drag-item-task-1"]', '[data-testid="drag-item-task-3"]');
   });
 
-  await step("Connect nodes in graph", narrations.graph, async () => {
+  s.step("Connect nodes in graph", narrations.graph, async ({ actor }) => {
     await actor.scroll(null, 500);
     await actor.waitFor('[data-testid="flow-container"] .react-flow__node');
     await actor.drag(
@@ -108,7 +110,7 @@ async function dragKanbanCard(a: Actor, p: Page, cardTitle: string, toColumnId: 
     );
   });
 
-  await step("Draw shapes", narrations.draw, async () => {
+  s.step("Draw shapes", narrations.draw, async ({ actor }) => {
     await actor.scroll(null, 500);
     await actor.click('[data-testid="draw-tool-rectangle"]');
     await actor.draw('[data-testid="draw-canvas"]', [
@@ -125,73 +127,69 @@ async function dragKanbanCard(a: Actor, p: Page, cardTitle: string, toColumnId: 
     await actor.draw('[data-testid="draw-canvas"]', star);
   });
 
-  // ════════════════════════════════════════════════════════════════════════
-  //  PART 2: Console panel
-  // ════════════════════════════════════════════════════════════════════════
+  // PART 2: Console panel
 
-  await step("Open console panel", narrations.console, async () => {
-    await actor.goto(`${server.baseURL}/notes?role=boss&showConsole=true`);
+  s.step("Open console panel", narrations.console, async ({ actor, baseURL }) => {
+    await actor.goto(`${baseURL}/notes?role=boss&showConsole=true`);
     await actor.waitFor('[data-testid="notes-page"]');
     await actor.waitFor('[data-testid="console-panel"]');
   });
 
-  const consoleTasks = ["setup database", "write API routes"];
-  for (const t of consoleTasks) {
-    await step(`Add task: "${t}"`, async () => {
-      await actor.type('[data-testid="note-input"]', t);
-      await actor.click('[data-testid="note-add-btn"]');
-    });
-  }
+  s.step('Add task: "setup database"', async ({ actor }) => {
+    await actor.type('[data-testid="note-input"]', "setup database");
+    await actor.click('[data-testid="note-add-btn"]');
+  });
 
-  await step(`Complete: "${consoleTasks[0]}"`, async () => {
+  s.step('Add task: "write API routes"', async ({ actor }) => {
+    await actor.type('[data-testid="note-input"]', "write API routes");
+    await actor.click('[data-testid="note-add-btn"]');
+  });
+
+  s.step('Complete: "setup database"', async ({ actor, page }) => {
     const idx = await page.evaluate((title: string) => {
       const items = document.querySelectorAll('[data-testid^="note-title-"]');
       return Array.from(items).findIndex((el: any) => {
         const span = el?.querySelector?.("div > span") ?? el?.querySelector?.("span") ?? el;
         return String(span?.textContent ?? "").trim() === title;
       });
-    }, consoleTasks[0]);
+    }, "setup database");
     if (idx >= 0) await actor.click(`[data-testid="note-check-${idx}"]`);
   });
 
-  // ════════════════════════════════════════════════════════════════════════
-  //  PART 3: Kanban board
-  // ════════════════════════════════════════════════════════════════════════
+  // PART 3: Kanban board
 
-  await step("Open Kanban board", narrations.kanbanIntro, async () => {
-    await actor.goto(`${server.baseURL}/kanban`);
+  s.step("Open Kanban board", narrations.kanbanIntro, async ({ actor, baseURL }) => {
+    await actor.goto(`${baseURL}/kanban`);
     await actor.waitFor('[data-testid="kanban-board"]');
   });
 
-  await step("Create Kanban tasks", narrations.kanbanCreate, async () => {
+  s.step("Create Kanban tasks", narrations.kanbanCreate, async ({ actor }) => {
     await addKanbanCard(actor, "backlog", "Implement auth");
     await addKanbanCard(actor, "backlog", "Write tests");
   });
 
-  await step("Move tasks through columns", narrations.kanbanMove, async () => {
+  s.step("Move tasks through columns", narrations.kanbanMove, async ({ actor, page }) => {
     await dragKanbanCard(actor, page, "Implement auth", "in-progress");
     await dragKanbanCard(actor, page, "Implement auth", "code-review");
   });
 
-  await step("Complete tasks", narrations.kanbanDone, async () => {
+  s.step("Complete tasks", narrations.kanbanDone, async ({ actor, page }) => {
     await dragKanbanCard(actor, page, "Implement auth", "done");
     await dragKanbanCard(actor, page, "Implement auth", "released");
   });
 
-  // ════════════════════════════════════════════════════════════════════════
-  //  PART 4: TUI terminals
-  // ════════════════════════════════════════════════════════════════════════
+  // PART 4: TUI terminals
 
-  const mc = await session.createTerminal("mc", { label: "Midnight Commander" });
-  const _htop = await session.createTerminal("htop", { label: "htop" });
-  const shell = await session.createTerminal(undefined, { label: "Shell" });
-
-  await step("Open terminals", narrations.tuiIntro, async () => {
-    await mc.waitForText(["1Help"]);
-    await _htop.waitForText(["CPU"]);
+  s.step("Open terminals", narrations.tuiIntro, async (ctx) => {
+    ctx.mc = await ctx.session.createTerminal("mc", { label: "Midnight Commander" });
+    ctx.htop = await ctx.session.createTerminal("htop", { label: "htop" });
+    ctx.shell = await ctx.session.createTerminal(undefined, { label: "Shell" });
+    await ctx.mc.waitForText(["1Help"]);
+    await ctx.htop.waitForText(["CPU"]);
   });
 
-  await step("Navigate Midnight Commander", narrations.tuiMc, async () => {
+  s.step("Navigate Midnight Commander", narrations.tuiMc, async ({ mc }) => {
+    if (!mc) throw new Error("mc terminal not initialized");
     await mc.click(0.25, 0.25);
     for (let i = 0; i < 3; i++) await mc.pressKey("ArrowDown");
     await mc.pressKey("Tab");
@@ -199,7 +197,8 @@ async function dragKanbanCard(a: Actor, p: Page, cardTitle: string, toColumnId: 
     await mc.pressKey("Tab");
   });
 
-  await step("Use Vim in terminal", narrations.tuiVim, async () => {
+  s.step("Use Vim in terminal", narrations.tuiVim, async ({ shell }) => {
+    if (!shell) throw new Error("shell terminal not initialized");
     await shell.waitForPrompt();
     await shell.typeAndEnter("vim");
     await shell.waitForText(["~"], 10000);
@@ -209,14 +208,10 @@ async function dragKanbanCard(a: Actor, p: Page, cardTitle: string, toColumnId: 
     await shell.typeAndEnter(":q!");
   });
 
-  // ════════════════════════════════════════════════════════════════════════
-  //  SUMMARY
-  // ════════════════════════════════════════════════════════════════════════
+  // SUMMARY
 
-  await step("Summary", narrations.summary, async () => {
-    await actor.goto(`${server.baseURL}/`);
+  s.step("Summary", narrations.summary, async ({ actor, baseURL }) => {
+    await actor.goto(`${baseURL}/`);
     await actor.waitFor('[data-testid="app-page"]');
   });
-
-  const result = await session.finish();
-  console.log("Video:", result.video);
+});

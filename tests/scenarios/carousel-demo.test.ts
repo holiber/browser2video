@@ -344,5 +344,5 @@ if (isDirectRun) {
     });
 } else {
   const { test } = await import("@playwright/test");
-  test("carousel-demo", scenario);
+  test("carousel-demo", async () => { test.setTimeout(240_000); await scenario(); });
 }

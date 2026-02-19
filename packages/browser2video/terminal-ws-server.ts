@@ -133,7 +133,7 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   }
 
   let _terminalPageHtml: ((wsUrl: string, testId: string, title: string) => string) | null = null;
-  let _terminalGridHtml: ((baseWsUrl: string, panes: GridPaneConfig[], grid?: number[][], viewport?: { width: number; height: number }) => string) | null = null;
+  let _terminalGridHtml: ((baseWsUrl: string, panes: GridPaneConfig[], grid?: number[][], viewport?: { width: number; height: number }, mode?: string) => string) | null = null;
 
   const server = http.createServer((req, res) => {
     const u = new URL(req.url ?? "/", "http://localhost");
@@ -155,14 +155,17 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
     }
 
     if (u.pathname === "/terminal") {
-      // Serve standalone xterm.js terminal page
       const cmd = u.searchParams.get("cmd") || undefined;
       const testId = u.searchParams.get("testId") || "xterm-term-0";
       const title = u.searchParams.get("title") || cmd || "Shell";
+      const mode = u.searchParams.get("mode") || undefined;
       const baseWsUrl = `ws://localhost:${(server.address() as any)?.port ?? 0}`;
-      const wsUrl = cmd
-        ? `${baseWsUrl}/term?cmd=${encodeURIComponent(cmd)}`
-        : `${baseWsUrl}/term`;
+
+      const wsParams = new URLSearchParams();
+      if (mode !== "observe" && cmd) wsParams.set("cmd", cmd);
+      if (testId) wsParams.set("testId", testId);
+      if (mode) wsParams.set("mode", mode);
+      const wsUrl = `${baseWsUrl}/term?${wsParams.toString()}`;
 
       if (!_terminalPageHtml) {
         _terminalPageHtml = buildXtermPageHtmlFn();
@@ -189,12 +192,13 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
         return;
       }
       const baseWsUrl = `ws://localhost:${(server.address() as any)?.port ?? 0}`;
+      const mode = u.searchParams.get("mode") || undefined;
       if (!_terminalGridHtml) {
         _terminalGridHtml = buildXtermGridPageHtmlFn();
       }
       res.statusCode = 200;
       res.setHeader("content-type", "text/html; charset=utf-8");
-      res.end(_terminalGridHtml(baseWsUrl, config.panes, config.grid, config.viewport));
+      res.end(_terminalGridHtml(baseWsUrl, config.panes, config.grid, config.viewport, mode));
       return;
     }
 
@@ -207,24 +211,69 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder("utf-8");
 
-  function handleTerminalWs(ws: WebSocket, cmd: string | undefined) {
-    const label = cmd ?? "shell";
-    try {
-      ws.send(encoder.encode(`[b2v] connected: ${label}\r\n`));
-    } catch {
-      // ignore
+  // PTY registry for observer (multiplexed read-only) connections
+  interface PtyEntry {
+    pty: pty.IPty;
+    primaryWs: WebSocket | null;
+    clients: Set<WebSocket>;
+    outputBuffer: Uint8Array[];
+    totalBufferSize: number;
+  }
+  const ptyRegistry = new Map<string, PtyEntry>();
+  const MAX_BUFFER_SIZE = 1024 * 1024;
+
+  function handleTerminalWs(ws: WebSocket, cmd: string | undefined, testId?: string, mode?: string) {
+    const isObserver = mode === "observe";
+
+    if (isObserver && testId) {
+      const entry = ptyRegistry.get(testId);
+      if (!entry) {
+        try { ws.send(encoder.encode(`[b2v] PTY not found: ${testId}\r\n`)); } catch {}
+        ws.close();
+        return;
+      }
+
+      for (const chunk of entry.outputBuffer) {
+        try { ws.send(chunk); } catch {}
+      }
+      entry.clients.add(ws);
+
+      ws.on("close", () => {
+        entry.clients.delete(ws);
+        if (entry.clients.size === 0 && !entry.primaryWs) {
+          try { entry.pty.kill(); } catch {}
+          ptyRegistry.delete(testId);
+        }
+      });
+      ws.on("error", () => { entry.clients.delete(ws); });
+      return;
     }
 
-    // Start at 80x24 (matching xterm.js defaults) to avoid garbled initial
-    // output. The browser-side fitTerminal() will resize to the actual
-    // grid cell dimensions once the WebSocket is established.
+    // Primary mode — spawn a new PTY
+    const label = cmd ?? "shell";
+    try { ws.send(encoder.encode(`[b2v] connected: ${label}\r\n`)); } catch {}
+
     const p = spawnPty(cmd, 80, 24);
 
+    let entry: PtyEntry | undefined;
+    if (testId) {
+      entry = { pty: p, primaryWs: ws, clients: new Set([ws]), outputBuffer: [], totalBufferSize: 0 };
+      ptyRegistry.set(testId, entry);
+    }
+
     p.onData((data: string) => {
-      try {
-        ws.send(encoder.encode(data));
-      } catch {
-        // ignore send errors during teardown
+      const encoded = encoder.encode(data);
+      if (entry) {
+        entry.outputBuffer.push(encoded);
+        entry.totalBufferSize += encoded.byteLength;
+        while (entry.totalBufferSize > MAX_BUFFER_SIZE && entry.outputBuffer.length > 1) {
+          entry.totalBufferSize -= entry.outputBuffer.shift()!.byteLength;
+        }
+        for (const client of entry.clients) {
+          try { client.send(encoded); } catch {}
+        }
+      } else {
+        try { ws.send(encoded); } catch {}
       }
     });
 
@@ -253,34 +302,34 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
           p.write(decoder.decode(new Uint8Array(msg)));
           return;
         }
-
         if (Buffer.isBuffer(msg)) {
           p.write(decoder.decode(msg));
           return;
         }
-
         if (ArrayBuffer.isView(msg)) {
           p.write(decoder.decode(new Uint8Array(msg.buffer, msg.byteOffset, msg.byteLength)));
         }
-      } catch {
-        // ignore malformed input
-      }
+      } catch {}
     });
 
     ws.on("close", () => {
-      try {
-        p.kill();
-      } catch {
-        // ignore
+      if (entry) {
+        entry.primaryWs = null;
+        entry.clients.delete(ws);
+        if (entry.clients.size === 0) {
+          try { p.kill(); } catch {}
+          if (testId) ptyRegistry.delete(testId);
+        }
+      } else {
+        try { p.kill(); } catch {}
       }
     });
 
     ws.on("error", () => {
-      try {
-        p.kill();
-      } catch {
-        // ignore
+      if (entry) {
+        entry.clients.delete(ws);
       }
+      try { p.kill(); } catch {}
     });
   }
 
@@ -292,13 +341,13 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
         return;
       }
 
-      // Extract the command from the ?cmd= query parameter.
-      // No cmd means interactive shell.
       const cmd = u.searchParams.get("cmd") || undefined;
+      const testId = u.searchParams.get("testId") || undefined;
+      const mode = u.searchParams.get("mode") || undefined;
 
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit("connection", ws, req);
-        handleTerminalWs(ws, cmd);
+        handleTerminalWs(ws, cmd, testId, mode);
       });
     } catch {
       socket.destroy();
@@ -318,12 +367,12 @@ export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
     baseWsUrl,
     baseHttpUrl,
     close: async () => {
+      for (const [, entry] of ptyRegistry) {
+        try { entry.pty.kill(); } catch {}
+      }
+      ptyRegistry.clear();
       for (const client of wss.clients) {
-        try {
-          client.close();
-        } catch {
-          // ignore
-        }
+        try { client.close(); } catch {}
       }
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -355,11 +404,12 @@ function buildXtermPageHtmlFn() {
     var inIframe = window !== window.top;
     if (inIframe) document.getElementById('titlebar').classList.add('hidden');
 
+    var observeMode = new URLSearchParams(window.location.search).get('mode') === 'observe';
     var el = document.getElementById('term');
     var term = new Terminal({
-      convertEol: false, cursorBlink: true,
+      convertEol: false, cursorBlink: !observeMode,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-      fontSize: 13, lineHeight: 1.15, disableStdin: false,
+      fontSize: 13, lineHeight: 1.15, disableStdin: observeMode,
     });
     var fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
@@ -372,6 +422,7 @@ function buildXtermPageHtmlFn() {
     ws.binaryType = 'arraybuffer';
 
     function sendResize() {
+      if (observeMode) return;
       if (ws.readyState !== WebSocket.OPEN) return;
       ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     }
@@ -425,9 +476,11 @@ function buildXtermPageHtmlFn() {
     ws.onerror = function() { el.dataset.b2vWsState = 'error'; };
     ws.onclose = function(e) { el.dataset.b2vWsState = 'closed:' + (e.code || '?'); };
 
-    term.onData(function(data) {
-      if (ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
-    });
+    if (!observeMode) {
+      term.onData(function(data) {
+        if (ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
+      });
+    }
 
     term.onTitleChange(function(t) {
       if (!t) return;
@@ -589,21 +642,21 @@ function buildXtermGridPageHtmlFn() {
     panes: GridPaneConfig[],
     grid?: number[][],
     viewport?: { width: number; height: number },
+    mode?: string,
   ) => {
     const vpW = viewport?.width ?? 1280;
     const vpH = viewport?.height ?? 720;
+    const isObserve = mode === "observe";
 
-    // Build pane data as JSON for the client-side script
     const paneDataJson = JSON.stringify(panes.map((p, i) => {
       if (p.type === "browser") {
         return { type: "browser", url: p.url, title: p.title, index: i };
       }
-      const src = `/terminal?${new URLSearchParams({
-        ...(p.cmd ? { cmd: p.cmd } : {}),
-        testId: p.testId,
-        title: p.title,
-      }).toString()}`;
-      return { type: "terminal", src, testId: p.testId, title: p.title, index: i, allowAddTab: !!p.allowAddTab };
+      const params: Record<string, string> = { testId: p.testId, title: p.title };
+      if (!isObserve && p.cmd) params.cmd = p.cmd;
+      if (isObserve) params.mode = "observe";
+      const src = `/terminal?${new URLSearchParams(params).toString()}`;
+      return { type: "terminal", src, testId: p.testId, title: p.title, index: i, allowAddTab: !isObserve && !!p.allowAddTab };
     }));
 
     // Compute the addPanel ordering from the grid layout

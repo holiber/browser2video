@@ -27,6 +27,7 @@
   ],
   "exports": {
     ".": "./index.ts",
+    "./scenario": "./scenario.ts",
     "./terminal": "./terminal-ws-server.ts"
   },
   "bin": {

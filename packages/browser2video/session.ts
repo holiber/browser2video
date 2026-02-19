@@ -167,6 +167,7 @@ export class Session {
   private cleanupFns: Array<() => Promise<void> | void> = [];
   private terminalServer: TerminalServer | null = null;
   private terminalCounter = 0;
+  private lastGridConfig: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number } } | null = null;
 
   // Resolved options
   readonly mode: Mode;
@@ -811,6 +812,7 @@ export class Session {
     });
 
     const gridConfig = { panes: gridPanes, grid: opts?.grid, viewport: { width: vpW, height: vpH } };
+    this.lastGridConfig = gridConfig;
     const gridUrl = new URL(`${this.terminalServer.baseHttpUrl}/terminal-grid`);
     gridUrl.searchParams.set("config", JSON.stringify(gridConfig));
     await page.goto(gridUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -1119,6 +1121,30 @@ export class Session {
   /** Access the audio director for narration/sound effects. */
   get audio(): AudioDirectorAPI {
     return this.audioDirector;
+  }
+
+  /**
+   * Retrieve the live layout info for use by the player's embedded preview.
+   * Returns the terminal-ws-server URL, grid config, and the first pane's page URL.
+   */
+  getLayoutInfo(): {
+    terminalServerUrl?: string;
+    gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number } };
+    pageUrl?: string;
+    viewport: { width: number; height: number };
+  } {
+    let pageUrl: string | undefined;
+    try {
+      const firstPane = this.panes.size > 0 ? [...this.panes.values()][0] : undefined;
+      const url = firstPane?.page?.url();
+      if (url && url !== "about:blank") pageUrl = url;
+    } catch { /* page may be closed */ }
+    return {
+      terminalServerUrl: this.terminalServer?.baseHttpUrl,
+      gridConfig: this.lastGridConfig ?? undefined,
+      pageUrl,
+      viewport: this.lastGridConfig?.viewport ?? { width: 1280, height: 720 },
+    };
   }
 
   /**

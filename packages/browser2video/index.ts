@@ -20,6 +20,19 @@
 export { createSession, Session, type GridHandle } from "./session.ts";
 
 // ---------------------------------------------------------------------------
+//  Scenario builder (declarative step definitions for player / batch)
+// ---------------------------------------------------------------------------
+
+export {
+  defineScenario,
+  runScenario,
+  isScenarioDescriptor,
+  type ScenarioDescriptor,
+  type StepDescriptor,
+  type ScenarioBuilder,
+} from "./scenario.ts";
+
+// ---------------------------------------------------------------------------
 //  Actor (cursor, clicks, typing, scrolling, drawing)
 // ---------------------------------------------------------------------------
 
