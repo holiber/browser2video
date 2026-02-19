@@ -7,8 +7,8 @@ import { ScenarioPicker } from "./components/scenario-picker";
 const WS_URL = `ws://${window.location.host}/ws`;
 
 export default function App() {
-  const { state, loadScenario, runStep, runAll, reset, clearCache, setViewMode } = usePlayer(WS_URL);
-  const { scenario, scenarioFiles, stepStates, screenshots, activeStep, liveFrame, connected, error, stepDurations, stepHasAudio, viewMode, paneLayout, videoPath } = state;
+  const { state, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts } = usePlayer(WS_URL);
+  const { scenario, scenarioFiles, stepStates, screenshots, activeStep, liveFrame, connected, error, stepDurations, stepHasAudio, viewMode, paneLayout, videoPath, importing, importResult } = state;
 
   const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
   const activeCaption = activeStep >= 0 && scenario ? scenario.steps[activeStep]?.caption : undefined;
@@ -82,10 +82,14 @@ export default function App() {
           stepCount={scenario.steps.length}
           activeStep={activeStep}
           stepStates={stepStates}
+          importing={importing}
+          importResult={importResult}
           onRunStep={runStep}
           onRunAll={runAll}
           onReset={reset}
           onClearCache={clearCache}
+          onImportArtifacts={importArtifacts}
+          onDownloadArtifacts={downloadArtifacts}
         />
       )}
     </div>

@@ -54,6 +54,31 @@ export function Preview({
   const isRunning = stepState === "running" || stepState === "fast-forwarding";
   const observerUrl = useMemo(() => paneLayout ? buildObserverUrl(paneLayout) : null, [paneLayout]);
 
+  // Show cached video even when no steps have been run
+  if (viewMode === "video" && videoPath && activeStep < 0) {
+    const src = `/api/video?path=${encodeURIComponent(videoPath)}`;
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex-shrink-0 px-4 py-2 border-b border-zinc-800 flex items-center gap-3">
+          <span className="text-xs font-mono text-zinc-500">Cached video</span>
+          <span className="ml-auto flex items-center gap-1.5 text-xs text-blue-400">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            From cache / CI
+          </span>
+        </div>
+        <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+          <video
+            key={src}
+            src={src}
+            controls
+            autoPlay
+            className="max-w-full max-h-full rounded-lg border border-zinc-800 shadow-2xl"
+          />
+        </div>
+      </div>
+    );
+  }
+
   if (activeStep < 0) return idlePlaceholder;
 
   // --- Video mode ---

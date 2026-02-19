@@ -64,7 +64,9 @@ type ClientMsg =
   | { type: "reset" }
   | { type: "listScenarios" }
   | { type: "clearCache" }
-  | { type: "setViewMode"; mode: ViewMode };
+  | { type: "setViewMode"; mode: ViewMode }
+  | { type: "importArtifacts"; dir: string }
+  | { type: "downloadArtifacts"; runId?: string; artifactName?: string };
 
 type ServerMsg =
   | { type: "scenario"; name: string; steps: Array<{ caption: string; narration?: string }> }
@@ -76,9 +78,10 @@ type ServerMsg =
   | { type: "scenarioFiles"; files: string[] }
   | { type: "liveFrame"; data: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
-  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[] }
+  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared" }
-  | { type: "viewMode"; mode: ViewMode };
+  | { type: "viewMode"; mode: ViewMode }
+  | { type: "artifactsImported"; count: number; scenarios: string[] };
 
 function send(ws: WebSocket, msg: ServerMsg) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -312,6 +315,7 @@ wss.on("connection", (ws) => {
               screenshots: cached.screenshots,
               stepDurations: cached.stepDurations,
               stepHasAudio: cached.stepHasAudio,
+              videoPath: cached.videoPath,
             });
           } else {
             const hasAudio = executor.steps.map((s) => !!s.narration);
@@ -366,7 +370,18 @@ wss.on("connection", (ws) => {
             );
           }
           await executor.reset();
-          send(ws, { type: "finished", videoPath: executor.videoPath ?? undefined });
+          const videoPath = executor.videoPath ?? undefined;
+          if (videoPath && currentCacheDir) {
+            try {
+              cache.saveVideo(currentCacheDir, videoPath);
+              const subtitlesDir = path.dirname(videoPath);
+              const vttPath = path.join(subtitlesDir, "captions.vtt");
+              if (fs.existsSync(vttPath)) cache.saveSubtitles(currentCacheDir, vttPath);
+            } catch (err) {
+              console.error("[player] Failed to save video to cache:", err);
+            }
+          }
+          send(ws, { type: "finished", videoPath: videoPath ?? (currentCacheDir ? cache.getVideoPath(currentCacheDir) : null) ?? undefined });
           break;
         }
 
@@ -404,6 +419,64 @@ wss.on("connection", (ws) => {
           }
           send(ws, { type: "viewMode", mode: currentViewMode });
           send(ws, { type: "status", loaded: !!executor, executedUpTo: -1 });
+          break;
+        }
+
+        case "importArtifacts": {
+          const artifactsDir = path.isAbsolute(msg.dir) ? msg.dir : path.resolve(PROJECT_ROOT, msg.dir);
+          const scenarioFiles = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+          const imported = cache.importAllFromDir(artifactsDir, scenarioFiles);
+          const scenarios = [...imported.keys()];
+          console.error(`[player] Imported artifacts for ${imported.size} scenario(s): ${scenarios.join(", ")}`);
+          send(ws, { type: "artifactsImported", count: imported.size, scenarios });
+
+          if (currentScenarioFile && imported.has(currentScenarioFile) && executor) {
+            const absPath = path.isAbsolute(currentScenarioFile) ? currentScenarioFile : path.resolve(PROJECT_ROOT, currentScenarioFile);
+            const cached = cache.loadCachedData(absPath, currentScenarioFile, executor.stepCount);
+            if (cached) {
+              send(ws, {
+                type: "cachedData",
+                screenshots: cached.screenshots,
+                stepDurations: cached.stepDurations,
+                stepHasAudio: cached.stepHasAudio,
+                videoPath: cached.videoPath,
+              });
+            }
+          }
+          break;
+        }
+
+        case "downloadArtifacts": {
+          const scenarioFiles = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+          console.error(`[player] Downloading CI artifacts from GitHub...`);
+          send(ws, { type: "status", loaded: !!executor, executedUpTo: executor?.lastExecutedIndex ?? -1 });
+          try {
+            const { imported } = await cache.downloadFromGitHub(scenarioFiles, {
+              runId: msg.runId,
+              artifactName: msg.artifactName,
+            });
+            const scenarios = [...imported.keys()];
+            console.error(`[player] Downloaded and imported artifacts for ${imported.size} scenario(s)`);
+            send(ws, { type: "artifactsImported", count: imported.size, scenarios });
+
+            if (currentScenarioFile && imported.has(currentScenarioFile) && executor) {
+              const absPath = path.isAbsolute(currentScenarioFile) ? currentScenarioFile : path.resolve(PROJECT_ROOT, currentScenarioFile);
+              const cached = cache.loadCachedData(absPath, currentScenarioFile, executor.stepCount);
+              if (cached) {
+                send(ws, {
+                  type: "cachedData",
+                  screenshots: cached.screenshots,
+                  stepDurations: cached.stepDurations,
+                  stepHasAudio: cached.stepHasAudio,
+                  videoPath: cached.videoPath,
+                });
+              }
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error("[player] Download failed:", message);
+            send(ws, { type: "error", message: `Download failed: ${message}` });
+          }
           break;
         }
       }

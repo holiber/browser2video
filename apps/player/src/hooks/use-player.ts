@@ -45,6 +45,8 @@ export interface PlayerState {
   videoPath: string | null;
   viewMode: ViewMode;
   error: string | null;
+  importing: boolean;
+  importResult: { count: number; scenarios: string[] } | null;
 }
 
 type Action =
@@ -59,9 +61,11 @@ type Action =
   | { type: "finished"; videoPath?: string }
   | { type: "error"; message: string }
   | { type: "reset" }
-  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[] }
+  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared" }
-  | { type: "viewMode"; mode: ViewMode };
+  | { type: "viewMode"; mode: ViewMode }
+  | { type: "importStart" }
+  | { type: "artifactsImported"; count: number; scenarios: string[] };
 
 const initial: PlayerState = {
   connected: false,
@@ -77,6 +81,8 @@ const initial: PlayerState = {
   videoPath: null,
   viewMode: "live",
   error: null,
+  importing: false,
+  importResult: null,
 };
 
 function reducer(state: PlayerState, action: Action): PlayerState {
@@ -106,6 +112,7 @@ function reducer(state: PlayerState, action: Action): PlayerState {
         screenshots: action.screenshots.map((s, i) => s ?? state.screenshots[i] ?? null),
         stepDurations: action.stepDurations,
         stepHasAudio: action.stepHasAudio,
+        videoPath: action.videoPath ?? state.videoPath,
       };
     case "cacheCleared":
       return {
@@ -144,6 +151,10 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, error: action.message };
     case "viewMode":
       return { ...state, viewMode: action.mode };
+    case "importStart":
+      return { ...state, importing: true, importResult: null };
+    case "artifactsImported":
+      return { ...state, importing: false, importResult: { count: action.count, scenarios: action.scenarios } };
     case "reset":
       return {
         ...state,
@@ -187,7 +198,7 @@ export function usePlayer(wsUrl: string) {
             dispatch({ type: "scenario", name: msg.name, steps: msg.steps });
             break;
           case "cachedData":
-            dispatch({ type: "cachedData", screenshots: msg.screenshots, stepDurations: msg.stepDurations, stepHasAudio: msg.stepHasAudio });
+            dispatch({ type: "cachedData", screenshots: msg.screenshots, stepDurations: msg.stepDurations, stepHasAudio: msg.stepHasAudio, videoPath: msg.videoPath });
             break;
           case "cacheCleared":
             dispatch({ type: "cacheCleared" });
@@ -209,6 +220,9 @@ export function usePlayer(wsUrl: string) {
             break;
           case "viewMode":
             dispatch({ type: "viewMode", mode: msg.mode });
+            break;
+          case "artifactsImported":
+            dispatch({ type: "artifactsImported", count: msg.count, scenarios: msg.scenarios });
             break;
           case "error":
             dispatch({ type: "error", message: msg.message });
@@ -257,5 +271,15 @@ export function usePlayer(wsUrl: string) {
     sendMsg({ type: "setViewMode", mode });
   }, [sendMsg]);
 
-  return { state, loadScenario, runStep, runAll, reset, clearCache, setViewMode };
+  const importArtifacts = useCallback((dir: string) => {
+    dispatch({ type: "importStart" });
+    sendMsg({ type: "importArtifacts", dir });
+  }, [sendMsg]);
+
+  const downloadArtifacts = useCallback((runId?: string, artifactName?: string) => {
+    dispatch({ type: "importStart" });
+    sendMsg({ type: "downloadArtifacts", runId, artifactName });
+  }, [sendMsg]);
+
+  return { state, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts };
 }
