@@ -1,6 +1,6 @@
 # browser2video
 
-Record browser and terminal automation as smooth, narrated videos with subtitles and step metadata.
+Record browser and terminal automation as smooth, narrated videos (MP4 @ 60fps) with subtitles and step metadata.
 
 ## Requirements
 
@@ -8,32 +8,57 @@ Record browser and terminal automation as smooth, narrated videos with subtitles
 - **ffmpeg** in `PATH` (video composition and audio mixing)
 - `OPENAI_API_KEY` (optional; enables narration/TTS)
 
-## CLI (via npx)
+## Quick start
 
 ```bash
-npx -y b2v doctor
-npx -y b2v run tests/scenarios/basic-ui.test.ts --mode human --headed
+npm install browser2video
+npx b2v doctor
+```
+
+### Starter examples
+
+```bash
+npx b2v run node_modules/browser2video/examples/simple-browser.ts
+npx b2v run node_modules/browser2video/examples/terminal-echo.ts
+```
+
+### CLI
+
+```bash
+npx b2v run my-scenario.ts --mode human --headed
+npx b2v run my-scenario.ts --narrate --voice onyx
 ```
 
 ## Library usage
 
 ```ts
-import { createSession, startServer } from "browser2video";
-
-const server = await startServer({ type: "vite", root: "apps/demo" });
+import { createSession } from "browser2video";
 
 const session = await createSession({ mode: "human", record: true });
-session.addCleanup(() => server.stop());
-
 const { step } = session;
-const { actor } = await session.openPage({ url: server.baseURL });
+const { actor } = await session.openPage({ url: "https://example.com" });
 
-await step("Fill form", async () => {
-  await actor.type('[data-testid="name"]', "Jane Doe");
-  await actor.click('[data-testid="submit"]');
+await step("Click link", async () => {
+  await actor.click("a");
 });
 
-await session.finish(); // composes video + runs cleanup
+await session.finish();
+```
+
+### Terminal scenario
+
+```ts
+import { createSession } from "browser2video";
+
+const session = await createSession({ mode: "human", record: true });
+const shell = await session.createTerminal();
+
+await session.step("Run command", async () => {
+  await shell.typeAndEnter('echo "hello world"');
+  await shell.waitForPrompt();
+});
+
+await session.finish();
 ```
 
 ## MCP server (Cursor / OpenClaw)
@@ -47,12 +72,12 @@ b2v MCP provides interactive browser/terminal control with human-like interactio
   "mcpServers": {
     "b2v": {
       "command": "npx",
-      "args": ["-y", "b2v-mcp"],
+      "args": ["-y", "-p", "browser2video", "b2v-mcp"],
       "env": { "B2V_CDP_PORT": "9222" }
     },
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
+      "args": ["-y", "@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
     }
   }
 }
@@ -74,7 +99,7 @@ b2v MCP provides interactive browser/terminal control with human-like interactio
 Run pre-written scenario files as subprocesses:
 
 ```bash
-npx -y b2v-mcp  # starts the MCP server
+npx -y -p browser2video b2v-mcp  # starts the MCP server
 ```
 
 Tools: `b2v_run`, `b2v_list_scenarios`, `b2v_doctor`.

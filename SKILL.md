@@ -18,7 +18,7 @@ Configure both b2v and Playwright MCP in your `mcp.json`. b2v handles human-like
   "mcpServers": {
     "b2v": {
       "command": "npx",
-      "args": ["-y", "b2v-mcp"],
+      "args": ["-y", "-p", "browser2video", "b2v-mcp"],
       "env": { "B2V_CDP_PORT": "9222" }
     },
     "playwright": {

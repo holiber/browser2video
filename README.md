@@ -1,39 +1,59 @@
 # Browser2Video
 
-Record smooth browser automation videos (MP4 @ 60fps) with subtitles, narration, and step metadata.
+Record smooth browser and terminal automation videos (MP4 @ 60fps) with subtitles, narration, and step metadata.
 
-- **Modes**
-  - **human**: cursor overlay + click effects + natural pacing
-  - **fast**: no artificial delays, animations reduced where possible
-- **Recording**
-  - **screencast**: per-page CDP capture
-  - **screen**: OS/Xvfb capture (best for multi-window collab)
-  - **none**: run without video (still produces `captions.vtt` + `run.json`)
-- **Narration**
-  - OpenAI TTS with auto-translation to any language
-  - Realtime audio playback during scenario execution
-  - Cached translations and audio in `.cache/tts/`
+- **Modes**: `human` (cursor overlay, click effects, natural pacing) or `fast` (no delays)
+- **Recording**: per-page CDP screencast, OS/Xvfb capture, or headless
+- **Narration**: OpenAI TTS with auto-translation, realtime playback, cached in `.cache/tts/`
+- **Terminals**: Real PTY terminals (mc, htop, vim) with xterm.js rendering
+- **Multi-pane**: Dockview-based grid layout with titled panels and dynamic tabs
 
 ## Quick start
 
 ```bash
-pnpm install
-cp .env.example .env  # optional: enables narration if you add OPENAI_API_KEY
-node tests/scenarios/basic-ui.test.ts
+npm install browser2video
+npx b2v doctor  # check environment
 ```
 
-## Install / npx (published package)
+Create a scenario file `my-scenario.ts`:
 
-Requirements:
+```ts
+import { createSession } from "browser2video";
+
+const session = await createSession({ mode: "human", record: true });
+const { step } = session;
+const { actor } = await session.openPage({ url: "https://example.com" });
+
+await step("Open page", async () => {
+  await actor.waitFor("h1");
+});
+
+await step("Click the link", async () => {
+  await actor.click("a");
+});
+
+const result = await session.finish();
+console.log("Video:", result.video);
+```
+
+Run it:
+
+```bash
+npx b2v run my-scenario.ts --mode human --headed
+```
+
+### Requirements
 
 - **Node.js** >= 22
 - **ffmpeg** in `PATH` (for video composition / audio mixing)
 
-Run commands from your scenario project directory (your current working directory is used to resolve files):
+### Starter examples
+
+The package includes ready-to-run examples:
 
 ```bash
-npx -y b2v doctor
-npx -y b2v run tests/scenarios/basic-ui.test.ts --mode human --headed
+npx b2v run node_modules/browser2video/examples/simple-browser.ts
+npx b2v run node_modules/browser2video/examples/terminal-echo.ts
 ```
 
 ## Video examples
@@ -85,15 +105,14 @@ In-page console panel showing live log output during CRUD operations on a notes 
 ## CLI
 
 ```bash
-pnpm b2v run tests/scenarios/basic-ui.test.ts --mode human --headed
-pnpm b2v run tests/scenarios/collab.test.ts   --mode human --headed
-pnpm b2v run tests/scenarios/kanban.test.ts   --narrate --voice onyx --realtime-audio
+npx b2v run my-scenario.ts --mode human --headed
+npx b2v run my-scenario.ts --mode fast
 ```
 
 ### Narration options
 
 ```bash
-pnpm b2v run tests/scenarios/kanban.test.ts \
+npx b2v run my-scenario.ts \
   --narrate \
   --voice onyx \
   --narrate-speed 1.0 \
@@ -103,7 +122,7 @@ pnpm b2v run tests/scenarios/kanban.test.ts \
 Narration language can be set via environment variable:
 
 ```bash
-B2V_NARRATION_LANGUAGE=ru node tests/scenarios/kanban.test.ts
+B2V_NARRATION_LANGUAGE=ru npx b2v run my-scenario.ts
 ```
 
 ## MCP server (for AI agents)
@@ -121,12 +140,12 @@ Add to your `.cursor/mcp.json` (or equivalent MCP config):
   "mcpServers": {
     "b2v": {
       "command": "npx",
-      "args": ["-y", "b2v-mcp"],
+      "args": ["-y", "-p", "browser2video", "b2v-mcp"],
       "env": { "B2V_CDP_PORT": "9222" }
     },
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
+      "args": ["-y", "@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
     }
   }
 }
@@ -176,28 +195,25 @@ Add to your `.cursor/mcp.json` (or equivalent MCP config):
 - **CDP port conflict** -- if port 9222 is busy, set a different port via `B2V_CDP_PORT` env var in both `b2v` and `playwright` server configs.
 - **Session already running** -- call `b2v_finish` (or restart the MCP server) before starting a new session.
 
-## Docker (Linux screen recording)
-
-```bash
-pnpm e2e:collab:auto          # Native-first (Docker fallback)
-pnpm e2e:collab:docker        # Docker only
-B2V_DOCKER_PLATFORM=linux/amd64 pnpm e2e:collab:docker  # Specific platform
-```
-
 ## CI
 
 GitHub Actions runs two jobs on every PR and push to `main`:
-- **test-fast** -- all scenarios headless, no recording
-- **test-human** -- all scenarios in human mode with screencast recording
+- **test-fast-docker** — all scenarios in fast mode inside Docker (Linux)
+- **test-human** — all scenarios in human mode with screencast recording
 
 After merge to `main`, a deploy workflow records all scenarios and publishes videos to the [GH Pages video gallery](https://holiber.github.io/browser2video/videos/).
 
 ## Repo layout
 
 ```
+packages/browser2video/  Core library, CLI, MCP server (published as "browser2video")
+  examples/              Starter scenario scripts
+  bin/                   CLI and MCP shims
+  ops/                   MCP operation definitions
+  schemas/               Zod schemas
 apps/demo/               Vite + React demo app (target under test)
-packages/browser2video/  Core library, CLI, MCP server, schemas, terminal bridge
 tests/scenarios/         Scenario test files
+website/                 Docusaurus documentation site
 ```
 
 ## Architecture
@@ -235,7 +251,7 @@ const session = await createSession({
 | `record` | `boolean` | auto | Enable video recording |
 | `outputDir` | `string` | auto | Artifacts output directory |
 | `headed` | `boolean` | auto | Show browser window |
-| `layout` | `"auto"` \| `"row"` \| `"column"` \| `"grid"` \| `{ cols: N }` | `"auto"` | Multi-pane layout (auto = grid) |
+| `layout` | `LayoutConfig` | auto | Multi-pane grid layout via dockview |
 | `delays` | `Partial<ActorDelays>` | - | Override actor timing |
 | `ffmpegPath` | `string` | `"ffmpeg"` | Path to ffmpeg binary |
 | `narration` | `NarrationOptions` | - | TTS narration config |
@@ -263,6 +279,26 @@ await mc.click(0.25, 0.25);                          // click in mc
 await shell.typeAndEnter("ls -la");                   // run a command
 await shell.waitForPrompt();                          // wait until idle
 const output = await shell.readNew();                 // read new output
+```
+
+### `session.createGrid(panes, opts?): Promise<GridHandle>`
+
+Create a multi-pane dockview layout with terminals and browser iframes.
+
+```ts
+const grid = await session.createGrid(
+  [
+    { url: "http://localhost:3000", label: "Preview" },
+    { label: "Editor" },
+    { label: "Dev Server" },
+  ],
+  {
+    viewport: { width: 1280, height: 720 },
+    grid: [[0, 1], [0, 2]],  // Preview takes left column (2 rows)
+  },
+);
+
+const [browser, editor, server] = grid.actors;
 ```
 
 ### `session.step(caption, fn)` / `session.step(caption, narration, fn)`
@@ -329,6 +365,7 @@ The `Actor` provides human-like browser interactions:
 | `actor.moveCursorTo(x, y)` | Move the cursor overlay to coordinates |
 | `actor.goto(url)` | Navigate to a URL (auto-injects cursor) |
 | `actor.waitFor(selector)` | Wait for an element to appear |
+
 ### TerminalActor methods
 
 `session.createTerminal(cmd?, opts?)` returns a `TerminalActor` scoped to its terminal pane:
@@ -387,4 +424,21 @@ For advanced usage, Playwright types and launchers are re-exported:
 
 ```ts
 import { chromium, type Page, type Locator } from "browser2video";
+```
+
+---
+
+## Development (contributing)
+
+```bash
+git clone https://github.com/holiber/browser2video.git
+cd browser2video
+pnpm install
+npx playwright install --with-deps chromium
+
+# Run a scenario
+node tests/scenarios/basic-ui.test.ts
+
+# Typecheck
+pnpm typecheck
 ```

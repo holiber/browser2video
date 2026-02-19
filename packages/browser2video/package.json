@@ -38,6 +38,7 @@
     "*.ts",
     "ops/",
     "schemas/",
+    "examples/",
     "README.md",
     "LICENSE"
   ],
