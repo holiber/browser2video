@@ -3,6 +3,8 @@
  * Supports Vite, custom commands, static file servers, etc.
  */
 import type { ServerConfig } from "./types.ts";
+import type { ServerResponse } from "node:http";
+import type { FSWatcher } from "node:fs";
 import { spawn, type ChildProcess } from "child_process";
 import { createRequire } from "module";
 import net from "net";
@@ -134,10 +136,9 @@ async function startCommandServer(
 
 /** Start a static file server with optional SSE-based live-reload. */
 async function startStaticServer(root: string, preferredPort?: number, liveReload = false): Promise<ManagedServer> {
-  const http = await import("http");
-  const fs = await import("fs");
-  const fsPromises = await import("fs/promises");
-  const path = await import("path");
+  const http = await import("node:http");
+  const fs = await import("node:fs");
+  const fsPromises = await import("node:fs/promises");
 
   const port = preferredPort ?? await getFreePort();
 
@@ -152,7 +153,7 @@ async function startStaticServer(root: string, preferredPort?: number, liveReloa
 
   const LIVE_RELOAD_SCRIPT = `<script>(function(){var es=new EventSource("/__livereload"),t=0;es.onmessage=function(){clearTimeout(t);t=setTimeout(function(){location.reload()},100)}})()</script>`;
 
-  const sseClients = new Set<http.ServerResponse>();
+  const sseClients = new Set<ServerResponse>();
 
   const server = http.createServer(async (req, res) => {
     if (liveReload && req.url === "/__livereload") {
@@ -198,7 +199,7 @@ async function startStaticServer(root: string, preferredPort?: number, liveReloa
 
   await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
 
-  let watcher: fs.FSWatcher | null = null;
+  let watcher: FSWatcher | null = null;
   if (liveReload) {
     let debounce: ReturnType<typeof setTimeout> | null = null;
     watcher = fs.watch(root, { recursive: true }, () => {

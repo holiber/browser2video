@@ -3,16 +3,15 @@
  * Worker marks them completed. Both windows are synced via Automerge.
  */
 import path from "path";
-import { defineScenario, startServer, type Actor, type Page } from "browser2video";
+import { defineScenario, startServer, type Actor, type Page, type TerminalHandle } from "browser2video";
 import { startSyncServer } from "../../apps/demo/scripts/sync-server.ts";
-import type { TerminalActor } from "browser2video";
 
 interface Ctx {
   boss: Actor;
   worker: Actor;
   bossPage: Page;
   workerPage: Page;
-  reviewer: TerminalActor;
+  reviewer: TerminalHandle;
 }
 
 const TASKS = ["create schemas", "add new note", "edit note"];
