@@ -25,7 +25,7 @@ await step("Fill the form", async () => {
 });
 
 await session.finish();
-server.close();
+server.stop();
 ```
 
 See **[Video examples](/docs/examples)** for recorded demos.

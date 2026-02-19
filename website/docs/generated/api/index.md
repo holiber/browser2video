@@ -11,7 +11,7 @@ Auto-generated from the [`browser2video`](https://github.com/holiber/browser2vid
 
 - [`createSession`](./session#createsession) — Create a new recording session.
 - [`openPage`](./session#openpage) — Open a browser page.
-- [`openTerminal`](./session#openterminal) — Open a terminal pane.
+- [`createTerminal`](./session#createterminal) — Create a terminal pane.
 - [`step`](./session#step) — Execute a named step.
 - [`finish`](./session#finish) — Finish recording and compose the video.
 

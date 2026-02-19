@@ -72,26 +72,23 @@ const { page, actor } = await session.openPage({
 
 ---
 
-## `openTerminal`
+## `createTerminal`
 
-> Open a terminal pane.
+> Create a terminal pane.
 
-Opens a terminal rendered in a browser page with dark terminal styling. Runs an optional shell command and captures output. Returns a `TerminalHandle` for sending stdin commands and a `Page` for visual assertions.
+Creates a terminal rendered in a browser page with dark terminal styling. Runs an optional shell command and captures output. Returns a `TerminalActor` for interacting with the terminal.
 
 ### Parameters
 
 - `command` (`string`, optional) — Shell command to run.
-- `viewport` (`object`, optional) — Viewport dimensions. Default: 800x600.
-- `label` (`string`, optional) — Label shown in logs and subtitles.
+- `opts.label` (`string`, optional) — Label shown in panel title and subtitles.
 
 ### Examples
 
-**Open a terminal running htop**
+**Create a terminal running htop**
 
 ```ts
-const { terminal } = await session.openTerminal({
-  command: "htop",
-  viewport: { width: 800, height: 600 },
+const term = await session.createTerminal("htop", {
   label: "System Monitor",
 });
 ```

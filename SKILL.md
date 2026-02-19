@@ -23,7 +23,7 @@ Configure both b2v and Playwright MCP in your `mcp.json`. b2v handles human-like
     },
     "playwright": {
       "command": "npx",
-      "args": ["@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
+      "args": ["-y", "@playwright/mcp", "--cdp-endpoint", "http://localhost:9222"]
     }
   }
 }
@@ -230,14 +230,18 @@ Print environment diagnostics: Node.js, ffmpeg, platform.
 | `actor.goto(url)` | Navigate to a URL |
 | `actor.click(selector)` | Move cursor to element, show click effect, click |
 | `actor.clickAt(x, y)` | Click at coordinates |
+| `actor.clickLocator(locator)` | Click a Playwright Locator (moves cursor first) |
 | `actor.type(selector, text)` | Type text — auto-detects xterm.js terminals vs DOM inputs |
 | `actor.typeAndEnter(selector, text)` | Type text and press Enter |
 | `actor.pressKey(key)` | Press a keyboard key with a breathing pause |
-| `actor.select(selector, value)` | Open a `<select>` and pick an option |
+| `actor.selectOption(triggerSelector, valueText)` | Open a `<select>` and pick an option |
 | `actor.hover(selector)` | Move cursor to element |
 | `actor.selectText(from, to?)` | Select text by dragging between elements |
 | `actor.moveCursorTo(x, y)` | Smooth cursor move to coordinates |
 | `actor.drag(from, to)` | Drag from one selector to another |
+| `actor.scroll(selector, deltaY)` | Scroll within an element or the page |
+| `actor.draw(canvasSelector, points)` | Draw on a canvas (normalized 0-1 coordinates) |
+| `actor.circleAround(selector)` | Trace a spiral path around an element (for highlighting) |
 | `actor.waitFor(selector)` | Wait for an element to appear |
 | `session.createTerminal(cmd?, opts?)` | Create a terminal pane — returns a `TerminalActor` |
 

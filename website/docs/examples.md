@@ -45,7 +45,7 @@ await step("Explain Backlog column",
 // ... more steps ...
 
 await session.finish();
-server.close();
+server.stop();
 ```
 
 </details>
@@ -86,11 +86,10 @@ const worker = await session.openPage({
   label: "Worker",
 });
 
-const { terminal } = await session.openTerminal({
-  command: "node apps/demo/scripts/reviewer-cli.ts",
-  viewport: { width: 460, height: 720 },
-  label: "Reviewer",
-});
+const terminal = await session.createTerminal(
+  "node apps/demo/scripts/reviewer-cli.ts",
+  { label: "Reviewer" },
+);
 
 await step("Boss adds a task", async () => {
   await boss.actor.type('[data-testid="note-input"]', "Write tests");
@@ -149,7 +148,7 @@ await step("Draw on canvas", async () => {
 });
 
 await session.finish();
-server.close();
+server.stop();
 ```
 
 </details>
