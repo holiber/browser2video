@@ -7,8 +7,27 @@ import { ScenarioPicker } from "./components/scenario-picker";
 const WS_URL = `ws://${window.location.host}/ws`;
 
 export default function App() {
-  const { state, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts } = usePlayer(WS_URL);
-  const { scenario, scenarioFiles, stepStates, screenshots, activeStep, liveFrame, liveFrames, connected, error, stepDurations, stepHasAudio, viewMode, paneLayout, videoPath, importing, importResult } = state;
+  const { state, cursor, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent } = usePlayer(WS_URL);
+  const {
+    scenario,
+    scenarioFiles,
+    stepStates,
+    screenshots,
+    activeStep,
+    liveFrame,
+    liveFrames,
+    studioFrames,
+    connected,
+    error,
+    stepDurations,
+    stepHasAudio,
+    viewMode,
+    paneLayout,
+    terminalServerUrl,
+    videoPath,
+    importing,
+    importResult,
+  } = state;
 
   const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
   const activeCaption = activeStep >= 0 && scenario ? scenario.steps[activeStep]?.caption : undefined;
@@ -22,6 +41,7 @@ export default function App() {
         scenarioFiles={scenarioFiles}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+        onClearCache={clearCache}
       />
 
       {error && (
@@ -31,51 +51,48 @@ export default function App() {
       )}
 
       <div className="flex-1 flex overflow-hidden">
-        {scenario ? (
-          <>
-            <div className="w-72 border-r border-zinc-800 flex-shrink-0">
-              <StepGraph
-                steps={scenario.steps}
-                stepStates={stepStates}
-                screenshots={screenshots}
-                activeStep={activeStep}
-                stepDurations={stepDurations}
-                stepHasAudio={stepHasAudio}
-                onStepClick={runStep}
-              />
+        <div className="w-72 border-r border-zinc-800 flex-shrink-0">
+          {scenario ? (
+            <StepGraph
+              steps={scenario.steps}
+              stepStates={stepStates}
+              screenshots={screenshots}
+              activeStep={activeStep}
+              stepDurations={stepDurations}
+              stepHasAudio={stepHasAudio}
+              onStepClick={runStep}
+            />
+          ) : (
+            <div className="h-full flex items-center justify-center text-zinc-600 px-6">
+              <div className="text-center">
+                <h1 className="text-xl font-semibold text-zinc-400 mb-3">b2v Player Studio</h1>
+                <p className="text-xs leading-relaxed">
+                  Select a scenario to record and replay.
+                  <br />
+                  Or use the studio grid on the right to compose panes.
+                </p>
+              </div>
             </div>
-            <div className="flex-1">
-              <Preview
-                screenshot={activeScreenshot}
-                liveFrame={liveFrame}
-                liveFrames={liveFrames}
-                activeStep={activeStep}
-                stepCaption={activeCaption}
-                viewMode={viewMode}
-                stepState={activeStep >= 0 ? stepStates[activeStep] : undefined}
-                paneLayout={paneLayout}
-                videoPath={videoPath}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-zinc-600">
-            <div className="text-center max-w-md">
-              <h1 className="text-2xl font-bold text-zinc-400 mb-4">b2v Player</h1>
-              <p className="text-sm leading-relaxed">
-                Select a scenario file from the dropdown above to get started.
-                <br />
-                Scenarios use{" "}
-                <code className="text-blue-400">defineScenario()</code> format.
-              </p>
-              <p className="text-xs text-zinc-700 mt-4">
-                Steps run in human mode with full recording.
-                <br />
-                Click any step — previous steps fast-forward automatically.
-              </p>
-            </div>
-          </div>
-        )}
+          )}
+        </div>
+        <div className="flex-1">
+          <Preview
+            screenshot={activeScreenshot}
+            liveFrame={liveFrame}
+            liveFrames={liveFrames}
+            studioFrames={studioFrames}
+            activeStep={activeStep}
+            stepCaption={activeCaption}
+            viewMode={viewMode}
+            stepState={activeStep >= 0 ? stepStates[activeStep] : undefined}
+            paneLayout={paneLayout}
+            terminalServerUrl={terminalServerUrl}
+            showStudio={!scenario}
+            videoPath={videoPath}
+            cursor={cursor}
+            sendStudioEvent={sendStudioEvent}
+          />
+        </div>
       </div>
 
       {scenario && (

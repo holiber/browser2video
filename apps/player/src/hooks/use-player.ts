@@ -1,4 +1,4 @@
-import { useReducer, useEffect, useRef, useCallback } from "react";
+import { useReducer, useEffect, useRef, useCallback, useState } from "react";
 
 // ---------------------------------------------------------------------------
 //  Types
@@ -35,6 +35,7 @@ export interface PaneLayoutInfo {
 
 export interface PlayerState {
   connected: boolean;
+  terminalServerUrl: string | null;
   scenarioFiles: string[];
   scenario: { name: string; steps: StepInfo[] } | null;
   stepStates: StepState[];
@@ -44,6 +45,7 @@ export interface PlayerState {
   activeStep: number;
   liveFrame: string | null;
   liveFrames: Record<string, string>;
+  studioFrames: Record<string, string>;
   paneLayout: PaneLayoutInfo | null;
   videoPath: string | null;
   viewMode: ViewMode;
@@ -55,6 +57,7 @@ export interface PlayerState {
 type Action =
   | { type: "connected" }
   | { type: "disconnected" }
+  | { type: "studioReady"; terminalServerUrl: string }
   | { type: "scenarioFiles"; files: string[] }
   | { type: "scenario"; name: string; steps: StepInfo[] }
   | { type: "stepStart"; index: number; fastForward: boolean }
@@ -68,10 +71,12 @@ type Action =
   | { type: "cacheCleared" }
   | { type: "viewMode"; mode: ViewMode }
   | { type: "importStart" }
-  | { type: "artifactsImported"; count: number; scenarios: string[] };
+  | { type: "artifactsImported"; count: number; scenarios: string[] }
+  | { type: "studioFrame"; paneId: string; data: string };
 
 const initial: PlayerState = {
   connected: false,
+  terminalServerUrl: null,
   scenarioFiles: [],
   scenario: null,
   stepStates: [],
@@ -81,6 +86,7 @@ const initial: PlayerState = {
   activeStep: -1,
   liveFrame: null,
   liveFrames: {},
+  studioFrames: {},
   paneLayout: null,
   videoPath: null,
   viewMode: "live",
@@ -94,7 +100,9 @@ function reducer(state: PlayerState, action: Action): PlayerState {
     case "connected":
       return { ...state, connected: true, error: null };
     case "disconnected":
-      return { ...state, connected: false };
+      return { ...state, connected: false, terminalServerUrl: null };
+    case "studioReady":
+      return { ...state, terminalServerUrl: action.terminalServerUrl };
     case "scenarioFiles":
       return { ...state, scenarioFiles: action.files };
     case "scenario":
@@ -163,6 +171,8 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, error: action.message };
     case "viewMode":
       return { ...state, viewMode: action.mode };
+    case "studioFrame":
+      return { ...state, studioFrames: { ...state.studioFrames, [action.paneId]: action.data } };
     case "importStart":
       return { ...state, importing: true, importResult: null };
     case "artifactsImported":
@@ -188,9 +198,19 @@ function reducer(state: PlayerState, action: Action): PlayerState {
 //  Hook
 // ---------------------------------------------------------------------------
 
+export interface CursorState {
+  x: number;
+  y: number;
+  clickEffect: boolean;
+  visible: boolean;
+}
+
 export function usePlayer(wsUrl: string) {
   const [state, dispatch] = useReducer(reducer, initial);
+  const [cursor, setCursor] = useState<CursorState>({ x: 0, y: 0, clickEffect: false, visible: false });
   const wsRef = useRef<WebSocket | null>(null);
+  const cursorRafRef = useRef<number>(0);
+  const pendingCursorRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     const ws = new WebSocket(wsUrl);
@@ -204,11 +224,15 @@ export function usePlayer(wsUrl: string) {
       try {
         const msg = JSON.parse(ev.data as string);
         switch (msg.type) {
+          case "studioReady":
+            dispatch({ type: "studioReady", terminalServerUrl: msg.terminalServerUrl });
+            break;
           case "scenarioFiles":
             dispatch({ type: "scenarioFiles", files: msg.files });
             break;
           case "scenario":
             dispatch({ type: "scenario", name: msg.name, steps: msg.steps });
+            setCursor({ x: 0, y: 0, clickEffect: false, visible: false });
             break;
           case "cachedData":
             dispatch({ type: "cachedData", screenshots: msg.screenshots, stepDurations: msg.stepDurations, stepHasAudio: msg.stepHasAudio, videoPath: msg.videoPath });
@@ -221,6 +245,7 @@ export function usePlayer(wsUrl: string) {
             break;
           case "stepComplete":
             dispatch({ type: "stepComplete", index: msg.index, screenshot: msg.screenshot, mode: msg.mode, durationMs: msg.durationMs ?? 0 });
+            setCursor((c) => ({ ...c, clickEffect: false }));
             break;
           case "liveFrame":
             dispatch({ type: "liveFrame", data: msg.data, paneId: msg.paneId });
@@ -230,9 +255,33 @@ export function usePlayer(wsUrl: string) {
             break;
           case "finished":
             dispatch({ type: "finished", videoPath: msg.videoPath });
+            setCursor({ x: 0, y: 0, clickEffect: false, visible: false });
             break;
           case "viewMode":
             dispatch({ type: "viewMode", mode: msg.mode });
+            break;
+          case "replayEvent": {
+            const event = msg.event;
+            if (event.type === "cursorMove") {
+              pendingCursorRef.current = { x: event.x, y: event.y };
+              if (!cursorRafRef.current) {
+                cursorRafRef.current = requestAnimationFrame(() => {
+                  cursorRafRef.current = 0;
+                  const p = pendingCursorRef.current;
+                  if (p) {
+                    setCursor((c) => ({ ...c, x: p.x, y: p.y, visible: true }));
+                    pendingCursorRef.current = null;
+                  }
+                });
+              }
+            } else if (event.type === "click") {
+              setCursor((c) => ({ ...c, x: event.x, y: event.y, clickEffect: true, visible: true }));
+              setTimeout(() => setCursor((c) => ({ ...c, clickEffect: false })), 600);
+            }
+            break;
+          }
+          case "studioFrame":
+            dispatch({ type: "studioFrame", paneId: msg.paneId, data: msg.data });
             break;
           case "artifactsImported":
             dispatch({ type: "artifactsImported", count: msg.count, scenarios: msg.scenarios });
@@ -249,6 +298,7 @@ export function usePlayer(wsUrl: string) {
     return () => {
       ws.close();
       wsRef.current = null;
+      if (cursorRafRef.current) cancelAnimationFrame(cursorRafRef.current);
     };
   }, [wsUrl]);
 
@@ -294,5 +344,9 @@ export function usePlayer(wsUrl: string) {
     sendMsg({ type: "downloadArtifacts", runId, artifactName });
   }, [sendMsg]);
 
-  return { state, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts };
+  const sendStudioEvent = useCallback((msg: Record<string, unknown>) => {
+    sendMsg(msg);
+  }, [sendMsg]);
+
+  return { state, cursor, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent };
 }

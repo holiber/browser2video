@@ -105,6 +105,9 @@ importers:
       browser2video:
         specifier: workspace:*
         version: link:../../packages/browser2video
+      dockview:
+        specifier: ^5.0.0
+        version: 5.0.0(react@19.2.4)
       lucide-react:
         specifier: ^0.469.0
         version: 0.469.0(react@19.2.4)
@@ -4316,6 +4319,11 @@ packages:
 
   dockview-core@5.0.0:
     resolution: {integrity: sha512-bUgH/e/PTVZ/5Y97QvF30eAs67HPzTQUbcVMojwsWX/RKys5bQCblGMvxPu+KVx+jes2JIhepFvjMepCyz1uNQ==}
+
+  dockview@5.0.0:
+    resolution: {integrity: sha512-GPUMnhaZ7pH28Ai6HPEu4cecp9xNSp4tMtDn/In7sYCDhTztBbbLEK3BqbAwiJBEUXadnZ7j01BaZkz9ndJJ7A==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
   dom-converter@0.2.0:
     resolution: {integrity: sha512-gd3ypIPfOMr9h5jIKq8E3sHOTCjeirnl0WK5ZdS1AW0Odt0b1PaWaHdJ4Qk4klv+YB9aJBS7mESXjFoDQPu6DA==}
@@ -12486,6 +12494,11 @@ snapshots:
       '@leichtgewicht/ip-codec': 2.0.5
 
   dockview-core@5.0.0: {}
+
+  dockview@5.0.0(react@19.2.4):
+    dependencies:
+      dockview-core: 5.0.0
+      react: 19.2.4
 
   dom-converter@0.2.0:
     dependencies:

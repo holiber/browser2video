@@ -38,19 +38,25 @@ export {
 
 export { Actor, generateWebVTT } from "./actor.ts";
 export { TerminalActor } from "./terminal-actor.ts";
+export { ReplayLog, type ReplayEvent } from "./replay-log.ts";
 
 // ---------------------------------------------------------------------------
 //  Standalone helpers for complex scenarios
 // ---------------------------------------------------------------------------
 
 export { startServer, type ManagedServer } from "./server-manager.ts";
+export {
+  startTerminalWsServer,
+  type TerminalServer,
+  type GridPaneConfig,
+} from "./terminal-ws-server.ts";
 
 // ---------------------------------------------------------------------------
 //  Playwright re-export (escape hatch for advanced usage)
 // ---------------------------------------------------------------------------
 
 export { chromium, firefox, webkit } from "playwright";
-export type { Page, Browser, BrowserContext, Locator, ElementHandle } from "playwright";
+export type { Page, Frame, Browser, BrowserContext, Locator, ElementHandle } from "playwright";
 
 // ---------------------------------------------------------------------------
 //  Types

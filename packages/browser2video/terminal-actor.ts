@@ -45,7 +45,11 @@ export class TerminalActor extends Actor {
     this.selector = selector;
     this._dom = opts?.frame ?? page;
     this._iframeName = opts?.iframeName;
+    if (opts?.frame) this._context = opts.frame;
   }
+
+  /** DOM context for direct frame operations (waitForFunction, evaluate, etc.) */
+  get frame(): DOMContext { return this._dom; }
 
   // ─── Overrides (selector-free) ────────────────────────────────────
 

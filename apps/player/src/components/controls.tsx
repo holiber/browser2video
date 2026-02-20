@@ -134,10 +134,11 @@ export function Controls({
         <button
           onClick={onClearCache}
           disabled={isRunning}
-          className="p-1.5 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors"
+          className="p-1.5 px-2.5 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1.5"
           title="Clear cache"
         >
           <Trash2 size={14} />
+          <span className="text-xs">Clear cache</span>
         </button>
       </div>
     </div>

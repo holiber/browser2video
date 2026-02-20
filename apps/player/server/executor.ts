@@ -11,6 +11,10 @@ import {
   createSession,
   type Session,
   type SessionOptions,
+  type ReplayEvent,
+  type Browser,
+  type Page,
+  type GridHandle,
 } from "browser2video";
 import type { ScenarioDescriptor, StepDescriptor } from "browser2video/scenario";
 import type { GridPaneConfig } from "browser2video/terminal";
@@ -42,15 +46,27 @@ export class Executor<T = any> {
   private projectRoot: string | null;
   private cdpSessions: Map<string, any> = new Map();
   private lastVideoPath: string | null = null;
+  private lastEmittedLayout = "";
+  private playerBrowser: Browser | null;
+  private playerPage: Page | null;
+  private attachedGrid: GridHandle | null = null;
 
   viewMode: ViewMode = "live";
   onLiveFrame: ((data: string, paneId?: string) => void) | null = null;
   onPaneLayout: ((layout: PaneLayoutInfo) => void) | null = null;
+  onReplayEvent: ((event: ReplayEvent) => void) | null = null;
 
-  constructor(descriptor: ScenarioDescriptor<T>, opts?: { sessionOpts?: Partial<SessionOptions>; projectRoot?: string }) {
+  constructor(descriptor: ScenarioDescriptor<T>, opts?: {
+    sessionOpts?: Partial<SessionOptions>;
+    projectRoot?: string;
+    playerBrowser?: Browser | null;
+    playerPage?: Page | null;
+  }) {
     this.descriptor = descriptor;
     this.sessionOpts = opts?.sessionOpts ?? {};
     this.projectRoot = opts?.projectRoot ?? null;
+    this.playerBrowser = opts?.playerBrowser ?? null;
+    this.playerPage = opts?.playerPage ?? null;
 
     const hasNarration = descriptor.steps.some((s) => !!s.narration);
     if (hasNarration && !process.env.OPENAI_API_KEY) {
@@ -90,11 +106,13 @@ export class Executor<T = any> {
           ...this.descriptor.sessionOpts,
           ...this.sessionOpts,
           headed: false,
+          browser: this.playerBrowser ?? undefined,
         });
         this.ctx = await this.descriptor.setupFn(this.session);
 
         try {
           const layout = this.session.getLayoutInfo();
+          this.lastEmittedLayout = JSON.stringify(layout);
           const hasGrid = !!layout.gridConfig;
           const hasTermSrv = !!layout.terminalServerUrl;
           const paneCount = layout.panes?.length ?? 0;
@@ -104,15 +122,59 @@ export class Executor<T = any> {
           console.error("[executor] Failed to get layout info:", err);
         }
 
-        // CDP screencast as fallback display / for video mode thumbnail
-        if (this.onLiveFrame) {
+        // Stream replay events (cursor, clicks, steps) to the player frontend
+        if (this.onReplayEvent) {
+          this.session.replayLog.onEvent = this.onReplayEvent;
+        }
+
+        // CDP screencast only for video mode — live mode uses the observer iframe
+        if (this.onLiveFrame && this.viewMode === "video") {
           await this.startScreencast();
+        }
+
+        // In live mode with a player page, attach the grid to the observer iframe
+        // so interactions happen on the DOM the user can see and inspect
+        if (this.viewMode === "live" && this.playerPage) {
+          await this.attachGridToPlayerPage();
         }
       } finally {
         process.chdir(prevCwd);
       }
     }
     return this.session;
+  }
+
+  /**
+   * After setup, find the grid created during the scenario's setupFn and
+   * re-wire its actors to operate on the player's preview iframe.
+   */
+  private async attachGridToPlayerPage(): Promise<void> {
+    if (!this.session || !this.playerPage) return;
+
+    // Access the session's internal grid handle via the context
+    // The scenario's setupFn typically stores the grid in ctx.grid
+    const ctx = this.ctx as any;
+    const grid: GridHandle | null = ctx?.grid ?? null;
+    if (!grid || typeof grid.attachToPage !== "function") {
+      console.error("[executor] No grid with attachToPage found in context — skipping embedded mode");
+      return;
+    }
+
+    const layout = this.session.getLayoutInfo();
+    const hasBrowserPanes = layout.gridConfig?.panes.some((p) => p.type === "browser") ?? false;
+    if (!hasBrowserPanes && !layout.gridConfig) {
+      console.error("[executor] No browser panes in grid — observer iframe is sufficient");
+      return;
+    }
+
+    try {
+      console.error("[executor] Attaching grid to player page for embedded live view...");
+      await grid.attachToPage(this.playerPage, "b2v-scenario");
+      this.attachedGrid = grid;
+      console.error("[executor] Grid attached — interactions now happen on the player's preview iframe");
+    } catch (err) {
+      console.error("[executor] Failed to attach grid to player page:", err);
+    }
   }
 
   private async startScreencast(): Promise<void> {
@@ -158,6 +220,30 @@ export class Executor<T = any> {
     this.cdpSessions.clear();
   }
 
+  private async checkLayoutChange(): Promise<void> {
+    if (!this.session) return;
+    try {
+      const layout = this.session.getLayoutInfo();
+      const serialized = JSON.stringify(layout);
+      if (serialized !== this.lastEmittedLayout) {
+        this.lastEmittedLayout = serialized;
+        const paneCount = layout.panes?.length ?? 0;
+        console.error(`[executor] Layout changed mid-run: panes=${paneCount} grid=${!!layout.gridConfig}`);
+        this.onPaneLayout?.(layout);
+        if (this.onLiveFrame && this.viewMode === "video") {
+          await this.stopScreencast();
+          await this.startScreencast();
+        }
+        // Re-attach grid to player page after layout switch
+        if (this.viewMode === "live" && this.playerPage) {
+          await this.attachGridToPlayerPage();
+        }
+      }
+    } catch (err) {
+      console.error("[executor] Failed to check layout change:", err);
+    }
+  }
+
   private async executeStep(
     stepDesc: StepDescriptor<T>,
     index: number,
@@ -172,6 +258,8 @@ export class Executor<T = any> {
     } else {
       await step(stepDesc.caption, () => stepDesc.run(this.ctx!));
     }
+
+    await this.checkLayoutChange();
 
     const durationMs = Date.now() - t0;
     let screenshot = "";
@@ -196,6 +284,10 @@ export class Executor<T = any> {
     if (targetIndex < 0 || targetIndex >= this.descriptor.steps.length) {
       throw new Error(`Step index ${targetIndex} out of range (0-${this.descriptor.steps.length - 1})`);
     }
+
+    // Ensure session is initialised in the target mode (human) before fast-forwarding
+    // so that grid setup, actor wiring, and attachToPage happen with correct mode config
+    await this.ensureSession(mode);
 
     for (let i = this.executedUpTo + 1; i < targetIndex; i++) {
       onStepStart?.(i, true);
@@ -230,6 +322,7 @@ export class Executor<T = any> {
       this.session = null;
       this.ctx = null;
       this.executedUpTo = -1;
+      this.lastEmittedLayout = "";
     }
   }
 

@@ -7,13 +7,24 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { spawn, exec, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
-import { isScenarioDescriptor } from "browser2video";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Page,
+  isScenarioDescriptor,
+  type ReplayEvent,
+  startTerminalWsServer,
+  type TerminalServer,
+} from "browser2video";
 import { Executor, type ViewMode, type PaneLayoutInfo } from "./executor.ts";
 import { PlayerCache, type StepMeta, type CacheMeta } from "./cache.ts";
+import { StudioBrowserManager } from "./studio-browser.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -66,10 +77,15 @@ type ClientMsg =
   | { type: "clearCache" }
   | { type: "setViewMode"; mode: ViewMode }
   | { type: "importArtifacts"; dir: string }
-  | { type: "downloadArtifacts"; runId?: string; artifactName?: string };
+  | { type: "downloadArtifacts"; runId?: string; artifactName?: string }
+  | { type: "studioOpenBrowser"; paneId: string; url: string }
+  | { type: "studioCloseBrowser"; paneId: string }
+  | { type: "studioMouseEvent"; paneId: string; action: string; x: number; y: number; button?: "left" | "right" | "middle"; deltaX?: number; deltaY?: number }
+  | { type: "studioKeyEvent"; paneId: string; action: string; key: string };
 
 type ServerMsg =
   | { type: "scenario"; name: string; steps: Array<{ caption: string; narration?: string }> }
+  | { type: "studioReady"; terminalServerUrl: string }
   | { type: "stepStart"; index: number; fastForward: boolean }
   | { type: "stepComplete"; index: number; screenshot: string; mode: "human" | "fast"; durationMs: number }
   | { type: "finished"; videoPath?: string }
@@ -81,7 +97,9 @@ type ServerMsg =
   | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared" }
   | { type: "viewMode"; mode: ViewMode }
-  | { type: "artifactsImported"; count: number; scenarios: string[] };
+  | { type: "replayEvent"; event: ReplayEvent }
+  | { type: "artifactsImported"; count: number; scenarios: string[] }
+  | { type: "studioFrame"; paneId: string; data: string };
 
 function send(ws: WebSocket, msg: ServerMsg) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -161,18 +179,157 @@ function proxyToVite(req: http.IncomingMessage, res: http.ServerResponse) {
   req.pipe(proxyReq, { end: true });
 }
 
+function stripFrameAncestorsFromCsp(csp: string): string {
+  return csp
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && !/^frame-ancestors(\s|$)/i.test(part))
+    .join("; ");
+}
+
+function sanitizeProxyResponseHeaders(source: Headers, isHtml = false): http.OutgoingHttpHeaders {
+  const headers: http.OutgoingHttpHeaders = {};
+  for (const [key, value] of source.entries()) {
+    const lower = key.toLowerCase();
+    if (lower === "x-frame-options") continue;
+    if (lower === "content-security-policy" || lower === "content-security-policy-report-only") {
+      const cleaned = stripFrameAncestorsFromCsp(value);
+      if (cleaned) headers[key] = cleaned;
+      continue;
+    }
+    if (isHtml && (lower === "content-length" || lower === "content-encoding")) continue;
+    headers[key] = value;
+  }
+  return headers;
+}
+
+function injectBaseHref(html: string, pageUrl: string): string {
+  if (/<base\s[^>]*href=/i.test(html)) return html;
+  const escapedUrl = pageUrl.replace(/"/g, "&quot;");
+  const baseTag = `<base href="${escapedUrl}">`;
+
+  if (/<head[\s>]/i.test(html)) {
+    return html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
+  }
+  if (/<html[\s>]/i.test(html)) {
+    return html.replace(/<html([^>]*)>/i, `<html$1><head>${baseTag}</head>`);
+  }
+  return `<head>${baseTag}</head>${html}`;
+}
+
+async function enableFrameHeaderBypass(context: BrowserContext): Promise<void> {
+  await context.route("**/*", async (route) => {
+    try {
+      const response = await route.fetch();
+      const headers = { ...response.headers() };
+      delete headers["x-frame-options"];
+      delete headers["X-Frame-Options"];
+
+      const csp = headers["content-security-policy"];
+      if (csp) {
+        headers["content-security-policy"] = stripFrameAncestorsFromCsp(csp);
+      }
+      const cspReportOnly = headers["content-security-policy-report-only"];
+      if (cspReportOnly) {
+        headers["content-security-policy-report-only"] = stripFrameAncestorsFromCsp(cspReportOnly);
+      }
+
+      await route.fulfill({ response, headers });
+    } catch {
+      await route.continue().catch(() => {});
+    }
+  });
+}
+
+async function proxyExternalPage(req: http.IncomingMessage, res: http.ServerResponse, u: URL): Promise<void> {
+  if (req.method && !["GET", "HEAD"].includes(req.method.toUpperCase())) {
+    res.writeHead(405, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Method not allowed");
+    return;
+  }
+
+  const target = u.searchParams.get("url");
+  if (!target) {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Missing url query param");
+    return;
+  }
+
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL(target);
+  } catch {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Invalid target url");
+    return;
+  }
+
+  if (!["http:", "https:"].includes(targetUrl.protocol)) {
+    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
+    res.end("Only http(s) urls are supported");
+    return;
+  }
+
+  try {
+    const upstream = await fetch(targetUrl.toString(), {
+      method: req.method ?? "GET",
+      redirect: "follow",
+    });
+
+    const contentType = upstream.headers.get("content-type") ?? "";
+    const isHtml = /text\/html/i.test(contentType);
+
+    if (isHtml) {
+      const html = await upstream.text();
+      const htmlWithBase = injectBaseHref(html, upstream.url || targetUrl.toString());
+      const headers = sanitizeProxyResponseHeaders(upstream.headers, true);
+      headers["content-type"] = contentType || "text/html; charset=utf-8";
+      headers["cache-control"] = "no-cache";
+      headers["content-length"] = Buffer.byteLength(htmlWithBase, "utf-8");
+      res.writeHead(upstream.status, headers);
+      res.end(htmlWithBase);
+      return;
+    }
+
+    const headers = sanitizeProxyResponseHeaders(upstream.headers, false);
+    headers["cache-control"] = headers["cache-control"] ?? "no-cache";
+    res.writeHead(upstream.status, headers);
+
+    if (!upstream.body) {
+      res.end();
+      return;
+    }
+
+    const stream = Readable.fromWeb(upstream.body as any);
+    stream.on("error", () => {
+      try { res.end(); } catch {}
+    });
+    res.on("close", () => stream.destroy());
+    stream.pipe(res);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+    res.end(`Failed to proxy url: ${message}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 //  Main
 // ---------------------------------------------------------------------------
 
 let executor: Executor | null = null;
 let viteProcess: ChildProcess | null = null;
+let terminalServer: TerminalServer | null = null;
+let studioBrowserManager: StudioBrowserManager | null = null;
+let playerBrowser: Browser | null = null;
+let playerPage: Page | null = null;
 let currentViewMode: ViewMode = "live";
 const cache = new PlayerCache(PROJECT_ROOT);
 let currentScenarioFile: string | null = null;
 let currentCacheDir: string | null = null;
 let currentContentHash: string | null = null;
 let currentStepMetas: StepMeta[] = [];
+let TERMINAL_PORT = PORT + 2;
 
 function startVite(): Promise<ChildProcess> {
   return new Promise((resolve, reject) => {
@@ -213,6 +370,11 @@ function startVite(): Promise<ChildProcess> {
 
 const httpServer = http.createServer((req, res) => {
   const u = new URL(req.url ?? "/", "http://localhost");
+
+  if (u.pathname === "/api/proxy") {
+    void proxyExternalPage(req, res, u);
+    return;
+  }
 
   if (u.pathname === "/api/video") {
     const videoPath = u.searchParams.get("path");
@@ -278,6 +440,9 @@ wss.on("connection", (ws) => {
   const files = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
   send(ws, { type: "scenarioFiles", files });
   send(ws, { type: "viewMode", mode: currentViewMode });
+  if (terminalServer) {
+    send(ws, { type: "studioReady", terminalServerUrl: terminalServer.baseHttpUrl });
+  }
 
   if (executor) {
     send(ws, { type: "status", loaded: true, executedUpTo: -1 });
@@ -300,10 +465,15 @@ wss.on("connection", (ws) => {
           currentScenarioFile = msg.file;
           currentStepMetas = [];
           const descriptor = await loadScenarioDescriptor(msg.file);
-          executor = new Executor(descriptor, { projectRoot: PROJECT_ROOT });
+          executor = new Executor(descriptor, {
+            projectRoot: PROJECT_ROOT,
+            playerBrowser,
+            playerPage,
+          });
           executor.viewMode = currentViewMode;
           executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
           executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
+          executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
 
           const absPath = path.isAbsolute(msg.file) ? msg.file : path.resolve(PROJECT_ROOT, msg.file);
           const { dir, hash } = cache.getDir(absPath, msg.file);
@@ -347,6 +517,7 @@ wss.on("connection", (ws) => {
             executor.viewMode = currentViewMode;
             executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
+            executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
             currentStepMetas = [];
           }
           await executor.runTo(
@@ -423,6 +594,7 @@ wss.on("connection", (ws) => {
             executor.viewMode = currentViewMode;
             executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
+            executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
             currentStepMetas = [];
           }
           send(ws, { type: "viewMode", mode: currentViewMode });
@@ -487,6 +659,43 @@ wss.on("connection", (ws) => {
           }
           break;
         }
+
+        case "studioOpenBrowser": {
+          if (!studioBrowserManager) {
+            studioBrowserManager = new StudioBrowserManager();
+            studioBrowserManager.onFrame = (paneId, data) => send(ws, { type: "studioFrame", paneId, data });
+            studioBrowserManager.onReplayEvent = (paneId, event) => send(ws, { type: "replayEvent", event });
+          }
+          console.error(`[player] Studio: opening browser pane "${msg.paneId}" → ${msg.url}`);
+          await studioBrowserManager.openPane(msg.paneId, msg.url);
+          break;
+        }
+
+        case "studioCloseBrowser": {
+          if (studioBrowserManager) {
+            console.error(`[player] Studio: closing browser pane "${msg.paneId}"`);
+            await studioBrowserManager.closePane(msg.paneId);
+          }
+          break;
+        }
+
+        case "studioMouseEvent": {
+          if (studioBrowserManager) {
+            await studioBrowserManager.forwardMouseEvent(msg.paneId, msg.action, msg.x, msg.y, {
+              button: msg.button,
+              deltaX: msg.deltaX,
+              deltaY: msg.deltaY,
+            });
+          }
+          break;
+        }
+
+        case "studioKeyEvent": {
+          if (studioBrowserManager) {
+            await studioBrowserManager.forwardKeyboardEvent(msg.paneId, msg.action, msg.key);
+          }
+          break;
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -495,8 +704,23 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("close", () => {
+  ws.on("close", async () => {
     console.error("[player] Client disconnected");
+    if (executor) {
+      try {
+        await executor.dispose();
+      } catch (err) {
+        console.error("[player] Error disposing executor on disconnect:", err);
+      }
+    }
+    if (studioBrowserManager) {
+      try {
+        await studioBrowserManager.dispose();
+        studioBrowserManager = null;
+      } catch (err) {
+        console.error("[player] Error disposing studio browser on disconnect:", err);
+      }
+    }
   });
 });
 
@@ -527,20 +751,40 @@ loadDotenv(PROJECT_ROOT);
 
 // Start — bind player first so VITE_PORT check doesn't collide
 PORT = await findFreePort(PORT, "Player");
+VITE_PORT = await findFreePort(PORT + 1, "Vite");
+TERMINAL_PORT = await findFreePort(PORT + 2, "Terminal WS");
+terminalServer = await startTerminalWsServer(TERMINAL_PORT);
+console.error(`  Terminal WS server running at ${terminalServer.baseHttpUrl}`);
 await new Promise<void>((resolve) => httpServer.listen(PORT, () => {
   console.error(`\n  b2v Player running at http://localhost:${PORT}\n`);
   resolve();
 }));
-VITE_PORT = await findFreePort(PORT + 1, "Vite");
 await startVite();
-console.error("  Vite ready, opening browser…\n");
 
 const url = `http://localhost:${PORT}`;
-const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-exec(`${openCmd} ${url}`);
+const shouldAutoOpenBrowser = process.env.B2V_AUTO_OPEN_BROWSER !== "0";
+if (shouldAutoOpenBrowser) {
+  console.error("  Vite ready, launching Chromium…\n");
+  playerBrowser = await chromium.launch({
+    headless: false,
+    args: [
+      "--disable-web-security",
+      "--disable-features=IsolateOrigins,site-per-process",
+    ],
+  });
+  const context = await playerBrowser.newContext({ viewport: null });
+  await enableFrameHeaderBypass(context);
+  playerPage = await context.newPage();
+  await playerPage.goto(url);
+} else {
+  console.error("  Vite ready (auto-open disabled).\n");
+}
 
 process.on("SIGINT", async () => {
   if (executor) await executor.dispose();
+  if (studioBrowserManager) await studioBrowserManager.dispose();
+  if (playerBrowser) await playerBrowser.close();
+  if (terminalServer) await terminalServer.close();
   if (viteProcess) viteProcess.kill();
   process.exit(0);
 });

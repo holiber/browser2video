@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { FolderOpen, ChevronDown, Monitor, Film } from "lucide-react";
+import { FolderOpen, ChevronDown, Monitor, Film, Trash2 } from "lucide-react";
 import type { ViewMode } from "../hooks/use-player";
 
 interface ScenarioPickerProps {
@@ -9,9 +9,10 @@ interface ScenarioPickerProps {
   scenarioFiles: string[];
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  onClearCache?: () => void;
 }
 
-export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles, viewMode, onViewModeChange }: ScenarioPickerProps) {
+export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles, viewMode, onViewModeChange, onClearCache }: ScenarioPickerProps) {
   const [selected, setSelected] = useState("");
 
   const handleSelect = (file: string) => {
@@ -97,6 +98,17 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
           Video
         </button>
       </div>
+
+      {onClearCache && (
+        <button
+          onClick={onClearCache}
+          className="flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors flex-shrink-0"
+          title="Clear cache"
+        >
+          <Trash2 size={12} />
+          Clear cache
+        </button>
+      )}
 
       <div
         className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? "bg-emerald-500" : "bg-red-500"}`}

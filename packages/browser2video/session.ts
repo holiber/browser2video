@@ -23,6 +23,7 @@ import type {
 
 import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
 import { TerminalActor } from "./terminal-actor.ts";
+import { ReplayLog } from "./replay-log.ts";
 import { composeVideos } from "./video-compositor.ts";
 import {
   type AudioDirectorAPI,
@@ -108,6 +109,25 @@ export interface GridHandle {
   wrapLatestTab: () => Promise<TerminalActor>;
   /** Close a dynamically added tab. PTY cleanup is automatic (WebSocket closes). */
   closeTab: (actor: TerminalActor) => Promise<void>;
+  /** Switch the grid to a different layout preset, destroying existing panes. Returns actors for the new panes. */
+  switchLayout: (layoutId: string, paneConfigs?: Array<{
+    type?: "browser" | "terminal";
+    url?: string;
+    command?: string;
+    title?: string;
+  }>) => Promise<TerminalActor[]>;
+  /** Add a new pane (browser or terminal) via the popup UI. Returns an actor for the new pane. */
+  addPane: (type: "browser" | "terminal") => Promise<TerminalActor>;
+  /**
+   * Re-wire actors to interact with the player's preview iframe instead of the
+   * standalone headless page. After calling this, all actor interactions
+   * (click, type, scroll, etc.) operate on the real DOM the user sees.
+   */
+  attachToPage: (playerPage: Page, iframeName?: string) => Promise<void>;
+  /** Pane configs used to build this grid (for matching iframe names) */
+  readonly paneConfigs: ReadonlyArray<{ type: "terminal" | "browser"; testId?: string; title: string }>;
+  /** Viewport dimensions of this grid */
+  readonly viewport: { width: number; height: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +178,9 @@ interface PaneState {
 
 export class Session {
   private browser: Browser | null = null;
+  private _ownsBrowser = true;
+  /** Set before _init() to reuse an existing browser instead of launching one */
+  _externalBrowser: Browser | null = null;
   private panes: Map<string, PaneState> = new Map();
   private paneOrder: string[] = [];
   private steps: StepRecord[] = [];
@@ -180,6 +203,8 @@ export class Session {
   private readonly cdpPort: number;
   private narrationOpts?: NarrationOptions;
   private audioDirector!: AudioDirectorAPI & { getEvents?: () => AudioEvent[] };
+  /** Replay log for streaming cursor/click/step events to the player */
+  readonly replayLog = new ReplayLog();
 
   constructor(opts: SessionOptions = {}) {
     const underPW = isUnderPlaywright();
@@ -245,10 +270,15 @@ export class Session {
       launchArgs.push(`--remote-debugging-port=${this.cdpPort}`);
     }
 
-    this.browser = await chromium.launch({
-      headless: !this.headed,
-      args: launchArgs,
-    });
+    if (this._externalBrowser) {
+      this.browser = this._externalBrowser;
+      this._ownsBrowser = false;
+    } else {
+      this.browser = await chromium.launch({
+        headless: !this.headed,
+        args: launchArgs,
+      });
+    }
 
     this.startTime = Date.now();
 
@@ -262,6 +292,13 @@ export class Session {
     console.error(`  Record:    ${this.record ? "screencast" : "none"}`);
     console.error(`  Headed:    ${this.headed}`);
     console.error(`  Artifacts: ${this.artifactDir}\n`);
+  }
+
+  /** Wire an actor's replay events into the session replay log */
+  private _wireReplayEvents(actor: Actor): void {
+    actor.setSessionStartTime(this.startTime);
+    actor.setAudioDirector(this.audioDirector);
+    actor.onReplayEvent = (e) => this.replayLog.emit(e);
   }
 
   // -----------------------------------------------------------------------
@@ -401,6 +438,7 @@ export class Session {
     });
 
     const actor = new Actor(page, this.mode, { delays: this.delays });
+    this._wireReplayEvents(actor);
 
     // Auto-inject cursor overlay after every navigation (human mode)
     if (this.mode === "human") {
@@ -651,6 +689,7 @@ export class Session {
 
     // Create the scoped TerminalActor
     const actor = new TerminalActor(page, this.mode, selector, { delays: this.delays });
+    this._wireReplayEvents(actor);
 
     // Auto-inject cursor overlay after every navigation (human mode)
     if (this.mode === "human") {
@@ -896,6 +935,7 @@ export class Session {
           frame,
           iframeName,
         });
+        this._wireReplayEvents(actor);
         actors.push(actor);
       } else {
         // Browser pane: create a TerminalActor-compatible wrapper (limited but functional)
@@ -904,6 +944,7 @@ export class Session {
           frame,
           iframeName,
         });
+        this._wireReplayEvents(actor);
         actors.push(actor);
       }
 
@@ -989,6 +1030,7 @@ export class Session {
           frame,
           iframeName,
         });
+        this._wireReplayEvents(actor);
         (actor as any)._panelId = result.panelId;
         return actor;
       },
@@ -1033,6 +1075,7 @@ export class Session {
           frame,
           iframeName: info.iframeName,
         });
+        this._wireReplayEvents(actor);
         (actor as any)._panelId = info.panelId;
         return actor;
       },
@@ -1044,6 +1087,256 @@ export class Session {
           (window as any).__b2v_closeTab(pid);
         }, panelId);
         await sleep(100);
+      },
+
+      switchLayout: async (layoutId: string, paneConfigs?: Array<{
+        type?: "browser" | "terminal";
+        url?: string;
+        command?: string;
+        title?: string;
+      }>) => {
+        const jsConfigs = paneConfigs?.map((c) => ({
+          type: c.type ?? "terminal",
+          url: c.url,
+          cmd: c.command,
+          title: c.title,
+        }));
+
+        const result = await page.evaluate(({ lid, cfgs }: { lid: string; cfgs: any }) => {
+          return (window as any).__b2v_switchLayout(lid, cfgs);
+        }, { lid: layoutId, cfgs: jsConfigs ?? null }) as { paneCount: number; grid: number[][] } | { error: string };
+
+        if ("error" in result) throw new Error(result.error);
+
+        const resolvedConfigs = paneConfigs ?? [];
+        const newActors: TerminalActor[] = [];
+        for (let i = 0; i < result.paneCount; i++) {
+          const iframeName = `term-${i}`;
+          await page.waitForSelector(`iframe[name="${iframeName}"]`, { timeout: 10000 });
+
+          let frame: import("playwright").Frame | null = null;
+          for (let attempt = 0; attempt < 20; attempt++) {
+            frame = page.frame(iframeName);
+            if (frame) break;
+            await sleep(250);
+          }
+          if (!frame) throw new Error(`Iframe '${iframeName}' not found after layout switch`);
+
+          const paneCfg = resolvedConfigs[i];
+          const isTerminal = !paneCfg || (paneCfg.type ?? "terminal") === "terminal";
+
+          if (isTerminal) {
+            const testId = `xterm-dyn-${i}`;
+            const selector = `[data-testid="${testId}"]`;
+
+            await frame.waitForFunction(
+              (sel: string) => {
+                const el = document.querySelector(sel) as any;
+                return String(el?.dataset?.b2vWsState ?? "") === "open";
+              },
+              selector,
+              { timeout: 15000 },
+            );
+
+            if (!paneCfg?.command) {
+              await frame.waitForFunction(
+                (sel: string) => {
+                  const root = document.querySelector(sel);
+                  if (!root) return false;
+                  const rows = root.querySelector(".xterm-rows");
+                  return (rows?.textContent ?? "").includes("$") || (rows?.textContent ?? "").includes("#");
+                },
+                selector,
+                { timeout: 30000 },
+              );
+            } else {
+              await frame.waitForFunction(
+                (sel: string) => {
+                  const root = document.querySelector(sel);
+                  if (!root) return false;
+                  const rows = root.querySelector(".xterm-rows");
+                  const text = String((rows as any)?.textContent ?? "").trim();
+                  return text.length > 10;
+                },
+                selector,
+                { timeout: 30000 },
+              );
+            }
+
+            const actor = new TerminalActor(page, this.mode, selector, {
+              delays: this.delays,
+              frame,
+              iframeName,
+            });
+            this._wireReplayEvents(actor);
+            (actor as any)._panelId = `panel-${i}`;
+            newActors.push(actor);
+          } else {
+            try {
+              await frame.waitForLoadState("domcontentloaded", { timeout: 15000 });
+            } catch { /* external pages may block */ }
+
+            const actor = new TerminalActor(page, this.mode, "body", {
+              delays: this.delays,
+              frame,
+              iframeName,
+            });
+            this._wireReplayEvents(actor);
+            (actor as any)._panelId = `panel-${i}`;
+            newActors.push(actor);
+          }
+        }
+
+        // Inject cursor on the first actor in human mode
+        if (this.mode === "human" && newActors.length > 0) {
+          await newActors[0].injectCursor();
+        }
+
+        gridHandle.actors = newActors;
+        return newActors;
+      },
+
+      paneConfigs: paneConfigs.map((p) => ({
+        type: p.type,
+        testId: "testId" in p ? (p as any).testId : undefined,
+        title: p.title,
+      })),
+
+      viewport: { width: vpW, height: vpH },
+
+      attachToPage: async (playerPage: Page, iframeName = "b2v-scenario") => {
+        const iframeSelector = `iframe[name="${iframeName}"]`;
+        console.error(`[grid] attachToPage: waiting for iframe "${iframeName}" in player page...`);
+
+        // Wait for the scenario iframe to appear in the player page
+        await playerPage.waitForSelector(iframeSelector, { timeout: 30000 });
+
+        // Wait for Playwright to recognise the frame
+        let scenarioFrame: import("playwright").Frame | null = null;
+        for (let attempt = 0; attempt < 60; attempt++) {
+          scenarioFrame = playerPage.frame(iframeName);
+          if (scenarioFrame) break;
+          await sleep(500);
+        }
+        if (!scenarioFrame) throw new Error(`Scenario iframe '${iframeName}' not found in player page`);
+
+        // Wait for nested pane iframes inside the scenario iframe
+        const newActors: TerminalActor[] = [];
+        for (let i = 0; i < paneConfigs.length; i++) {
+          const nestedIframeName = `term-${i}`;
+          let nestedFrame: import("playwright").Frame | null = null;
+          for (let attempt = 0; attempt < 60; attempt++) {
+            nestedFrame = playerPage.frame(nestedIframeName);
+            if (nestedFrame) break;
+            await sleep(500);
+          }
+          if (!nestedFrame) {
+            console.error(`[grid] attachToPage: pane iframe '${nestedIframeName}' not found, skipping`);
+            newActors.push(gridHandle.actors[i]);
+            continue;
+          }
+
+          const cfg = paneConfigs[i];
+          if (cfg.type === "terminal") {
+            const selector = `[data-testid="${cfg.testId}"]`;
+            try {
+              await nestedFrame.waitForFunction(
+                (sel: string) => {
+                  const el = document.querySelector(sel) as any;
+                  return String(el?.dataset?.b2vWsState ?? "") === "open";
+                },
+                selector,
+                { timeout: 15000 },
+              );
+            } catch (err) {
+              console.error(`[grid] attachToPage: timeout waiting for WS open on '${cfg.testId}':`, err);
+            }
+
+            const actor = new TerminalActor(playerPage, this.mode, selector, {
+              delays: this.delays,
+              frame: nestedFrame,
+              iframeName: nestedIframeName,
+            });
+            actor._embedded = true;
+            actor._scenarioIframeSelector = iframeSelector;
+            actor._scenarioViewport = { width: vpW, height: vpH };
+            this._wireReplayEvents(actor);
+            newActors.push(actor);
+          } else {
+            try {
+              await nestedFrame.waitForLoadState("domcontentloaded", { timeout: 15000 });
+            } catch { /* external pages may block */ }
+
+            const actor = new TerminalActor(playerPage, this.mode, "body", {
+              delays: this.delays,
+              frame: nestedFrame,
+              iframeName: nestedIframeName,
+            });
+            actor._embedded = true;
+            actor._scenarioIframeSelector = iframeSelector;
+            actor._scenarioViewport = { width: vpW, height: vpH };
+            this._wireReplayEvents(actor);
+            newActors.push(actor);
+          }
+        }
+
+        gridHandle.actors = newActors;
+        gridHandle.page = playerPage;
+        console.error(`[grid] attachToPage: ${newActors.length} actors re-wired to player page`);
+      },
+
+      addPane: async (paneType: "browser" | "terminal") => {
+        const result = await page.evaluate((pt: string) => {
+          return (window as any).__b2v_addPane(pt);
+        }, paneType) as { panelId: string; iframeName: string; testId: string; paneType: string };
+
+        const iframeName = result.iframeName;
+        const testId = result.testId;
+
+        let frame: import("playwright").Frame | null = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          frame = page.frame(iframeName);
+          if (frame) break;
+          await sleep(250);
+        }
+        if (!frame) throw new Error(`Pane iframe '${iframeName}' not found`);
+
+        if (paneType === "terminal") {
+          const selector = `[data-testid="${testId}"]`;
+          await frame.waitForFunction(
+            (sel: string) => {
+              const el = document.querySelector(sel) as any;
+              return String(el?.dataset?.b2vWsState ?? "") === "open";
+            },
+            selector,
+            { timeout: 15000 },
+          );
+          await frame.waitForFunction(
+            (sel: string) => {
+              const root = document.querySelector(sel);
+              if (!root) return false;
+              const rows = root.querySelector(".xterm-rows");
+              return (rows?.textContent ?? "").includes("$") || (rows?.textContent ?? "").includes("#");
+            },
+            selector,
+            { timeout: 30000 },
+          );
+        } else {
+          try {
+            await frame.waitForLoadState("domcontentloaded", { timeout: 10000 });
+          } catch { /* browser pane may not fully load */ }
+        }
+
+        const selector = paneType === "terminal" ? `[data-testid="${testId}"]` : "body";
+        const actor = new TerminalActor(page, this.mode, selector, {
+          delays: this.delays,
+          frame,
+          iframeName,
+        });
+        this._wireReplayEvents(actor);
+        (actor as any)._panelId = result.panelId;
+        gridHandle.actors.push(actor);
+        return actor;
       },
     };
 
@@ -1098,16 +1391,35 @@ export class Session {
     const idx = this.stepIndex;
     const startMs = Date.now() - this.startTime;
     console.error(`  [Step ${idx}] ${caption}`);
+    this.replayLog.emit({ type: "stepStart", index: idx, caption, ts: startMs });
 
     // Narration only runs in human mode — fast mode skips TTS entirely
     const doNarrate = narration && this.mode === "human";
+    const narrationActor = [...this.panes.values()].find((p) => p.actor)?.actor;
 
     // Pre-generate TTS so speak() starts playback instantly
-    if (doNarrate) await this.audioDirector.warmup(narration);
+    if (doNarrate) {
+      if (narrationActor) {
+        await narrationActor.warmup(narration);
+      } else {
+        await this.audioDirector.warmup(narration);
+      }
+    }
 
     // Run narration and step body concurrently
     const tasks: Promise<void>[] = [fn()];
-    if (doNarrate) tasks.push(this.audioDirector.speak(narration));
+    if (doNarrate) {
+      const speakTask = narrationActor
+        ? narrationActor.speak(narration)
+        : this.audioDirector.speak(narration);
+      tasks.push(
+        speakTask.then(() => {
+          const events = this.audioDirector.getEvents?.() ?? [];
+          const last = events[events.length - 1];
+          if (last) this.replayLog.emit({ type: "audio", label: last.label, durationMs: last.durationMs, ts: last.startMs });
+        }),
+      );
+    }
     await Promise.all(tasks);
 
     // Breathing pause after each step (human mode)
@@ -1115,6 +1427,7 @@ export class Session {
     if (firstActor) await firstActor.breathe();
 
     const endMs = Date.now() - this.startTime;
+    this.replayLog.emit({ type: "stepEnd", index: idx, ts: endMs });
     this.steps.push({ index: idx, caption, startMs, endMs });
   };
 
@@ -1219,7 +1532,7 @@ export class Session {
     for (const pane of this.panes.values()) {
       try { await pane.context.close(); } catch { /* ignore */ }
     }
-    if (this.browser) await this.browser.close();
+    if (this.browser && this._ownsBrowser) await this.browser.close();
 
     // Stop terminal processes
     for (const pane of this.panes.values()) {
@@ -1318,6 +1631,9 @@ export class Session {
     };
     fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
     console.error(`  Metadata:   ${metadataPath}`);
+
+    this.replayLog.save(this.artifactDir);
+
     console.error(`  Duration:   ${(durationMs / 1000).toFixed(1)}s\n`);
 
     // Run registered cleanup functions (servers, terminal processes, etc.)
@@ -1357,8 +1673,10 @@ export class Session {
  * await session.finish();
  * ```
  */
-export async function createSession(opts?: SessionOptions): Promise<Session> {
-  const session = new Session(opts);
+export async function createSession(opts?: SessionOptions & { browser?: Browser }): Promise<Session> {
+  const { browser: externalBrowser, ...sessionOpts } = opts ?? {};
+  const session = new Session(sessionOpts as SessionOptions);
+  if (externalBrowser) session._externalBrowser = externalBrowser;
   await session._init();
   return session;
 }
