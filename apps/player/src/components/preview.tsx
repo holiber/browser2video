@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import { useMemo, useRef, useState, useEffect } from "react";
 import type { ViewMode, StepState, PaneLayoutInfo, CursorState } from "../hooks/use-player";
 import { CursorOverlay } from "./cursor-overlay";
 import { StudioGrid } from "./studio-grid";

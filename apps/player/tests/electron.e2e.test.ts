@@ -1,4 +1,5 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
+import { execSync } from "node:child_process";
 import path from "node:path";
 
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
@@ -35,8 +36,10 @@ test.afterAll(async () => {
         new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
       ]);
     } catch {}
-    // Force-kill the Electron process tree if close didn't work
-    try { process.kill(pid!, "SIGKILL"); } catch {}
+    // Kill the entire process tree (main + GPU/network helpers)
+    if (pid) {
+      try { execSync(`pkill -9 -P ${pid} 2>/dev/null; kill -9 ${pid} 2>/dev/null`, { stdio: "ignore" }); } catch {}
+    }
   }
 });
 
