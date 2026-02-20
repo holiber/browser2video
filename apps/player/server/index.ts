@@ -16,7 +16,6 @@ import {
   chromium,
   type Browser,
   type BrowserContext,
-  type Page,
   isScenarioDescriptor,
   type ReplayEvent,
   startTerminalWsServer,
@@ -322,8 +321,21 @@ let viteProcess: ChildProcess | null = null;
 let terminalServer: TerminalServer | null = null;
 let studioBrowserManager: StudioBrowserManager | null = null;
 let playerBrowser: Browser | null = null;
-let playerPage: Page | null = null;
 let currentViewMode: ViewMode = "live";
+
+// Electron mode: when B2V_CDP_PORT is set, Playwright connects via CDP
+const electronCdpPort = process.env.B2V_CDP_PORT ? parseInt(process.env.B2V_CDP_PORT, 10) : 0;
+const electronCdpEndpoint = electronCdpPort > 0 ? `http://localhost:${electronCdpPort}` : null;
+
+// Dynamically import Electron main process API when running in Electron
+let electronMain: { createScenarioView: (url: string, viewport: { width: number; height: number }) => Promise<void> } | null = null;
+if (electronCdpEndpoint) {
+  try {
+    electronMain = await import("../electron/main.ts");
+  } catch (err) {
+    console.error("[player] Could not import Electron main (not running in Electron?):", err);
+  }
+}
 const cache = new PlayerCache(PROJECT_ROOT);
 let currentScenarioFile: string | null = null;
 let currentCacheDir: string | null = null;
@@ -467,8 +479,10 @@ wss.on("connection", (ws) => {
           const descriptor = await loadScenarioDescriptor(msg.file);
           executor = new Executor(descriptor, {
             projectRoot: PROJECT_ROOT,
-            playerBrowser,
-            playerPage,
+            cdpEndpoint: electronCdpEndpoint,
+            onRequestPage: electronMain
+              ? (url: string, viewport: { width: number; height: number }) => electronMain!.createScenarioView(url, viewport)
+              : null,
           });
           executor.viewMode = currentViewMode;
           executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
@@ -762,22 +776,26 @@ await new Promise<void>((resolve) => httpServer.listen(PORT, () => {
 await startVite();
 
 const url = `http://localhost:${PORT}`;
-const shouldAutoOpenBrowser = process.env.B2V_AUTO_OPEN_BROWSER !== "0";
-if (shouldAutoOpenBrowser) {
-  console.error("  Vite ready, launching Chromium…\n");
-  playerBrowser = await chromium.launch({
-    headless: false,
-    args: [
-      "--disable-web-security",
-      "--disable-features=IsolateOrigins,site-per-process",
-    ],
-  });
-  const context = await playerBrowser.newContext({ viewport: null });
-  await enableFrameHeaderBypass(context);
-  playerPage = await context.newPage();
-  await playerPage.goto(url);
+if (electronCdpEndpoint) {
+  console.error(`  Vite ready (Electron mode, CDP at ${electronCdpEndpoint}).\n`);
 } else {
-  console.error("  Vite ready (auto-open disabled).\n");
+  const shouldAutoOpenBrowser = process.env.B2V_AUTO_OPEN_BROWSER !== "0";
+  if (shouldAutoOpenBrowser) {
+    console.error("  Vite ready, launching Chromium…\n");
+    playerBrowser = await chromium.launch({
+      headless: false,
+      args: [
+        "--disable-web-security",
+        "--disable-features=IsolateOrigins,site-per-process",
+      ],
+    });
+    const context = await playerBrowser.newContext({ viewport: null });
+    await enableFrameHeaderBypass(context);
+    const page = await context.newPage();
+    await page.goto(url);
+  } else {
+    console.error("  Vite ready (auto-open disabled).\n");
+  }
 }
 
 process.on("SIGINT", async () => {

@@ -1,7 +1,9 @@
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
 import type { ViewMode, StepState, PaneLayoutInfo, CursorState } from "../hooks/use-player";
 import { CursorOverlay } from "./cursor-overlay";
 import { StudioGrid } from "./studio-grid";
+
+const isElectron = !!(window as any).electronAPI?.isElectron;
 
 interface PreviewProps {
   screenshot: string | null;
@@ -68,6 +70,75 @@ const liveBadge = (
     Live
   </span>
 );
+
+/**
+ * In Electron mode, the scenario page is rendered as a WebContentsView
+ * positioned over the preview area by the main process. This component
+ * tracks its position/size and sends IPC to keep the view aligned.
+ * The cursor overlay is rendered on top (in the React layer).
+ */
+function ElectronScenarioView({
+  vp,
+  cursor,
+  active,
+}: {
+  vp: { width: number; height: number };
+  cursor: CursorState;
+  active: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!active || !window.electronAPI) return;
+    const el = containerRef.current;
+    if (!el) return;
+
+    const sendBounds = () => {
+      const rect = el.getBoundingClientRect();
+      window.electronAPI!.scenarioView.resize({
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      });
+    };
+
+    const ro = new ResizeObserver(() => sendBounds());
+    ro.observe(el);
+    sendBounds();
+
+    return () => {
+      ro.disconnect();
+    };
+  }, [active]);
+
+  // Cleanup: destroy the view when component unmounts
+  useEffect(() => {
+    return () => {
+      if (window.electronAPI) {
+        window.electronAPI.scenarioView.destroy();
+      }
+    };
+  }, []);
+
+  return (
+    <div ref={containerRef} className="flex-1 overflow-hidden relative" style={{ background: "transparent" }}>
+      {/* The WebContentsView is rendered by Electron behind/over this area */}
+      <div className="absolute inset-0 pointer-events-none z-10">
+        <CursorOverlay cursor={cursor} viewportWidth={vp.width} viewportHeight={vp.height} />
+      </div>
+      {active && (
+        <button
+          onClick={() => window.electronAPI?.scenarioView.openDevTools()}
+          className="absolute bottom-2 right-2 z-20 px-2 py-1 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-300 text-xs rounded border border-zinc-600"
+          title="Open DevTools for the scenario page"
+        >
+          Inspect
+        </button>
+      )}
+    </div>
+  );
+}
 
 /**
  * Renders the observer iframe at the exact Playwright viewport dimensions
@@ -250,7 +321,18 @@ export function Preview({
     );
   }
 
-  // --- Live mode: grid observer ---
+  // --- Electron live mode: WebContentsView for real DOM interactions ---
+  if (isElectron && viewMode === "live" && paneLayout?.gridConfig) {
+    const vp = paneLayout?.viewport ?? { width: 1280, height: 720 };
+    return (
+      <div data-preview-mode="electron-scenario-view" className="flex flex-col h-full">
+        <StepHeader activeStep={activeStep} stepCaption={stepCaption} badge={liveBadge} />
+        <ElectronScenarioView vp={vp} cursor={cursor} active={isRunning} />
+      </div>
+    );
+  }
+
+  // --- Live mode: grid observer (non-Electron fallback) ---
   if (observerUrl) {
     const vp = paneLayout?.viewport ?? { width: 1280, height: 720 };
     return (

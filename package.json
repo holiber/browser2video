@@ -22,7 +22,8 @@
     "run:console-logs": "node tests/scenarios/console-logs.test.ts",
     "gen:docs": "node scripts/gen-docs.ts",
     "gen:video-page": "node scripts/gen-video-page.ts",
-    "player": "pnpm -C apps/player dev"
+    "player": "pnpm -C apps/player dev",
+    "player:electron": "pnpm -C apps/player dev:electron"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",
@@ -32,6 +33,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
+      "electron",
       "node-pty",
       "playwright",
       "@ffmpeg-installer/darwin-arm64",

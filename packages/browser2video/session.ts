@@ -181,6 +181,14 @@ export class Session {
   private _ownsBrowser = true;
   /** Set before _init() to reuse an existing browser instead of launching one */
   _externalBrowser: Browser | null = null;
+  /** CDP endpoint to connect to instead of launching a new browser */
+  _cdpEndpoint: string | null = null;
+  /**
+   * Callback invoked when createGrid needs a page to be created externally
+   * (e.g. Electron main process creates a WebContentsView).
+   * Returns the URL that was loaded so the session can find the page.
+   */
+  _onRequestPage: ((url: string, viewport: { width: number; height: number }) => Promise<void>) | null = null;
   private panes: Map<string, PaneState> = new Map();
   private paneOrder: string[] = [];
   private steps: StepRecord[] = [];
@@ -270,7 +278,10 @@ export class Session {
       launchArgs.push(`--remote-debugging-port=${this.cdpPort}`);
     }
 
-    if (this._externalBrowser) {
+    if (this._cdpEndpoint) {
+      this.browser = await chromium.connectOverCDP(this._cdpEndpoint);
+      this._ownsBrowser = false;
+    } else if (this._externalBrowser) {
       this.browser = this._externalBrowser;
       this._ownsBrowser = false;
     } else {
@@ -815,32 +826,7 @@ export class Session {
     // Create a single pane for the grid page
     const id = `pane-${this.panes.size}`;
     const label = "terminal-grid";
-
-    const ctxOpts: {
-      viewport: { width: number; height: number };
-      recordVideo?: { dir: string; size: { width: number; height: number } };
-    } = {
-      viewport: { width: vpW, height: vpH },
-    };
-
     let rawVideoPath: string | undefined;
-    if (this.record) {
-      rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
-      ctxOpts.recordVideo = {
-        dir: path.dirname(rawVideoPath),
-        size: { width: vpW, height: vpH },
-      };
-    }
-
-    const context = await this.browser.newContext(ctxOpts);
-    const page = await context.newPage();
-
-    // Dark background to avoid white flash
-    await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
-
-    // Init scripts
-    if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
-    if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
 
     // Build config parameter for the grid endpoint
     const gridPanes: GridPaneConfig[] = paneConfigs.map((p) => {
@@ -852,9 +838,64 @@ export class Session {
 
     const gridConfig = { panes: gridPanes, grid: opts?.grid, viewport: { width: vpW, height: vpH } };
     this.lastGridConfig = gridConfig;
-    const gridUrl = new URL(`${this.terminalServer.baseHttpUrl}/terminal-grid`);
+    const gridUrl = new URL(`${this.terminalServer!.baseHttpUrl}/terminal-grid`);
     gridUrl.searchParams.set("config", JSON.stringify(gridConfig));
-    await page.goto(gridUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
+    const gridUrlStr = gridUrl.toString();
+
+    let page: Page;
+    let context: BrowserContext;
+
+    if (this._cdpEndpoint && this._onRequestPage) {
+      // Electron mode: ask the main process to create a WebContentsView with the grid URL
+      await this._onRequestPage(gridUrlStr, { width: vpW, height: vpH });
+
+      // Find the page that was created by the Electron main process
+      let found: Page | null = null;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        for (const ctx of this.browser!.contexts()) {
+          for (const p of ctx.pages()) {
+            if (p.url().includes("/terminal-grid")) {
+              found = p;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (found) break;
+        await sleep(250);
+      }
+      if (!found) throw new Error("Could not find the scenario page via CDP after Electron created the view");
+      page = found;
+      context = page.context();
+      console.error(`[session] Found Electron-managed page via CDP: ${page.url()}`);
+    } else {
+      const ctxOpts: {
+        viewport: { width: number; height: number };
+        recordVideo?: { dir: string; size: { width: number; height: number } };
+      } = {
+        viewport: { width: vpW, height: vpH },
+      };
+
+      if (this.record) {
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+        ctxOpts.recordVideo = {
+          dir: path.dirname(rawVideoPath),
+          size: { width: vpW, height: vpH },
+        };
+      }
+
+      context = await this.browser!.newContext(ctxOpts);
+      page = await context.newPage();
+
+      // Dark background to avoid white flash
+      await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
+
+      // Init scripts
+      if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+      if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
+
+      await page.goto(gridUrlStr, { waitUntil: "domcontentloaded", timeout: 30000 });
+    }
 
     // Wait for all iframes to load
     for (let i = 0; i < paneConfigs.length; i++) {
@@ -1673,10 +1714,16 @@ export class Session {
  * await session.finish();
  * ```
  */
-export async function createSession(opts?: SessionOptions & { browser?: Browser }): Promise<Session> {
-  const { browser: externalBrowser, ...sessionOpts } = opts ?? {};
+export async function createSession(opts?: SessionOptions & {
+  browser?: Browser;
+  cdpEndpoint?: string;
+  onRequestPage?: (url: string, viewport: { width: number; height: number }) => Promise<void>;
+}): Promise<Session> {
+  const { browser: externalBrowser, cdpEndpoint, onRequestPage, ...sessionOpts } = opts ?? {};
   const session = new Session(sessionOpts as SessionOptions);
-  if (externalBrowser) session._externalBrowser = externalBrowser;
+  if (cdpEndpoint) session._cdpEndpoint = cdpEndpoint;
+  else if (externalBrowser) session._externalBrowser = externalBrowser;
+  if (onRequestPage) session._onRequestPage = onRequestPage;
   await session._init();
   return session;
 }

@@ -1,6 +1,7 @@
 packages:
-  - "apps/*"
-  - "packages/*"
-  - "tests/*"
-  - "website"
+  - apps/*
+  - packages/*
+  - tests/*
+  - website
 
+onlyBuiltDependencies: electron

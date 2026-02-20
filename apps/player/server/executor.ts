@@ -12,9 +12,6 @@ import {
   type Session,
   type SessionOptions,
   type ReplayEvent,
-  type Browser,
-  type Page,
-  type GridHandle,
 } from "browser2video";
 import type { ScenarioDescriptor, StepDescriptor } from "browser2video/scenario";
 import type { GridPaneConfig } from "browser2video/terminal";
@@ -47,9 +44,8 @@ export class Executor<T = any> {
   private cdpSessions: Map<string, any> = new Map();
   private lastVideoPath: string | null = null;
   private lastEmittedLayout = "";
-  private playerBrowser: Browser | null;
-  private playerPage: Page | null;
-  private attachedGrid: GridHandle | null = null;
+  private cdpEndpoint: string | null;
+  private onRequestPage: ((url: string, viewport: { width: number; height: number }) => Promise<void>) | null;
 
   viewMode: ViewMode = "live";
   onLiveFrame: ((data: string, paneId?: string) => void) | null = null;
@@ -59,14 +55,14 @@ export class Executor<T = any> {
   constructor(descriptor: ScenarioDescriptor<T>, opts?: {
     sessionOpts?: Partial<SessionOptions>;
     projectRoot?: string;
-    playerBrowser?: Browser | null;
-    playerPage?: Page | null;
+    cdpEndpoint?: string | null;
+    onRequestPage?: ((url: string, viewport: { width: number; height: number }) => Promise<void>) | null;
   }) {
     this.descriptor = descriptor;
     this.sessionOpts = opts?.sessionOpts ?? {};
     this.projectRoot = opts?.projectRoot ?? null;
-    this.playerBrowser = opts?.playerBrowser ?? null;
-    this.playerPage = opts?.playerPage ?? null;
+    this.cdpEndpoint = opts?.cdpEndpoint ?? null;
+    this.onRequestPage = opts?.onRequestPage ?? null;
 
     const hasNarration = descriptor.steps.some((s) => !!s.narration);
     if (hasNarration && !process.env.OPENAI_API_KEY) {
@@ -106,7 +102,8 @@ export class Executor<T = any> {
           ...this.descriptor.sessionOpts,
           ...this.sessionOpts,
           headed: false,
-          browser: this.playerBrowser ?? undefined,
+          cdpEndpoint: this.cdpEndpoint ?? undefined,
+          onRequestPage: this.onRequestPage ?? undefined,
         });
         this.ctx = await this.descriptor.setupFn(this.session);
 
@@ -131,50 +128,11 @@ export class Executor<T = any> {
         if (this.onLiveFrame && this.viewMode === "video") {
           await this.startScreencast();
         }
-
-        // In live mode with a player page, attach the grid to the observer iframe
-        // so interactions happen on the DOM the user can see and inspect
-        if (this.viewMode === "live" && this.playerPage) {
-          await this.attachGridToPlayerPage();
-        }
       } finally {
         process.chdir(prevCwd);
       }
     }
     return this.session;
-  }
-
-  /**
-   * After setup, find the grid created during the scenario's setupFn and
-   * re-wire its actors to operate on the player's preview iframe.
-   */
-  private async attachGridToPlayerPage(): Promise<void> {
-    if (!this.session || !this.playerPage) return;
-
-    // Access the session's internal grid handle via the context
-    // The scenario's setupFn typically stores the grid in ctx.grid
-    const ctx = this.ctx as any;
-    const grid: GridHandle | null = ctx?.grid ?? null;
-    if (!grid || typeof grid.attachToPage !== "function") {
-      console.error("[executor] No grid with attachToPage found in context — skipping embedded mode");
-      return;
-    }
-
-    const layout = this.session.getLayoutInfo();
-    const hasBrowserPanes = layout.gridConfig?.panes.some((p) => p.type === "browser") ?? false;
-    if (!hasBrowserPanes && !layout.gridConfig) {
-      console.error("[executor] No browser panes in grid — observer iframe is sufficient");
-      return;
-    }
-
-    try {
-      console.error("[executor] Attaching grid to player page for embedded live view...");
-      await grid.attachToPage(this.playerPage, "b2v-scenario");
-      this.attachedGrid = grid;
-      console.error("[executor] Grid attached — interactions now happen on the player's preview iframe");
-    } catch (err) {
-      console.error("[executor] Failed to attach grid to player page:", err);
-    }
   }
 
   private async startScreencast(): Promise<void> {
@@ -234,10 +192,8 @@ export class Executor<T = any> {
           await this.stopScreencast();
           await this.startScreencast();
         }
-        // Re-attach grid to player page after layout switch
-        if (this.viewMode === "live" && this.playerPage) {
-          await this.attachGridToPlayerPage();
-        }
+        // In Electron mode, layout changes trigger new WebContentsView creation
+        // via onRequestPage callback during the next createGrid call
       }
     } catch (err) {
       console.error("[executor] Failed to check layout change:", err);

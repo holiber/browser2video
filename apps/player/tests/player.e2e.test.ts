@@ -333,7 +333,7 @@ test("cached screenshots appear on second load", async ({ page }) => {
   const sidebarImages = page.locator(".overflow-y-auto img[src^='data:image/']");
   await expect(sidebarImages.first()).toBeVisible({ timeout: 10_000 });
 
-  const clearCacheBtn = page.getByRole("button", { name: "Clear cache" });
+  const clearCacheBtn = page.getByRole("button", { name: "Clear cache" }).first();
   await expect(clearCacheBtn).toBeVisible();
   await clearCacheBtn.click();
 
