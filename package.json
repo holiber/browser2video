@@ -11,9 +11,12 @@
     "typecheck": "pnpm -r --filter '!browser2video-website' typecheck",
     "preview": "pnpm -C apps/demo preview",
     "demo": "pnpm -C apps/demo dev",
-    "test": "npx playwright test",
+    "test": "test-runner scenario --allow-missing-project",
+    "test:unit": "test-runner unit",
+    "test:e2e": "test-runner e2e --allow-missing-project",
+    "test:scenario": "test-runner scenario --allow-missing-project",
+    "test:smoke": "test-runner scenario --smoke --allow-missing-project",
     "test:ui": "npx playwright test --ui",
-    "test:fast": "npx playwright test --reporter=list",
     "run:basic-ui": "node tests/scenarios/basic-ui.test.ts",
     "run:collab": "node tests/scenarios/collab.test.ts",
     "run:kanban": "node tests/scenarios/kanban.test.ts",
@@ -28,7 +31,8 @@
   "devDependencies": {
     "@playwright/test": "^1.50.0",
     "@types/node": "^22.0.0",
-    "typescript": "~5.7.0"
+    "typescript": "~5.7.0",
+    "test-runner": "file:packages/test-runner"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

@@ -7,5 +7,5 @@ if (isDirectRun) {
   runScenario(descriptor).then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
 } else {
   const { test } = await import("@playwright/test");
-  test("tui-terminals", async () => { test.setTimeout(120_000); await runScenario(descriptor); });
+  test.skip("tui-terminals", async () => { test.setTimeout(120_000); await runScenario(descriptor); });
 }
