@@ -17,6 +17,8 @@
     "test:scenario": "test-runner scenario --allow-missing-project",
     "test:smoke": "test-runner scenario --smoke --allow-missing-project",
     "test:ui": "npx playwright test --ui",
+    "pw:ui": "pnpm exec playwright test --ui",
+    "pw:trace": "pnpm exec playwright show-trace",
     "run:basic-ui": "node tests/scenarios/basic-ui.test.ts",
     "run:collab": "node tests/scenarios/collab.test.ts",
     "run:kanban": "node tests/scenarios/kanban.test.ts",
