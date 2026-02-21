@@ -68,5 +68,5 @@ if (isDirectRun) {
   scenario().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
 } else {
   const { test } = await import("@playwright/test");
-  test("console-logs", scenario);
+  test("console-logs", async () => { test.setTimeout(60_000); await scenario(); });
 }

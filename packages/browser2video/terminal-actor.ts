@@ -45,7 +45,11 @@ export class TerminalActor extends Actor {
     this.selector = selector;
     this._dom = opts?.frame ?? page;
     this._iframeName = opts?.iframeName;
+    if (opts?.frame) this._context = opts.frame;
   }
+
+  /** DOM context for direct frame operations (waitForFunction, evaluate, etc.) */
+  get frame(): DOMContext { return this._dom; }
 
   // ─── Overrides (selector-free) ────────────────────────────────────
 
@@ -155,12 +159,10 @@ export class TerminalActor extends Actor {
         return { x: r.x, y: r.y, width: r.width, height: r.height };
       },
     );
-    await this.page.mouse.click(
-      Math.round(iframeBox.x + iframeBox.width / 2),
-      Math.round(iframeBox.y + iframeBox.height / 2),
-    );
+    const x = Math.round(iframeBox.x + iframeBox.width / 2);
+    const y = Math.round(iframeBox.y + iframeBox.height / 2);
+    await this.clickAt(x, y);
     _focusedIframe.set(this.page, this._iframeName);
-    await sleep(this.mode === "fast" ? 0 : 30);
   }
 
   /**

@@ -24,6 +24,7 @@ export const ServerConfigSchema = z.discriminatedUnion("type", [
     type: z.literal("static"),
     root: z.string().describe("Directory to serve static files from."),
     port: z.number().int().optional().describe("Preferred port (0 = auto)."),
+    liveReload: z.boolean().optional().describe("Inject live-reload script that auto-refreshes on file changes."),
   }).describe("Start a static file server."),
 ]).describe("Server configuration for scenarios that need a local web server.");
 

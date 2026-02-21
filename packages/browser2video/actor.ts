@@ -3,8 +3,10 @@
  * WindMouse cursor movement, click effects, typing, drag-and-drop,
  * and drawing.  Shared by the unified runner.
  */
-import type { Page, ElementHandle, Locator } from "playwright";
+import type { Page, Frame, ElementHandle, Locator } from "playwright";
 import type { Mode, ActorDelays, DelayRange } from "./types.ts";
+import type { ReplayEvent } from "./replay-log.ts";
+import type { AudioDirectorAPI, SpeakOptions } from "./narrator.ts";
 
 // ---------------------------------------------------------------------------
 //  Delay defaults & helpers
@@ -277,23 +279,123 @@ export const FAST_MODE_INIT_SCRIPT = `
 export class Actor {
   page: Page;
   mode: Mode;
+  voice?: string;
+  speed?: number;
   private cursorX = 0;
   private cursorY = 0;
   protected delays: ActorDelays;
+  /** DOM context for selector lookups — page by default, iframe Frame when inside a grid */
+  protected _context: Page | Frame;
+  /** Shared narration backend provided by Session */
+  private _audioDirector: AudioDirectorAPI | null = null;
+  /** Callback for streaming replay events (cursor moves, clicks, key presses) */
+  onReplayEvent: ((event: ReplayEvent) => void) | null = null;
+  /** Session start time reference for replay event timestamps */
+  protected _sessionStartTime = 0;
+  /**
+   * When true, the actor is embedded in the player's preview iframe.
+   * Replay events use iframe-local coordinates and cursor overlay injection is skipped.
+   */
+  _embedded = false;
+  /** Selector for the outermost scenario iframe in the player page (for coordinate conversion) */
+  _scenarioIframeSelector: string | null = null;
+  /** Expected viewport size of the scenario iframe (for coordinate conversion) */
+  _scenarioViewport: { width: number; height: number } | null = null;
 
   constructor(
     page: Page,
     mode: Mode,
-    opts?: { delays?: Partial<ActorDelays> },
+    opts?: { delays?: Partial<ActorDelays>; voice?: string; speed?: number },
   ) {
     this.page = page;
+    this._context = page;
     this.mode = mode;
     this.delays = mergeDelays(mode, opts?.delays);
+    this.voice = opts?.voice;
+    this.speed = opts?.speed;
   }
 
-  /** Inject cursor overlay into the page (human mode only). */
+  /** Set the session start time for replay event timestamps */
+  setSessionStartTime(t: number) { this._sessionStartTime = t; }
+
+  private _cachedIframeBox: { x: number; y: number; scale: number } | null = null;
+  private _lastIframeBoxMs = 0;
+
+  /** Refresh the cached iframe bounding box (called at the start of each interaction). */
+  private async _refreshIframeBox(): Promise<void> {
+    if (!this._embedded || !this._scenarioIframeSelector || !this._scenarioViewport) return;
+    const now = Date.now();
+    if (this._cachedIframeBox && now - this._lastIframeBoxMs < 2000) return;
+    const el = await this.page.$(this._scenarioIframeSelector);
+    if (!el) return;
+    const box = await el.boundingBox();
+    if (!box || box.width === 0) return;
+    this._cachedIframeBox = { x: box.x, y: box.y, scale: box.width / this._scenarioViewport.width };
+    this._lastIframeBoxMs = now;
+  }
+
+  /** Synchronous page-coords → scenario-viewport-coords conversion for replay events. */
+  private _replayXY(pageX: number, pageY: number): { x: number; y: number } {
+    if (!this._cachedIframeBox) return { x: pageX, y: pageY };
+    const { x: ox, y: oy, scale } = this._cachedIframeBox;
+    return {
+      x: Math.round((pageX - ox) / scale),
+      y: Math.round((pageY - oy) / scale),
+    };
+  }
+
+  /** Emit a cursorMove replay event, converting coordinates for embedded mode. */
+  private _emitCursorMove(pageX: number, pageY: number) {
+    if (!this.onReplayEvent) return;
+    const { x, y } = this._replayXY(pageX, pageY);
+    this.onReplayEvent({ type: "cursorMove", x, y, ts: Date.now() - this._sessionStartTime });
+  }
+
+  /** Emit a click replay event, converting coordinates for embedded mode. */
+  private _emitClick(pageX: number, pageY: number) {
+    if (!this.onReplayEvent) return;
+    const { x, y } = this._replayXY(pageX, pageY);
+    this.onReplayEvent({ type: "click", x, y, ts: Date.now() - this._sessionStartTime });
+  }
+
+  /** Attach the session audio director so Actor can narrate directly. */
+  setAudioDirector(audioDirector: AudioDirectorAPI) {
+    this._audioDirector = audioDirector;
+  }
+
+  /** Set per-actor narration defaults. */
+  setVoice(voice: string, speed?: number) {
+    this.voice = voice;
+    if (speed !== undefined) this.speed = speed;
+  }
+
+  private _resolveSpeakOptions(opts?: SpeakOptions): SpeakOptions | undefined {
+    const voice = opts?.voice ?? this.voice;
+    const speed = opts?.speed ?? this.speed;
+    if (voice === undefined && speed === undefined) return undefined;
+    return { voice, speed };
+  }
+
+  private _requireAudioDirector(): AudioDirectorAPI {
+    if (!this._audioDirector) {
+      throw new Error("Actor audio director is not attached. Create this actor via Session APIs before calling speak().");
+    }
+    return this._audioDirector;
+  }
+
+  /** Pre-generate TTS audio using this actor's voice defaults. */
+  async warmup(text: string, opts?: SpeakOptions): Promise<void> {
+    await this._requireAudioDirector().warmup(text, this._resolveSpeakOptions(opts));
+  }
+
+  /** Speak narration text using this actor's voice defaults. */
+  async speak(text: string, opts?: SpeakOptions): Promise<void> {
+    await this._requireAudioDirector().speak(text, this._resolveSpeakOptions(opts));
+  }
+
+  /** Inject cursor overlay into the page (human mode only, skipped in embedded mode). */
   async injectCursor() {
-    if (this.mode !== "human") return;
+    if (this.mode !== "human" || this._embedded) return;
     await this.page.evaluate(CURSOR_OVERLAY_SCRIPT);
   }
 
@@ -303,12 +405,14 @@ export class Actor {
    */
   async moveCursorTo(x: number, y: number) {
     if (this.mode !== "human") return;
+    await this._refreshIframeBox();
     const from = { x: this.cursorX, y: this.cursorY };
     const points = windMouse(from, { x: Math.round(x), y: Math.round(y) });
     for (let i = 0; i < points.length; i++) {
       const p = points[i]!;
       await this.page.mouse.move(p.x, p.y);
       await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
     }
     this.cursorX = Math.round(x);
@@ -330,24 +434,32 @@ export class Actor {
 
   /** Navigate to a URL. Cursor is auto-injected via framenavigated listener. */
   async goto(url: string) {
-    await this.page.goto(url, { waitUntil: "networkidle" });
+    await this._context.goto(url, { waitUntil: "networkidle" });
   }
 
   /** Wait for an element to appear. */
   async waitFor(selector: string, timeout = 3000) {
-    await this.page.waitForSelector(selector, { state: "visible", timeout });
+    await this._context.waitForSelector(selector, { state: "visible", timeout });
   }
 
   /** Move cursor smoothly to an element center (human) or no-op (fast). */
   private async moveTo(
     selector: string,
   ): Promise<{ x: number; y: number; el: ElementHandle }> {
-    const el = (await this.page.waitForSelector(selector, {
-      state: "visible",
-      timeout: 3000,
-    }))!;
+    await this._refreshIframeBox();
+    let el: ElementHandle | null = null;
+    try {
+      el = await this._context.waitForSelector(selector, { state: "visible", timeout: 3000 });
+    } catch (err) {
+      if (this._context !== this.page) {
+        el = await this.page.waitForSelector(selector, { state: "visible", timeout: 3000 });
+      } else {
+        throw err;
+      }
+    }
+    if (!el) throw new Error(`Element not found: ${selector}`);
     const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
-    await el.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
+    await el.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
     await sleep(pickMs(this.delays.afterScrollIntoViewMs));
     const box = (await el.boundingBox())!;
     const target = {
@@ -365,6 +477,7 @@ export class Actor {
         await this.page.evaluate(
           `window.__b2v_moveCursor?.(${p.x}, ${p.y})`,
         );
+        this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
       }
     }
@@ -387,6 +500,7 @@ export class Actor {
       await this.page.evaluate(
         `window.__b2v_clickEffect?.(${x}, ${y})`,
       );
+      this._emitClick(x, y);
       await sleep(pickMs(this.delays.clickEffectMs));
     }
 
@@ -411,7 +525,7 @@ export class Actor {
    */
   async type(selector: string, text: string) {
     // Auto-detect xterm.js terminal containers
-    const xtermTextarea = await this.page.$(`${selector} .xterm-helper-textarea`);
+    const xtermTextarea = await this._context.$(`${selector} .xterm-helper-textarea`);
     if (xtermTextarea) {
       await xtermTextarea.focus();
       const charDelay = this.mode === "fast" ? 0 : pickMs(this.delays.keyDelayMs);
@@ -432,7 +546,7 @@ export class Actor {
     await sleep(pickMs(this.delays.beforeTypeMs));
 
     if (this.mode === "fast") {
-      await this.page.type(selector, text, { delay: 0 });
+      await this._context.type(selector, text, { delay: 0 });
       return;
     }
 
@@ -459,10 +573,10 @@ export class Actor {
     await sleep(pickMs(this.delays.selectOpenMs));
 
     const optionSelector = `[role="option"]`;
-    await this.page.waitForSelector(optionSelector, { state: "visible", timeout: 3000 });
+    await this._context.waitForSelector(optionSelector, { state: "visible", timeout: 3000 });
     await sleep(pickMs(this.delays.selectOptionMs));
 
-    const options = await this.page.$$(optionSelector);
+    const options = await this._context.$$(optionSelector);
     for (const option of options) {
       const text = await option.evaluate((el: any) => el.textContent?.trim());
       if (text === valueText) {
@@ -479,9 +593,11 @@ export class Actor {
             const p = points[i]!;
             await this.page.mouse.move(p.x, p.y);
             await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+            this._emitCursorMove(p.x, p.y);
             await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
           }
           await this.page.evaluate(`window.__b2v_clickEffect?.(${target.x}, ${target.y})`);
+          this._emitClick(target.x, target.y);
           await sleep(pickMs(this.delays.clickEffectMs));
         }
 
@@ -504,7 +620,7 @@ export class Actor {
     const behavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
 
     if (selector) {
-      await this.page.evaluate(
+      await this._context.evaluate(
         ({ selector, deltaY, behavior }) => {
           const root = document.querySelector(selector) as HTMLElement | null;
           if (!root) return;
@@ -534,7 +650,7 @@ export class Actor {
         { selector, deltaY, behavior },
       );
     } else {
-      await this.page.evaluate(
+      await this._context.evaluate(
         ({ deltaY, behavior }) => {
           window.scrollBy({ top: deltaY, behavior });
         },
@@ -553,6 +669,7 @@ export class Actor {
     from: { x: number; y: number },
     to: { x: number; y: number },
   ) {
+    await this._refreshIframeBox();
     from = { x: Math.round(from.x), y: Math.round(from.y) };
     to = { x: Math.round(to.x), y: Math.round(to.y) };
 
@@ -562,12 +679,14 @@ export class Actor {
         const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
     }
 
     await this.page.mouse.move(from.x, from.y);
     await this.page.mouse.down();
+    this._emitClick(from.x, from.y);
     await sleep(pickMs(this.delays.clickHoldMs));
 
     const dragSteps = this.mode === "human" ? 25 : 5;
@@ -577,6 +696,7 @@ export class Actor {
       await this.page.mouse.move(p.x, p.y);
       if (this.mode === "human") {
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, dragPoints.length));
       }
     }
@@ -591,14 +711,14 @@ export class Actor {
 
   /** Drag from one element's center to another element's center. */
   async drag(fromSelector: string, toSelector: string) {
-    const fromEl = (await this.page.waitForSelector(fromSelector, { state: "visible", timeout: 3000 }))!;
+    const fromEl = (await this._context.waitForSelector(fromSelector, { state: "visible", timeout: 3000 }))!;
     const fromBox = (await fromEl.boundingBox())!;
     const from = {
       x: Math.round(fromBox.x + fromBox.width / 2),
       y: Math.round(fromBox.y + fromBox.height / 2),
     };
 
-    const toEl = (await this.page.waitForSelector(toSelector, { state: "visible", timeout: 3000 }))!;
+    const toEl = (await this._context.waitForSelector(toSelector, { state: "visible", timeout: 3000 }))!;
     const toBox = (await toEl.boundingBox())!;
     const to = {
       x: Math.round(toBox.x + toBox.width / 2),
@@ -610,9 +730,9 @@ export class Actor {
 
   /** Drag an element by a pixel offset. */
   async dragByOffset(selector: string, dx: number, dy: number) {
-    const el = (await this.page.waitForSelector(selector, { state: "visible", timeout: 3000 }))!;
+    const el = (await this._context.waitForSelector(selector, { state: "visible", timeout: 3000 }))!;
     const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
-    await el.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
+    await el.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
     await sleep(pickMs(this.delays.afterScrollIntoViewMs));
     const box = (await el.boundingBox())!;
     const from = {
@@ -630,9 +750,9 @@ export class Actor {
    * Produces a visible browser text selection highlight.
    */
   async selectText(fromSelector: string, toSelector?: string) {
-    const fromEl = (await this.page.waitForSelector(fromSelector, { state: "visible", timeout: 5000 }))!;
+    const fromEl = (await this._context.waitForSelector(fromSelector, { state: "visible", timeout: 5000 }))!;
     const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
-    await fromEl.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
+    await fromEl.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
     await sleep(pickMs(this.delays.afterScrollIntoViewMs));
 
     const fromBox = (await fromEl.boundingBox())!;
@@ -643,7 +763,7 @@ export class Actor {
 
     let to: { x: number; y: number };
     if (toSelector) {
-      const toEl = (await this.page.waitForSelector(toSelector, { state: "visible", timeout: 5000 }))!;
+      const toEl = (await this._context.waitForSelector(toSelector, { state: "visible", timeout: 5000 }))!;
       const toBox = (await toEl.boundingBox())!;
       to = {
         x: Math.round(toBox.x + toBox.width - 2),
@@ -661,7 +781,7 @@ export class Actor {
 
   /** Draw on a canvas element (points are 0-1 normalized). */
   async draw(canvasSelector: string, points: Array<{ x: number; y: number }>) {
-    const canvas = (await this.page.waitForSelector(canvasSelector, {
+    const canvas = (await this._context.waitForSelector(canvasSelector, {
       state: "visible",
       timeout: 3000,
     }))!;
@@ -680,6 +800,7 @@ export class Actor {
         const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
     }
@@ -695,6 +816,7 @@ export class Actor {
         await this.page.mouse.move(p.x, p.y);
         if (this.mode === "human") {
           await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+          this._emitCursorMove(p.x, p.y);
           await sleep(
             easedStepMs(pickMs(this.delays.mouseMoveStepMs), j, segPoints.length, 2),
           );
@@ -718,13 +840,14 @@ export class Actor {
    */
   async circleAround(selector: string, opts?: { durationMs?: number }) {
     if (this.mode !== "human") return;
+    await this._refreshIframeBox();
 
-    const el = (await this.page.waitForSelector(selector, {
+    const el = (await this._context.waitForSelector(selector, {
       state: "visible",
       timeout: 3000,
     }))!;
     const scrollBehavior: ScrollBehavior = "smooth";
-    await el.evaluate((e, b) => e.scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
+    await el.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
     await sleep(pickMs(this.delays.afterScrollIntoViewMs));
     const box = (await el.boundingBox())!;
 
@@ -746,6 +869,7 @@ export class Actor {
       const p = movePoints[i]!;
       await this.page.mouse.move(p.x, p.y);
       await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
     }
 
@@ -770,6 +894,7 @@ export class Actor {
       if (px !== Math.round(prevX) || py !== Math.round(prevY)) {
         await this.page.mouse.move(px, py);
         await this.page.evaluate(`window.__b2v_moveCursor?.(${px}, ${py})`);
+        this._emitCursorMove(px, py);
         prevX = px;
         prevY = py;
       }
@@ -786,6 +911,7 @@ export class Actor {
    */
   async pressKey(key: string) {
     await this.page.keyboard.press(key);
+    this.onReplayEvent?.({ type: "keyPress", key, ts: Date.now() - this._sessionStartTime });
     if (this.mode === "human") {
       await sleep(pickMs(this.delays.breatheMs));
     }
@@ -801,6 +927,7 @@ export class Actor {
 
     if (this.mode === "human") {
       await this.page.evaluate(`window.__b2v_clickEffect?.(${x}, ${y})`);
+      this._emitClick(x, y);
       await sleep(pickMs(this.delays.clickEffectMs));
       await this.page.mouse.down();
       await sleep(pickMs(this.delays.clickHoldMs));
