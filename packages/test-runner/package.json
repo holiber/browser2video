@@ -1,0 +1,21 @@
+{
+  "name": "test-runner",
+  "version": "0.0.0",
+  "description": "Universal test runner (unit/e2e/scenario/smoke/human) with stable artifacts.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "test-runner": "./bin/test-runner.mjs"
+  },
+  "exports": {
+    "./human": "./src/human.mjs"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "dependencies": {
+    "yargs": "^18.0.0"
+  }
+}
+

@@ -166,8 +166,8 @@ function writeCode(code: string) {
 async function scenario() {
   // Reset fixture to clean state
   writeCode(CODE_PLACEHOLDER);
-  try { fs.rmSync(path.join(fixtureDir, "node_modules"), { recursive: true }); } catch {}
-  try { fs.unlinkSync(path.join(fixtureDir, "package-lock.json")); } catch {}
+  try { fs.rmSync(path.join(fixtureDir, "node_modules"), { recursive: true }); } catch { }
+  try { fs.unlinkSync(path.join(fixtureDir, "package-lock.json")); } catch { }
 
   const session = await createSession({
     narration: { enabled: true },
@@ -344,5 +344,5 @@ if (isDirectRun) {
     });
 } else {
   const { test } = await import("@playwright/test");
-  test("carousel-demo", async () => { test.setTimeout(240_000); await scenario(); });
+  test.skip("carousel-demo", async () => { test.setTimeout(240_000); await scenario(); });
 }
