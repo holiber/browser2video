@@ -178,7 +178,13 @@ export function linearPath(
 
 export const CURSOR_OVERLAY_SCRIPT = `
 (function() {
-  if (window.__b2v_cursors) return;
+  // Clean up cursors from previous scenario
+  if (window.__b2v_cursors) {
+    for (var id in window.__b2v_cursors) {
+      var el = window.__b2v_cursors[id];
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    }
+  }
   window.__b2v_cursors = {};
 
   var CURSOR_COLORS = {
@@ -222,6 +228,8 @@ export const CURSOR_OVERLAY_SCRIPT = `
   // Legacy single-cursor element for backwards compat
   getCursorEl('default');
 
+  var oldRipple = document.getElementById('__b2v_ripple_container');
+  if (oldRipple) oldRipple.remove();
   const rippleContainer = document.createElement('div');
   rippleContainer.id = '__b2v_ripple_container';
   rippleContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999998;pointer-events:none;';
