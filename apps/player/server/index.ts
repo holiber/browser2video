@@ -3,29 +3,29 @@
  * - Serves the Vite React UI via proxy in dev mode
  * - Opens a WebSocket for step execution control
  * - Loads scenario files dynamically
+ *
+ * Designed to run inside the Electron main process (via electron/main.ts).
+ * The Electron app provides CDP so Playwright can interact with embedded
+ * WebContentsView pages directly.
  */
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import { spawn, type ChildProcess } from "node:child_process";
-import crypto from "node:crypto";
 import {
-  chromium,
-  type Browser,
-  type BrowserContext,
   isScenarioDescriptor,
   type ReplayEvent,
   startTerminalWsServer,
   type TerminalServer,
 } from "browser2video";
 import { Executor, type ViewMode, type PaneLayoutInfo } from "./executor.ts";
-import { PlayerCache, type StepMeta, type CacheMeta } from "./cache.ts";
-import { StudioBrowserManager } from "./studio-browser.ts";
+import { PlayerCache, type StepMeta } from "./cache.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+console.error(`[server] Module loaded at ${new Date().toISOString()}`);
 
 /** Load .env from a directory, setting only vars that are not already defined. */
 function loadDotenv(dir: string): void {
@@ -72,19 +72,16 @@ type ClientMsg =
   | { type: "runStep"; index: number }
   | { type: "runAll" }
   | { type: "reset" }
+  | { type: "cancel" }
   | { type: "listScenarios" }
   | { type: "clearCache" }
   | { type: "setViewMode"; mode: ViewMode }
   | { type: "importArtifacts"; dir: string }
-  | { type: "downloadArtifacts"; runId?: string; artifactName?: string }
-  | { type: "studioOpenBrowser"; paneId: string; url: string }
-  | { type: "studioCloseBrowser"; paneId: string }
-  | { type: "studioMouseEvent"; paneId: string; action: string; x: number; y: number; button?: "left" | "right" | "middle"; deltaX?: number; deltaY?: number }
-  | { type: "studioKeyEvent"; paneId: string; action: string; key: string };
+  | { type: "downloadArtifacts"; runId?: string; artifactName?: string };
 
 type ServerMsg =
   | { type: "scenario"; name: string; steps: Array<{ caption: string; narration?: string }> }
-  | { type: "studioReady"; terminalServerUrl: string }
+  | { type: "studioReady"; terminalServerUrl: string; terminalWsUrl: string }
   | { type: "stepStart"; index: number; fastForward: boolean }
   | { type: "stepComplete"; index: number; screenshot: string; mode: "human" | "fast"; durationMs: number }
   | { type: "finished"; videoPath?: string }
@@ -94,11 +91,11 @@ type ServerMsg =
   | { type: "liveFrame"; data: string; paneId?: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
   | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
-  | { type: "cacheCleared" }
+  | { type: "cacheCleared"; cacheSize?: number }
+  | { type: "cancelled" }
   | { type: "viewMode"; mode: ViewMode }
   | { type: "replayEvent"; event: ReplayEvent }
-  | { type: "artifactsImported"; count: number; scenarios: string[] }
-  | { type: "studioFrame"; paneId: string; data: string };
+  | { type: "artifactsImported"; count: number; scenarios: string[] };
 
 function send(ws: WebSocket, msg: ServerMsg) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -162,154 +159,31 @@ function findScenarioFiles(dir: string, base: string): string[] {
 //  Vite dev proxy
 // ---------------------------------------------------------------------------
 
+let viteRequestCount = 0;
+
 function proxyToVite(req: http.IncomingMessage, res: http.ServerResponse) {
+  const reqId = ++viteRequestCount;
+  const reqStart = performance.now();
+  const url = req.url ?? "/";
   const proxyReq = http.request(
-    { hostname: "localhost", port: VITE_PORT, path: req.url, method: req.method, headers: req.headers },
+    { hostname: "localhost", port: VITE_PORT, path: url, method: req.method, headers: req.headers },
     (proxyRes) => {
-      proxyRes.on("error", () => { try { res.end(); } catch {} });
+      const ms = (performance.now() - reqStart).toFixed(0);
+      if (reqId <= 10 || parseInt(ms) > 500) {
+        console.error(`[vite-proxy] #${reqId} ${req.method} ${url.split('?')[0]} → ${proxyRes.statusCode} (${ms}ms)`);
+      }
+      proxyRes.on("error", () => { try { res.end(); } catch { } });
       res.writeHead(proxyRes.statusCode ?? 200, proxyRes.headers);
       proxyRes.pipe(res, { end: true });
     },
   );
   proxyReq.on("error", () => {
-    try { res.writeHead(502); res.end("Vite dev server not ready"); } catch {}
+    const ms = (performance.now() - reqStart).toFixed(0);
+    console.error(`[vite-proxy] #${reqId} ${req.method} ${url.split('?')[0]} → 502 ERROR (${ms}ms)`);
+    try { res.writeHead(502); res.end("Vite dev server not ready"); } catch { }
   });
   res.on("close", () => { proxyReq.destroy(); });
   req.pipe(proxyReq, { end: true });
-}
-
-function stripFrameAncestorsFromCsp(csp: string): string {
-  return csp
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0 && !/^frame-ancestors(\s|$)/i.test(part))
-    .join("; ");
-}
-
-function sanitizeProxyResponseHeaders(source: Headers, isHtml = false): http.OutgoingHttpHeaders {
-  const headers: http.OutgoingHttpHeaders = {};
-  for (const [key, value] of source.entries()) {
-    const lower = key.toLowerCase();
-    if (lower === "x-frame-options") continue;
-    if (lower === "content-security-policy" || lower === "content-security-policy-report-only") {
-      const cleaned = stripFrameAncestorsFromCsp(value);
-      if (cleaned) headers[key] = cleaned;
-      continue;
-    }
-    if (isHtml && (lower === "content-length" || lower === "content-encoding")) continue;
-    headers[key] = value;
-  }
-  return headers;
-}
-
-function injectBaseHref(html: string, pageUrl: string): string {
-  if (/<base\s[^>]*href=/i.test(html)) return html;
-  const escapedUrl = pageUrl.replace(/"/g, "&quot;");
-  const baseTag = `<base href="${escapedUrl}">`;
-
-  if (/<head[\s>]/i.test(html)) {
-    return html.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`);
-  }
-  if (/<html[\s>]/i.test(html)) {
-    return html.replace(/<html([^>]*)>/i, `<html$1><head>${baseTag}</head>`);
-  }
-  return `<head>${baseTag}</head>${html}`;
-}
-
-async function enableFrameHeaderBypass(context: BrowserContext): Promise<void> {
-  await context.route("**/*", async (route) => {
-    try {
-      const response = await route.fetch();
-      const headers = { ...response.headers() };
-      delete headers["x-frame-options"];
-      delete headers["X-Frame-Options"];
-
-      const csp = headers["content-security-policy"];
-      if (csp) {
-        headers["content-security-policy"] = stripFrameAncestorsFromCsp(csp);
-      }
-      const cspReportOnly = headers["content-security-policy-report-only"];
-      if (cspReportOnly) {
-        headers["content-security-policy-report-only"] = stripFrameAncestorsFromCsp(cspReportOnly);
-      }
-
-      await route.fulfill({ response, headers });
-    } catch {
-      await route.continue().catch(() => {});
-    }
-  });
-}
-
-async function proxyExternalPage(req: http.IncomingMessage, res: http.ServerResponse, u: URL): Promise<void> {
-  if (req.method && !["GET", "HEAD"].includes(req.method.toUpperCase())) {
-    res.writeHead(405, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Method not allowed");
-    return;
-  }
-
-  const target = u.searchParams.get("url");
-  if (!target) {
-    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Missing url query param");
-    return;
-  }
-
-  let targetUrl: URL;
-  try {
-    targetUrl = new URL(target);
-  } catch {
-    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Invalid target url");
-    return;
-  }
-
-  if (!["http:", "https:"].includes(targetUrl.protocol)) {
-    res.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Only http(s) urls are supported");
-    return;
-  }
-
-  try {
-    const upstream = await fetch(targetUrl.toString(), {
-      method: req.method ?? "GET",
-      redirect: "follow",
-    });
-
-    const contentType = upstream.headers.get("content-type") ?? "";
-    const isHtml = /text\/html/i.test(contentType);
-
-    if (isHtml) {
-      const html = await upstream.text();
-      const htmlWithBase = injectBaseHref(html, upstream.url || targetUrl.toString());
-      const headers = sanitizeProxyResponseHeaders(upstream.headers, true);
-      headers["content-type"] = contentType || "text/html; charset=utf-8";
-      headers["cache-control"] = "no-cache";
-      headers["content-length"] = Buffer.byteLength(htmlWithBase, "utf-8");
-      res.writeHead(upstream.status, headers);
-      res.end(htmlWithBase);
-      return;
-    }
-
-    const headers = sanitizeProxyResponseHeaders(upstream.headers, false);
-    headers["cache-control"] = headers["cache-control"] ?? "no-cache";
-    res.writeHead(upstream.status, headers);
-
-    if (!upstream.body) {
-      res.end();
-      return;
-    }
-
-    const stream = Readable.fromWeb(upstream.body as any);
-    stream.on("error", () => {
-      try { res.end(); } catch {}
-    });
-    res.on("close", () => stream.destroy());
-    stream.pipe(res);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-    res.end(`Failed to proxy url: ${message}`);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -319,23 +193,24 @@ async function proxyExternalPage(req: http.IncomingMessage, res: http.ServerResp
 let executor: Executor | null = null;
 let viteProcess: ChildProcess | null = null;
 let terminalServer: TerminalServer | null = null;
-let studioBrowserManager: StudioBrowserManager | null = null;
-let playerBrowser: Browser | null = null;
 let currentViewMode: ViewMode = "live";
 
 // Electron mode: when B2V_CDP_PORT is set, Playwright connects via CDP
 const electronCdpPort = process.env.B2V_CDP_PORT ? parseInt(process.env.B2V_CDP_PORT, 10) : 0;
 const electronCdpEndpoint = electronCdpPort > 0 ? `http://localhost:${electronCdpPort}` : null;
 
-// Dynamically import Electron main process API when running in Electron
-let electronMain: { createScenarioView: (url: string, viewport: { width: number; height: number }) => Promise<void> } | null = null;
+let electronMain: {
+  createScenarioView: (url: string, viewport: { width: number; height: number }) => Promise<void>;
+  destroyScenarioView: () => void;
+} | null = null;
 if (electronCdpEndpoint) {
   try {
     electronMain = await import("../electron/main.ts");
   } catch (err) {
-    console.error("[player] Could not import Electron main (not running in Electron?):", err);
+    console.error("[player] Could not import Electron main:", err);
   }
 }
+
 const cache = new PlayerCache(PROJECT_ROOT);
 let currentScenarioFile: string | null = null;
 let currentCacheDir: string | null = null;
@@ -349,22 +224,42 @@ function startVite(): Promise<ChildProcess> {
       cwd: path.resolve(__dirname, ".."),
       stdio: ["ignore", "pipe", "pipe"],
       shell: true,
+      detached: true,
       env: { ...process.env, PLAYER_PORT: String(PORT) },
     });
     viteProcess = vite;
+    const killViteOnExit = () => {
+      try { if (vite.pid) process.kill(-vite.pid, "SIGKILL"); } catch { }
+    };
+    process.on("exit", killViteOnExit);
+    vite.once("exit", () => process.removeListener("exit", killViteOnExit));
 
     let resolved = false;
+    function parseVitePort(text: string) {
+      const m = text.match(/Local:\s+https?:\/\/localhost:(\d+)/);
+      if (m) {
+        const actual = parseInt(m[1], 10);
+        if (actual !== VITE_PORT) {
+          console.warn(`[player] Vite is on port ${actual} (expected ${VITE_PORT}), updating proxy target`);
+          VITE_PORT = actual;
+        }
+      }
+    }
     const onData = (d: Buffer) => {
+      const text = d.toString();
       process.stdout.write(d);
-      if (!resolved && d.toString().includes("Local:")) {
+      parseVitePort(text);
+      if (!resolved && text.includes("Local:")) {
         resolved = true;
         resolve(vite);
       }
     };
     vite.stdout?.on("data", onData);
     vite.stderr?.on("data", (d: Buffer) => {
+      const text = d.toString();
       process.stderr.write(d);
-      if (!resolved && d.toString().includes("Local:")) {
+      parseVitePort(text);
+      if (!resolved && text.includes("Local:")) {
         resolved = true;
         resolve(vite);
       }
@@ -380,13 +275,80 @@ function startVite(): Promise<ChildProcess> {
   });
 }
 
+// ---------------------------------------------------------------------------
+//  Terminal page generator — self-contained HTML for terminal iframes
+// ---------------------------------------------------------------------------
+
+function generateTerminalPage(wsUrl: string, testId: string, title: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${title}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.min.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1e1e; }
+    #terminal { width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="terminal" data-testid="jabterm-container"></div>
+  <script type="module">
+    import { Terminal } from "https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/+esm";
+    import { FitAddon } from "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/+esm";
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+      fontSize: 13,
+      theme: { background: "#1e1e1e" },
+    });
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById("terminal"));
+    fitAddon.fit();
+
+    const ws = new WebSocket("${wsUrl}");
+    ws.binaryType = "arraybuffer";
+
+    ws.onopen = () => {
+      fitAddon.fit();
+      const cols = Math.max(term.cols || 80, 80);
+      const rows = Math.max(term.rows || 24, 24);
+      ws.send(JSON.stringify({ type: "resize", cols, rows }));
+    };
+
+    ws.onmessage = (e) => {
+      if (typeof e.data === "string") term.write(e.data);
+      else term.write(new Uint8Array(e.data));
+    };
+
+    ws.onclose = (e) => {
+      term.write("\\r\\n\\x1b[31mConnection closed (code " + e.code + ")\\x1b[0m\\r\\n");
+    };
+
+    const encoder = new TextEncoder();
+    term.onData((data) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
+    });
+
+    window.addEventListener("resize", () => {
+      fitAddon.fit();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+      }
+    });
+
+    document.getElementById("terminal").addEventListener("mousedown", () => term.focus());
+  </script>
+</body>
+</html>`;
+}
+
 const httpServer = http.createServer((req, res) => {
   const u = new URL(req.url ?? "/", "http://localhost");
-
-  if (u.pathname === "/api/proxy") {
-    void proxyExternalPage(req, res, u);
-    return;
-  }
 
   if (u.pathname === "/api/video") {
     const videoPath = u.searchParams.get("path");
@@ -402,9 +364,19 @@ const httpServer = http.createServer((req, res) => {
       "cache-control": "no-cache",
     });
     const stream = fs.createReadStream(videoPath);
-    stream.on("error", () => { try { res.end(); } catch {} });
+    stream.on("error", () => { try { res.end(); } catch { } });
     res.on("close", () => { stream.destroy(); });
     stream.pipe(res);
+    return;
+  }
+
+  // Serve terminal HTML page — renders an xterm.js terminal connecting to jabterm WS
+  if (u.pathname === "/terminal") {
+    const testId = u.searchParams.get("testId") ?? "term-0";
+    const title = u.searchParams.get("title") ?? "Shell";
+    const wsUrl = terminalServer?.baseWsUrl ?? `ws://127.0.0.1:${TERMINAL_PORT}`;
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(generateTerminalPage(wsUrl, testId, title));
     return;
   }
 
@@ -419,7 +391,6 @@ httpServer.on("upgrade", (req, socket, head) => {
       wss.emit("connection", ws, req);
     });
   } else {
-    // Forward Vite HMR and other WebSocket upgrades
     const proxyReq = http.request({
       hostname: "localhost",
       port: VITE_PORT,
@@ -453,14 +424,25 @@ wss.on("connection", (ws) => {
   send(ws, { type: "scenarioFiles", files });
   send(ws, { type: "viewMode", mode: currentViewMode });
   if (terminalServer) {
-    send(ws, { type: "studioReady", terminalServerUrl: terminalServer.baseHttpUrl });
+    // Send the player's own /terminal URL as the base for terminal iframes
+    const terminalPageUrl = `http://localhost:${PORT}`;
+    send(ws, { type: "studioReady", terminalServerUrl: terminalPageUrl, terminalWsUrl: terminalServer.baseWsUrl });
   }
 
   if (executor) {
     send(ws, { type: "status", loaded: true, executedUpTo: -1 });
   }
 
-  ws.on("message", async (raw) => {
+  // Serialize message processing: async handlers fired by WebSocket
+  // events are NOT queued, so back-to-back "load" + "runAll" messages
+  // would run concurrently. A simple queue ensures each finishes before
+  // the next one starts.
+  let msgQueue: Promise<void> = Promise.resolve();
+  ws.on("message", (raw) => {
+    msgQueue = msgQueue.then(() => handleMessage(raw)).catch(() => { });
+  });
+
+  async function handleMessage(raw: import("ws").RawData) {
     let msg: ClientMsg;
     try {
       msg = JSON.parse(raw.toString()) as ClientMsg;
@@ -473,6 +455,7 @@ wss.on("connection", (ws) => {
       switch (msg.type) {
         case "load": {
           if (executor) await executor.dispose();
+          if (electronMain) electronMain.destroyScenarioView();
 
           currentScenarioFile = msg.file;
           currentStepMetas = [];
@@ -566,7 +549,9 @@ wss.on("connection", (ws) => {
           const videoPath = executor.videoPath ?? undefined;
           if (videoPath && currentCacheDir) {
             try {
-              cache.saveVideo(currentCacheDir, videoPath);
+              if (fs.existsSync(videoPath)) {
+                cache.saveVideo(currentCacheDir, videoPath);
+              }
               const subtitlesDir = path.dirname(videoPath);
               const vttPath = path.join(subtitlesDir, "captions.vtt");
               if (fs.existsSync(vttPath)) cache.saveSubtitles(currentCacheDir, vttPath);
@@ -580,6 +565,7 @@ wss.on("connection", (ws) => {
 
         case "reset": {
           if (executor) await executor.reset();
+          if (electronMain) electronMain.destroyScenarioView();
           send(ws, { type: "status", loaded: !!executor, executedUpTo: -1 });
           break;
         }
@@ -597,7 +583,16 @@ wss.on("connection", (ws) => {
           } else {
             cache.clearAll();
           }
-          send(ws, { type: "cacheCleared" } as any);
+          send(ws, { type: "cacheCleared", cacheSize: cache.getCacheSize() });
+          break;
+        }
+
+        case "cancel": {
+          if (executor) {
+            console.error("[player] Cancelling current execution...");
+            await executor.reset();
+          }
+          send(ws, { type: "cancelled" });
           break;
         }
 
@@ -673,50 +668,13 @@ wss.on("connection", (ws) => {
           }
           break;
         }
-
-        case "studioOpenBrowser": {
-          if (!studioBrowserManager) {
-            studioBrowserManager = new StudioBrowserManager();
-            studioBrowserManager.onFrame = (paneId, data) => send(ws, { type: "studioFrame", paneId, data });
-            studioBrowserManager.onReplayEvent = (paneId, event) => send(ws, { type: "replayEvent", event });
-          }
-          console.error(`[player] Studio: opening browser pane "${msg.paneId}" → ${msg.url}`);
-          await studioBrowserManager.openPane(msg.paneId, msg.url);
-          break;
-        }
-
-        case "studioCloseBrowser": {
-          if (studioBrowserManager) {
-            console.error(`[player] Studio: closing browser pane "${msg.paneId}"`);
-            await studioBrowserManager.closePane(msg.paneId);
-          }
-          break;
-        }
-
-        case "studioMouseEvent": {
-          if (studioBrowserManager) {
-            await studioBrowserManager.forwardMouseEvent(msg.paneId, msg.action, msg.x, msg.y, {
-              button: msg.button,
-              deltaX: msg.deltaX,
-              deltaY: msg.deltaY,
-            });
-          }
-          break;
-        }
-
-        case "studioKeyEvent": {
-          if (studioBrowserManager) {
-            await studioBrowserManager.forwardKeyboardEvent(msg.paneId, msg.action, msg.key);
-          }
-          break;
-        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error("[player] Error:", message);
       send(ws, { type: "error", message });
     }
-  });
+  }
 
   ws.on("close", async () => {
     console.error("[player] Client disconnected");
@@ -727,16 +685,25 @@ wss.on("connection", (ws) => {
         console.error("[player] Error disposing executor on disconnect:", err);
       }
     }
-    if (studioBrowserManager) {
-      try {
-        await studioBrowserManager.dispose();
-        studioBrowserManager = null;
-      } catch (err) {
-        console.error("[player] Error disposing studio browser on disconnect:", err);
-      }
-    }
   });
 });
+
+async function killPortHolder(port: number): Promise<void> {
+  try {
+    const { execSync } = await import("node:child_process");
+    const pids = execSync(`lsof -ti :${port} 2>/dev/null`, { encoding: "utf8" }).trim();
+    if (pids) {
+      const myPid = String(process.pid);
+      for (const pid of pids.split("\n").map((p) => p.trim()).filter(Boolean)) {
+        if (pid === myPid) continue;
+        try {
+          execSync(`kill -9 ${pid} 2>/dev/null`);
+          console.warn(`[player] Killed stale process ${pid} on port ${port}`);
+        } catch { }
+      }
+    }
+  } catch { }
+}
 
 async function findFreePort(preferred: number, label: string): Promise<number> {
   const net = await import("node:net");
@@ -760,52 +727,62 @@ async function findFreePort(preferred: number, label: string): Promise<number> {
   return port;
 }
 
-// Load .env from project root so OPENAI_API_KEY and other vars are available
 loadDotenv(PROJECT_ROOT);
 
-// Start — bind player first so VITE_PORT check doesn't collide
-PORT = await findFreePort(PORT, "Player");
-VITE_PORT = await findFreePort(PORT + 1, "Vite");
-TERMINAL_PORT = await findFreePort(PORT + 2, "Terminal WS");
-terminalServer = await startTerminalWsServer(TERMINAL_PORT);
-console.error(`  Terminal WS server running at ${terminalServer.baseHttpUrl}`);
-await new Promise<void>((resolve) => httpServer.listen(PORT, () => {
-  console.error(`\n  b2v Player running at http://localhost:${PORT}\n`);
-  resolve();
-}));
-await startVite();
+const t0 = performance.now();
+const elapsed = () => `${((performance.now() - t0) / 1000).toFixed(1)}s`;
 
-const url = `http://localhost:${PORT}`;
-if (electronCdpEndpoint) {
-  console.error(`  Vite ready (Electron mode, CDP at ${electronCdpEndpoint}).\n`);
-} else {
-  const shouldAutoOpenBrowser = process.env.B2V_AUTO_OPEN_BROWSER !== "0";
-  if (shouldAutoOpenBrowser) {
-    console.error("  Vite ready, launching Chromium…\n");
-    playerBrowser = await chromium.launch({
-      headless: false,
-      args: [
-        "--disable-web-security",
-        "--disable-features=IsolateOrigins,site-per-process",
-      ],
-    });
-    const context = await playerBrowser.newContext({ viewport: null });
-    await enableFrameHeaderBypass(context);
-    const page = await context.newPage();
-    await page.goto(url);
-  } else {
-    console.error("  Vite ready (auto-open disabled).\n");
-  }
+console.error(`[startup ${elapsed()}] Killing stale port holders...`);
+// Kill stale port holders in parallel
+await Promise.all([
+  killPortHolder(PORT),
+  killPortHolder(PORT + 1),
+  killPortHolder(PORT + 2),
+]);
+console.error(`[startup ${elapsed()}] Port holders killed`);
+
+// Find free ports in parallel (they probe different ports so no conflict)
+console.error(`[startup ${elapsed()}] Finding free ports...`);
+[PORT, VITE_PORT, TERMINAL_PORT] = await Promise.all([
+  findFreePort(PORT, "Player"),
+  findFreePort(PORT + 1, "Vite"),
+  findFreePort(PORT + 2, "Terminal WS"),
+]);
+console.error(`[startup ${elapsed()}] Ports: player=${PORT} vite=${VITE_PORT} terminal=${TERMINAL_PORT}`);
+
+// Start Vite, terminal server, and HTTP server in parallel.
+console.error(`[startup ${elapsed()}] Starting Vite + Terminal + HTTP in parallel...`);
+const [, termSrv] = await Promise.all([
+  startVite().then(() => console.error(`[startup ${elapsed()}] ✓ Vite ready`)),
+  startTerminalWsServer(TERMINAL_PORT).then((s) => { console.error(`[startup ${elapsed()}] ✓ Terminal WS ready`); return s; }),
+  new Promise<void>((resolve) => httpServer.listen(PORT, () => {
+    console.error(`[startup ${elapsed()}] ✓ HTTP server ready at http://localhost:${PORT}`);
+    resolve();
+  })),
+]);
+terminalServer = termSrv;
+console.error(`[startup ${elapsed()}] All servers ready.\n`);
+
+export async function gracefulShutdown() {
+  const deadline = new Promise<void>((r) => setTimeout(r, 8_000));
+  const cleanup = async () => {
+    if (executor) { try { await executor.dispose(); } catch { } }
+    if (terminalServer) { try { await terminalServer.close(); } catch { } }
+    if (viteProcess?.pid) {
+      try { process.kill(-viteProcess.pid, "SIGTERM"); } catch { }
+      try { viteProcess.kill(); } catch { }
+    }
+    httpServer.close();
+  };
+  await Promise.race([cleanup(), deadline]);
 }
 
-process.on("SIGINT", async () => {
-  if (executor) await executor.dispose();
-  if (studioBrowserManager) await studioBrowserManager.dispose();
-  if (playerBrowser) await playerBrowser.close();
-  if (terminalServer) await terminalServer.close();
-  if (viteProcess) viteProcess.kill();
-  process.exit(0);
-});
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, async () => {
+    await gracefulShutdown();
+    process.exit(0);
+  });
+}
 
 process.on("uncaughtException", (err) => {
   const code = (err as NodeJS.ErrnoException).code;
@@ -814,5 +791,10 @@ process.on("uncaughtException", (err) => {
     return;
   }
   console.error("[player] Uncaught exception:", err);
-  process.exit(1);
+  // Inside Electron the main process handler absorbs the error;
+  // calling process.exit(1) here would kill the entire app and
+  // any connected Playwright sessions (test runner reports SIGKILL).
+  if (!process.versions.electron) {
+    process.exit(1);
+  }
 });

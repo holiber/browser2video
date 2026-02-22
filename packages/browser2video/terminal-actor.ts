@@ -6,7 +6,7 @@
  */
 import type { Page, Frame } from "playwright";
 import type { Mode, ActorDelays } from "./types.ts";
-import { Actor, pickMs } from "./actor.ts";
+import { Actor, TypeAction, pickMs } from "./actor.ts";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -98,15 +98,17 @@ export class TerminalActor extends Actor {
    * Newlines are sent as Enter key presses.
    * Can also be called as type(selector, text) for parent compatibility.
    */
-  async type(selector: string, text: string): Promise<void>;
   async type(text: string): Promise<void>;
-  async type(selectorOrText: string, text?: string): Promise<void> {
+  type(selector: string, text: string): TypeAction;
+  type(selectorOrText: string, text?: string): Promise<void> | TypeAction {
     if (text !== undefined) {
-      // Called as type(selector, text) — delegate to parent for regular DOM
-      return super.type(selectorOrText, text);
+      // Called as type(selector, text) — return TypeAction with iframe focus setup
+      return new TypeAction(this, () => this._ensureFocus(), selectorOrText, text);
     }
-    await this._ensureFocus();
-    await this._typeIntoTerminal(selectorOrText);
+    return (async () => {
+      await this._ensureFocus();
+      await this._typeIntoTerminal(selectorOrText);
+    })();
   }
 
   /**

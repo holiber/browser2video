@@ -519,15 +519,28 @@ export class Actor {
 
   /**
    * Type text into an element.
-   * Automatically detects xterm.js terminal panes (looks for `.xterm-helper-textarea`
-   * inside the target) and handles them correctly — newlines are sent as Enter.
-   * For regular DOM inputs, clicks to focus first, then types with human-like delays.
+   * Returns a `TypeAction` that can be awaited directly or chained with `.speak()`.
+   *
+   * ```ts
+   * await actor.type("#input", "hello");            // just type
+   * await actor.type("#input", "hello").speak();     // type + speak simultaneously
+   * await actor.type("#input", "hello").speak("hi"); // type "hello", speak "hi"
+   * ```
    */
-  async type(selector: string, text: string) {
+  type(selector: string, text: string): TypeAction {
+    return new TypeAction(this, null, selector, text);
+  }
+
+  /**
+   * Internal type implementation. Called by TypeAction.
+   * @internal
+   */
+  async _typeImpl(selector: string, text: string, onTypeStart?: () => void) {
     // Auto-detect xterm.js terminal containers
     const xtermTextarea = await this._context.$(`${selector} .xterm-helper-textarea`);
     if (xtermTextarea) {
       await xtermTextarea.focus();
+      onTypeStart?.();
       const charDelay = this.mode === "fast" ? 0 : pickMs(this.delays.keyDelayMs);
       for (const ch of text) {
         if (ch === "\n") {
@@ -544,6 +557,8 @@ export class Actor {
     // Regular DOM input
     await this.click(selector);
     await sleep(pickMs(this.delays.beforeTypeMs));
+
+    onTypeStart?.();
 
     if (this.mode === "fast") {
       await this._context.type(selector, text, { delay: 0 });
@@ -641,8 +656,8 @@ export class Actor {
           const descendantScrollable =
             Array.from(root.querySelectorAll("*"))
               .find((n) => n instanceof HTMLElement && isScrollable(n as HTMLElement)) as
-              | HTMLElement
-              | undefined;
+            | HTMLElement
+            | undefined;
 
           const target = direct ?? radixViewport ?? descendantScrollable ?? root;
           target.scrollBy({ top: deltaY, behavior });
@@ -943,6 +958,69 @@ export class Actor {
     await sleep(pickMs(this.delays.breatheMs));
   }
 
+}
+
+// ---------------------------------------------------------------------------
+//  TypeAction — fluent builder for type() with optional .speak()
+// ---------------------------------------------------------------------------
+
+/**
+ * Returned by `actor.type(selector, text)`.
+ * Implements `PromiseLike<void>` so `await actor.type(...)` works directly.
+ * Chain `.speak()` to start speaking when typing begins:
+ *
+ * ```ts
+ * await actor.type("#input", "hello").speak();      // speaks "hello"
+ * await actor.type("#input", "hello").speak("hi");   // speaks "hi"
+ * ```
+ */
+export class TypeAction implements PromiseLike<void> {
+  _actor: Actor;
+  _setup: (() => Promise<void>) | null;
+  _selector: string;
+  _text: string;
+  _promise: Promise<void> | null = null;
+  _speakText: string | null = null;
+
+  constructor(
+    actor: Actor,
+    setup: (() => Promise<void>) | null,
+    selector: string,
+    text: string,
+  ) {
+    this._actor = actor;
+    this._setup = setup;
+    this._selector = selector;
+    this._text = text;
+  }
+
+  /** Start speaking when typing begins. Defaults to the typed text. */
+  speak(text?: string): Promise<void> {
+    this._speakText = text ?? this._text;
+    return this._execute();
+  }
+
+  then<TResult1 = void, TResult2 = never>(
+    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2> {
+    return this._execute().then(onfulfilled, onrejected);
+  }
+
+  _execute(): Promise<void> {
+    if (!this._promise) {
+      const speakText = this._speakText;
+      const actor = this._actor;
+      const onTypeStart = speakText
+        ? () => { actor.speak(speakText); }
+        : undefined;
+      this._promise = (async () => {
+        if (this._setup) await this._setup();
+        await actor._typeImpl(this._selector, this._text, onTypeStart);
+      })();
+    }
+    return this._promise;
+  }
 }
 
 // ---------------------------------------------------------------------------

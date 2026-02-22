@@ -36,7 +36,7 @@ export {
 //  Actor (cursor, clicks, typing, scrolling, drawing)
 // ---------------------------------------------------------------------------
 
-export { Actor, generateWebVTT } from "./actor.ts";
+export { Actor, TypeAction, generateWebVTT } from "./actor.ts";
 export { TerminalActor } from "./terminal-actor.ts";
 export { ReplayLog, type ReplayEvent } from "./replay-log.ts";
 

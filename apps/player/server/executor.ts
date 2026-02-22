@@ -22,9 +22,11 @@ export interface PaneLayoutInfo {
   panes?: Array<{ id: string; type: "browser" | "terminal"; label: string }>;
   layout?: string;
   terminalServerUrl?: string;
-  gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number } };
+  gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string };
   pageUrl?: string;
   viewport: { width: number; height: number };
+  /** True when the scenario page is an Electron WebContentsView (managed via CDP) */
+  electronView?: boolean;
 }
 
 export interface StepResult {
@@ -64,7 +66,7 @@ export class Executor<T = any> {
     this.cdpEndpoint = opts?.cdpEndpoint ?? null;
     this.onRequestPage = opts?.onRequestPage ?? null;
 
-    const hasNarration = descriptor.steps.some((s) => !!s.narration);
+    const hasNarration = descriptor.steps.some((s) => !!s.narration || !!s.narrationFn);
     if (hasNarration && !process.env.OPENAI_API_KEY) {
       console.warn("\n  WARNING: Scenario has narrated steps but OPENAI_API_KEY is not set.");
       console.warn("  Set the env var to enable text-to-speech narration.\n");
@@ -94,8 +96,9 @@ export class Executor<T = any> {
     if (!this.session) {
       const prevCwd = process.cwd();
       if (this.projectRoot) process.chdir(this.projectRoot);
+      let newSession: Session | null = null;
       try {
-        this.session = await createSession({
+        newSession = await createSession({
           mode,
           record: mode === "human",
           narration: { enabled: true, realtime: true },
@@ -105,29 +108,54 @@ export class Executor<T = any> {
           cdpEndpoint: this.cdpEndpoint ?? undefined,
           onRequestPage: this.onRequestPage ?? undefined,
         });
-        this.ctx = await this.descriptor.setupFn(this.session);
+
+        // When the session has grid config ready, push it to the player
+        // immediately so it can render the ScenarioGrid while setupFn
+        // is still waiting for terminals to appear.
+        newSession._onGridConfigReady = () => {
+          try {
+            const layout = newSession!.getLayoutInfo();
+            this.lastEmittedLayout = JSON.stringify(layout);
+            console.error(`[executor] Grid config ready, pushing paneLayout to player`);
+            this.onPaneLayout?.(layout);
+          } catch (err) {
+            console.error("[executor] Failed to push grid config:", err);
+          }
+        };
+
+        this.ctx = await this.descriptor.setupFn(newSession);
+        this.session = newSession;
 
         try {
           const layout = this.session.getLayoutInfo();
-          this.lastEmittedLayout = JSON.stringify(layout);
-          const hasGrid = !!layout.gridConfig;
-          const hasTermSrv = !!layout.terminalServerUrl;
-          const paneCount = layout.panes?.length ?? 0;
-          console.error(`[executor] paneLayout: panes=${paneCount} layout=${JSON.stringify(layout.layout)} grid=${hasGrid} termSrv=${hasTermSrv} pageUrl=${layout.pageUrl ?? "none"}`);
-          this.onPaneLayout?.(layout);
+          const serialized = JSON.stringify(layout);
+          if (serialized !== this.lastEmittedLayout) {
+            this.lastEmittedLayout = serialized;
+            const hasGrid = !!layout.gridConfig;
+            const hasTermSrv = !!layout.terminalServerUrl;
+            const paneCount = layout.panes?.length ?? 0;
+            console.error(`[executor] paneLayout: panes=${paneCount} layout=${JSON.stringify(layout.layout)} grid=${hasGrid} termSrv=${hasTermSrv} pageUrl=${layout.pageUrl ?? "none"}`);
+            this.onPaneLayout?.(layout);
+          }
         } catch (err) {
           console.error("[executor] Failed to get layout info:", err);
         }
 
-        // Stream replay events (cursor, clicks, steps) to the player frontend
         if (this.onReplayEvent) {
           this.session.replayLog.onEvent = this.onReplayEvent;
         }
 
-        // CDP screencast only for video mode — live mode uses the observer iframe
         if (this.onLiveFrame && this.viewMode === "video") {
           await this.startScreencast();
         }
+      } catch (err) {
+        // Setup failed — clean up the session so next call can retry
+        if (newSession) {
+          try { await newSession.finish(); } catch { }
+        }
+        this.session = null;
+        this.ctx = null as any;
+        throw err;
       } finally {
         process.chdir(prevCwd);
       }
@@ -151,7 +179,7 @@ export class Executor<T = any> {
           callback(params.data, paneId);
           cdp.send("Page.screencastFrameAck", {
             sessionId: params.sessionId,
-          }).catch(() => {});
+          }).catch(() => { });
         });
 
         await cdp.send("Page.startScreencast", {
@@ -211,6 +239,14 @@ export class Executor<T = any> {
 
     if (stepDesc.narration && mode === "human") {
       await step(stepDesc.caption, stepDesc.narration, () => stepDesc.run(this.ctx!));
+    } else if (stepDesc.narrationFn && mode === "human") {
+      // Narration function runs concurrently; step waits for both
+      const ctx = this.ctx!;
+      await step(stepDesc.caption, async () => {
+        const narrationPromise = stepDesc.narrationFn!(ctx);
+        await stepDesc.run(ctx);
+        await narrationPromise;
+      });
     } else {
       await step(stepDesc.caption, () => stepDesc.run(this.ctx!));
     }
@@ -241,8 +277,7 @@ export class Executor<T = any> {
       throw new Error(`Step index ${targetIndex} out of range (0-${this.descriptor.steps.length - 1})`);
     }
 
-    // Ensure session is initialised in the target mode (human) before fast-forwarding
-    // so that grid setup, actor wiring, and attachToPage happen with correct mode config
+    // Ensure session is initialised in the target mode before fast-forwarding
     await this.ensureSession(mode);
 
     for (let i = this.executedUpTo + 1; i < targetIndex; i++) {
