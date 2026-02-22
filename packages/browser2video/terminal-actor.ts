@@ -169,14 +169,12 @@ export class TerminalActor extends Actor {
       const y = Math.round(iframeBox.y + iframeBox.height / 2);
       await this.clickAt(x, y);
     } else {
-      // Terminal pane (JabTerm React component, no iframe) — click pane container
-      const paneBox = await this._dom.$eval(this.selector, (el: any) => {
-        const r = el.getBoundingClientRect();
-        return { x: r.x, y: r.y, width: r.width, height: r.height };
-      });
-      const x = Math.round(paneBox.x + paneBox.width / 2);
-      const y = Math.round(paneBox.y + paneBox.height / 2);
-      await this.clickAt(x, y);
+      // Terminal pane (JabTerm React component, no iframe) —
+      // use direct focus on the xterm textarea to avoid mouse event interference
+      const textarea = await this._dom.$(`${this.selector} .xterm-helper-textarea`);
+      if (textarea) {
+        await textarea.click();
+      }
     }
     _focusedPane.set(this.page, paneId);
   }
