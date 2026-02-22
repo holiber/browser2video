@@ -50,11 +50,13 @@ function TerminalPane({ testId, wsUrl }: { testId: string; wsUrl: string }) {
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    let timer: ReturnType<typeof setTimeout>;
     const ro = new ResizeObserver(() => {
-      window.dispatchEvent(new Event("resize"));
+      clearTimeout(timer);
+      timer = setTimeout(() => window.dispatchEvent(new Event("resize")), 150);
     });
     ro.observe(el);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); clearTimeout(timer); };
   }, []);
 
   if (!wsUrl) {
