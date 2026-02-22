@@ -314,10 +314,7 @@ function generateTerminalPage(wsUrl: string, testId: string, title: string): str
     ws.binaryType = "arraybuffer";
 
     ws.onopen = () => {
-      fitAddon.fit();
-      const cols = Math.max(term.cols || 80, 80);
-      const rows = Math.max(term.rows || 24, 24);
-      ws.send(JSON.stringify({ type: "resize", cols, rows }));
+      sendResize();
     };
 
     ws.onmessage = (e) => {
@@ -334,11 +331,24 @@ function generateTerminalPage(wsUrl: string, testId: string, title: string): str
       if (ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
     });
 
-    window.addEventListener("resize", () => {
+    let lastCols = 0, lastRows = 0;
+    let resizeTimer = null;
+
+    function sendResize() {
       fitAddon.fit();
+      const cols = Math.max(term.cols || 80, 80);
+      const rows = Math.max(term.rows || 24, 24);
+      if (cols === lastCols && rows === lastRows) return;
+      lastCols = cols;
+      lastRows = rows;
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
       }
+    }
+
+    window.addEventListener("resize", () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(sendResize, 150);
     });
 
     document.getElementById("terminal").addEventListener("mousedown", () => term.focus());
