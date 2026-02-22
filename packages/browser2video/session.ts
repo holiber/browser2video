@@ -869,39 +869,21 @@ export class Session {
       }
 
       if (pc.type === "terminal") {
-        if (pc.cmd) {
-          // Command pane (mc, htop, etc.) — wait for any xterm content to appear
-          await page.waitForFunction(
-            (sel: string) => {
-              const root = document.querySelector(sel);
-              if (!root) return false;
-              // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
-              const tree = root.querySelector(".xterm-accessibility-tree");
-              const rows = root.querySelector(".xterm-rows");
-              if (!tree && !rows) return false;
-              const text = ((tree ?? rows as any)?.textContent ?? "").trim();
-              return text.length > 0;
-            },
-            testIdSel,
-            { timeout: 30000 },
-          );
-        } else {
-          // Shell pane — wait for prompt character
-          await page.waitForFunction(
-            (sel: string) => {
-              const root = document.querySelector(sel);
-              if (!root) return false;
-              // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
-              const tree = root.querySelector(".xterm-accessibility-tree");
-              const rows = root.querySelector(".xterm-rows");
-              if (!tree && !rows) return false;
-              const text = (tree ?? rows as any)?.textContent ?? "";
-              return text.includes("$") || text.includes("#") || text.includes("%");
-            },
-            testIdSel,
-            { timeout: 30000 },
-          );
-        }
+        // Wait for xterm content — jabterm always spawns a shell, so wait for prompt
+        await page.waitForFunction(
+          (sel: string) => {
+            const root = document.querySelector(sel);
+            if (!root) return false;
+            // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+            const tree = root.querySelector(".xterm-accessibility-tree");
+            const rows = root.querySelector(".xterm-rows");
+            if (!tree && !rows) return false;
+            const text = (tree ?? rows as any)?.textContent ?? "";
+            return text.includes("$") || text.includes("#") || text.includes("%");
+          },
+          testIdSel,
+          { timeout: 30000 },
+        );
       } else {
         // Wait for the iframe element to appear inside the browser pane container
         await page.waitForSelector(`${testIdSel} iframe`, { timeout: 30000 });
