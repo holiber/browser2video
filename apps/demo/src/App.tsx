@@ -1,15 +1,8 @@
-/** @description Root application component with burger-menu navigation and 6-page routing */
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo } from "react";
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Menu, LayoutDashboard, ListTodo, TerminalSquare, Columns3, MessageCircle, CalendarDays } from "lucide-react";
+import { LayoutDashboard, ListTodo, TerminalSquare, Columns3, MessageCircle, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetTrigger,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import AppPage from "@/pages/app";
 import NotesPage from "@/pages/notes";
@@ -59,25 +52,8 @@ function NavMenu({ onNavigate }: { onNavigate: (path: string) => void }) {
 }
 
 function AppLayout({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const navigate = useNavigate();
-
-  const handleNavigate = (path: string) => {
-    navigate(path);
-    setOpen(false);
-  };
-
   return (
     <div className="flex min-h-screen flex-col">
-      {/* Hidden burger menu — accessible but not taking header space */}
-      <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent side="left" className="w-56 p-0">
-          <SheetTitle className="sr-only">Navigation</SheetTitle>
-          <NavMenu onNavigate={handleNavigate} />
-        </SheetContent>
-      </Sheet>
-
-      {/* Page content — full height */}
       <main className="flex-1 overflow-y-auto">
         {children}
       </main>
