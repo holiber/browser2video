@@ -5,10 +5,22 @@
 import path from "path";
 import fs from "fs";
 import net from "net";
-import { spawn } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
+
+const activeChildren = new Set<ChildProcess>();
+
+function ensureExitHandler() {
+  if ((ensureExitHandler as any)._installed) return;
+  (ensureExitHandler as any)._installed = true;
+  process.on("exit", () => {
+    for (const child of activeChildren) {
+      try { child.kill("SIGKILL"); } catch {}
+    }
+  });
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -69,7 +81,14 @@ export async function startSyncServer(opts: {
   })();
 
   const env = { ...process.env, PORT: String(port), DATA_DIR: dataDir };
-  const proc = spawn(process.execPath, [bin], { env, stdio: ["ignore", "ignore", "pipe"] });
+  // Use "node" explicitly — process.execPath resolves to Electron when running
+  // inside the player, which would spawn the sync server as an Electron app
+  // that ignores SIGINT/SIGTERM and leaks.
+  const proc = spawn("node", [bin], { env, stdio: ["ignore", "ignore", "pipe"] });
+  activeChildren.add(proc);
+  ensureExitHandler();
+  proc.once("exit", () => activeChildren.delete(proc));
+
   let stderr = "";
   proc.stderr?.on("data", (c) => {
     stderr += String(c);
@@ -81,12 +100,13 @@ export async function startSyncServer(opts: {
   console.log(`  Sync server: ${wsUrl}`);
 
   const stop = async () => {
-    try { proc.kill("SIGINT"); } catch { /* ignore */ }
+    if (proc.exitCode !== null) return;
+    try { proc.kill("SIGTERM"); } catch { /* ignore */ }
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
         try { proc.kill("SIGKILL"); } catch { /* ignore */ }
         resolve();
-      }, 5000);
+      }, 3000);
       proc.once("exit", () => {
         clearTimeout(timeout);
         resolve();

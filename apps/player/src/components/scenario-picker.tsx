@@ -2,6 +2,13 @@ import { useState } from "react";
 import { FolderOpen, ChevronDown, Monitor, Film, Trash2 } from "lucide-react";
 import type { ViewMode } from "../hooks/use-player";
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 interface ScenarioPickerProps {
   onLoad: (file: string) => void;
   connected: boolean;
@@ -10,9 +17,10 @@ interface ScenarioPickerProps {
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
   onClearCache?: () => void;
+  cacheSize?: number;
 }
 
-export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles, viewMode, onViewModeChange, onClearCache }: ScenarioPickerProps) {
+export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles, viewMode, onViewModeChange, onClearCache, cacheSize }: ScenarioPickerProps) {
   const [selected, setSelected] = useState("");
 
   const handleSelect = (file: string) => {
@@ -75,11 +83,10 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
       <div className="flex items-center gap-1 rounded-full bg-zinc-800 p-0.5 flex-shrink-0">
         <button
           onClick={() => onViewModeChange("live")}
-          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-            viewMode === "live"
-              ? "bg-emerald-600 text-white"
-              : "text-zinc-400 hover:text-zinc-200"
-          }`}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === "live"
+            ? "bg-emerald-600 text-white"
+            : "text-zinc-400 hover:text-zinc-200"
+            }`}
           title="Embed scenario content inline"
         >
           <Monitor size={12} />
@@ -87,11 +94,10 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
         </button>
         <button
           onClick={() => onViewModeChange("video")}
-          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-            viewMode === "video"
-              ? "bg-blue-600 text-white"
-              : "text-zinc-400 hover:text-zinc-200"
-          }`}
+          className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${viewMode === "video"
+            ? "bg-blue-600 text-white"
+            : "text-zinc-400 hover:text-zinc-200"
+            }`}
           title="Play recorded video"
         >
           <Film size={12} />
@@ -106,7 +112,9 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
           title="Clear cache"
         >
           <Trash2 size={12} />
-          Clear cache
+          {cacheSize && cacheSize > 0
+            ? `${formatBytes(cacheSize)} clear cache`
+            : "Clear cache"}
         </button>
       )}
 

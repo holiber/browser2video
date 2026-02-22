@@ -6,7 +6,7 @@
  */
 import type { Page, Frame } from "playwright";
 import type { Mode, ActorDelays } from "./types.ts";
-import { Actor, pickMs } from "./actor.ts";
+import { Actor, TypeAction, pickMs } from "./actor.ts";
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -16,7 +16,7 @@ function sleep(ms: number) {
 type DOMContext = Page | Frame;
 
 /** Track which iframe is currently focused on a given page */
-const _focusedIframe = new WeakMap<Page, string>();
+const _focusedPane = new WeakMap<Page, string>();
 
 export class TerminalActor extends Actor {
   /** CSS selector for the terminal container element */
@@ -87,9 +87,10 @@ export class TerminalActor extends Actor {
     const x = Math.round(iframeOffsetX + box.x + box.width * relXOrSelector);
     const y = Math.round(iframeOffsetY + box.y + box.height * (relY ?? 0.5));
     await this.clickAt(x, y);
-    // Track focus — this iframe is now focused
     if (this._iframeName) {
-      _focusedIframe.set(this.page, this._iframeName);
+      _focusedPane.set(this.page, this._iframeName);
+    } else {
+      _focusedPane.set(this.page, this.selector);
     }
   }
 
@@ -98,15 +99,17 @@ export class TerminalActor extends Actor {
    * Newlines are sent as Enter key presses.
    * Can also be called as type(selector, text) for parent compatibility.
    */
-  async type(selector: string, text: string): Promise<void>;
   async type(text: string): Promise<void>;
-  async type(selectorOrText: string, text?: string): Promise<void> {
+  type(selector: string, text: string): TypeAction;
+  type(selectorOrText: string, text?: string): Promise<void> | TypeAction {
     if (text !== undefined) {
-      // Called as type(selector, text) — delegate to parent for regular DOM
-      return super.type(selectorOrText, text);
+      // Called as type(selector, text) — return TypeAction with iframe focus setup
+      return new TypeAction(this, () => this._ensureFocus(), selectorOrText, text);
     }
-    await this._ensureFocus();
-    await this._typeIntoTerminal(selectorOrText);
+    return (async () => {
+      await this._ensureFocus();
+      await this._typeIntoTerminal(selectorOrText);
+    })();
   }
 
   /**
@@ -145,24 +148,35 @@ export class TerminalActor extends Actor {
   }
 
   /**
-   * Ensure this terminal's iframe is focused on the grid page.
+   * Ensure this terminal pane is focused on the grid page.
+   * For iframes: clicks the iframe center. For direct DOM terminals: clicks the pane container.
    * Only clicks if focus needs to change (avoids redundant clicks).
    */
   private async _ensureFocus() {
-    if (!this._iframeName) return;
-    if (_focusedIframe.get(this.page) === this._iframeName) return;
+    const paneId = this._iframeName ?? this.selector;
+    if (_focusedPane.get(this.page) === paneId) return;
 
-    const iframeBox = await this.page.$eval(
-      `iframe[name="${this._iframeName}"]`,
-      (el: any) => {
-        const r = el.getBoundingClientRect();
-        return { x: r.x, y: r.y, width: r.width, height: r.height };
-      },
-    );
-    const x = Math.round(iframeBox.x + iframeBox.width / 2);
-    const y = Math.round(iframeBox.y + iframeBox.height / 2);
-    await this.clickAt(x, y);
-    _focusedIframe.set(this.page, this._iframeName);
+    if (this._iframeName) {
+      // Browser pane inside an iframe
+      const iframeBox = await this.page.$eval(
+        `iframe[name="${this._iframeName}"]`,
+        (el: any) => {
+          const r = el.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        },
+      );
+      const x = Math.round(iframeBox.x + iframeBox.width / 2);
+      const y = Math.round(iframeBox.y + iframeBox.height / 2);
+      await this.clickAt(x, y);
+    } else {
+      // Terminal pane (JabTerm React component, no iframe) —
+      // use direct focus on the xterm textarea to avoid mouse event interference
+      const textarea = await this._dom.$(`${this.selector} .xterm-helper-textarea`);
+      if (textarea) {
+        await textarea.click();
+      }
+    }
+    _focusedPane.set(this.page, paneId);
   }
 
   /**
@@ -186,8 +200,11 @@ export class TerminalActor extends Actor {
       ([sel, inc]: [string, string[]]) => {
         const root = document.querySelector(sel);
         if (!root) return false;
+        // Prefer .xterm-rows textContent, fall back to data-b2v-output (JabTerm capture buffer)
         const rows = root.querySelector(".xterm-rows");
-        const text = String((rows as any)?.textContent ?? (root as any)?.textContent ?? "");
+        let text = String((rows as any)?.textContent ?? "").trim();
+        if (!text) text = (root as any)?.getAttribute?.("data-b2v-output") ?? "";
+        if (!text) text = String((root as any)?.textContent ?? "");
         return inc.every((s: string) => text.includes(s));
       },
       [this.selector, includes] as [string, string[]],
@@ -205,9 +222,12 @@ export class TerminalActor extends Actor {
       (sel: string) => {
         const root = document.querySelector(sel);
         if (!root) return false;
+        // Prefer .xterm-rows textContent, fall back to data-b2v-output (JabTerm capture buffer)
         const rows = root.querySelector(".xterm-rows");
-        if (!rows) return false;
-        const lines = (rows.textContent ?? "").split("\n");
+        let rawText = String((rows as any)?.textContent ?? "").trim();
+        if (!rawText) rawText = (root as any)?.getAttribute?.("data-b2v-output") ?? "";
+        if (!rawText) return false;
+        const lines = rawText.split("\n");
         for (let i = lines.length - 1; i >= 0; i--) {
           const line = lines[i].trim();
           if (!line) continue;

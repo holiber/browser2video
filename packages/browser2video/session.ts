@@ -3,7 +3,7 @@
  * Provides createSession() — the single entry point for browser/terminal
  * automation with video recording, subtitles, and narration.
  */
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Frame, type Page } from "playwright";
 import path from "path";
 import fs from "fs";
 import { execFileSync, spawn, type ChildProcess } from "child_process";
@@ -118,12 +118,6 @@ export interface GridHandle {
   }>) => Promise<TerminalActor[]>;
   /** Add a new pane (browser or terminal) via the popup UI. Returns an actor for the new pane. */
   addPane: (type: "browser" | "terminal") => Promise<TerminalActor>;
-  /**
-   * Re-wire actors to interact with the player's preview iframe instead of the
-   * standalone headless page. After calling this, all actor interactions
-   * (click, type, scroll, etc.) operate on the real DOM the user sees.
-   */
-  attachToPage: (playerPage: Page, iframeName?: string) => Promise<void>;
   /** Pane configs used to build this grid (for matching iframe names) */
   readonly paneConfigs: ReadonlyArray<{ type: "terminal" | "browser"; testId?: string; title: string }>;
   /** Viewport dimensions of this grid */
@@ -179,8 +173,6 @@ interface PaneState {
 export class Session {
   private browser: Browser | null = null;
   private _ownsBrowser = true;
-  /** Set before _init() to reuse an existing browser instead of launching one */
-  _externalBrowser: Browser | null = null;
   /** CDP endpoint to connect to instead of launching a new browser */
   _cdpEndpoint: string | null = null;
   /**
@@ -189,6 +181,12 @@ export class Session {
    * Returns the URL that was loaded so the session can find the page.
    */
   _onRequestPage: ((url: string, viewport: { width: number; height: number }) => Promise<void>) | null = null;
+  /**
+   * Callback fired when grid config is ready (before waiting for terminals).
+   * The executor uses this to push the layout to the player immediately so
+   * it can render the ScenarioGrid while we wait for terminals to appear.
+   */
+  _onGridConfigReady: (() => void) | null = null;
   private panes: Map<string, PaneState> = new Map();
   private paneOrder: string[] = [];
   private steps: StepRecord[] = [];
@@ -198,7 +196,7 @@ export class Session {
   private cleanupFns: Array<() => Promise<void> | void> = [];
   private terminalServer: TerminalServer | null = null;
   private terminalCounter = 0;
-  private lastGridConfig: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number } } | null = null;
+  private lastGridConfig: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string } | null = null;
 
   // Resolved options
   readonly mode: Mode;
@@ -280,9 +278,6 @@ export class Session {
 
     if (this._cdpEndpoint) {
       this.browser = await chromium.connectOverCDP(this._cdpEndpoint);
-      this._ownsBrowser = false;
-    } else if (this._externalBrowser) {
-      this.browser = this._externalBrowser;
       this._ownsBrowser = false;
     } else {
       this.browser = await chromium.launch({
@@ -414,27 +409,73 @@ export class Session {
     const vpW = opts.viewport?.width ?? 1280;
     const vpH = opts.viewport?.height ?? 720;
 
-    const ctxOpts: {
-      viewport: { width: number; height: number };
-      recordVideo?: { dir: string; size: { width: number; height: number } };
-    } = {
-      viewport: { width: vpW, height: vpH },
-    };
-
+    let page: Page;
+    let context: BrowserContext;
     let rawVideoPath: string | undefined;
-    if (this.record) {
-      rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
-      ctxOpts.recordVideo = {
-        dir: path.dirname(rawVideoPath),
-        size: { width: vpW, height: vpH },
+
+    if (this._cdpEndpoint && this._onRequestPage) {
+      // Electron mode: Electron doesn't support Target.createTarget or
+      // Target.createBrowserContext via CDP. Ask the main process to create
+      // a WebContentsView and then locate it via CDP.
+      const targetUrl = opts.url ?? "about:blank";
+
+      // Snapshot existing page URLs before creating the new view
+      const existingUrls = new Set<string>();
+      for (const ctx of this.browser!.contexts()) {
+        for (const p of ctx.pages()) {
+          existingUrls.add(p.url());
+        }
+      }
+
+      await this._onRequestPage(targetUrl, { width: vpW, height: vpH });
+
+      // Find the NEW page (not one that existed before the view was created)
+      let found: Page | null = null;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        for (const ctx of this.browser!.contexts()) {
+          for (const p of ctx.pages()) {
+            if (!existingUrls.has(p.url())) {
+              found = p;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (found) break;
+        await sleep(250);
+      }
+      if (!found) throw new Error(`Could not find page via CDP (target: ${targetUrl})`);
+
+      page = found;
+      context = page.context();
+      console.error(`[session] Found Electron-managed page via CDP: ${page.url()}`);
+    } else {
+      const ctxOpts: {
+        viewport: { width: number; height: number };
+        recordVideo?: { dir: string; size: { width: number; height: number } };
+      } = {
+        viewport: { width: vpW, height: vpH },
       };
+
+      if (this.record) {
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+        ctxOpts.recordVideo = {
+          dir: path.dirname(rawVideoPath),
+          size: { width: vpW, height: vpH },
+        };
+      }
+
+      context = await this.browser.newContext(ctxOpts);
+      page = await context.newPage();
+
+      // Set dark background on the blank page immediately to avoid white flash in recordings
+      await page.evaluate(() => { document.documentElement.style.background = "#1a1a2e"; });
+
+      // Navigate if URL provided
+      if (opts.url) {
+        await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      }
     }
-
-    const context = await this.browser.newContext(ctxOpts);
-    const page = await context.newPage();
-
-    // Set dark background on the blank page immediately to avoid white flash in recordings
-    await page.evaluate(() => { document.documentElement.style.background = "#1a1a2e"; });
 
     // Init scripts
     if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
@@ -460,11 +501,6 @@ export class Session {
       });
     }
 
-    // Navigate if URL provided
-    if (opts.url) {
-      await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30000 });
-    }
-
     const pane: PaneState = { id, type: "browser", label, context, page, actor, rawVideoPath, createdAtMs: Date.now() };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
@@ -488,24 +524,51 @@ export class Session {
     const vpW = opts.viewport?.width ?? 800;
     const vpH = opts.viewport?.height ?? 600;
 
-    const ctxOpts: {
-      viewport: { width: number; height: number };
-      recordVideo?: { dir: string; size: { width: number; height: number } };
-    } = {
-      viewport: { width: vpW, height: vpH },
-    };
-
     let rawVideoPath: string | undefined;
-    if (this.record) {
-      rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
-      ctxOpts.recordVideo = {
-        dir: path.dirname(rawVideoPath),
-        size: { width: vpW, height: vpH },
-      };
-    }
+    let context: BrowserContext;
+    let page: Page;
 
-    const context = await this.browser.newContext(ctxOpts);
-    const page = await context.newPage();
+    if (this._cdpEndpoint && this._onRequestPage) {
+      // Electron mode: create a WebContentsView via main process, then find it
+      const blankUrl = "about:blank";
+      await this._onRequestPage(blankUrl, { width: vpW, height: vpH });
+
+      let found: Page | null = null;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        for (const ctx of this.browser!.contexts()) {
+          for (const p of ctx.pages()) {
+            if (p.url() === blankUrl || p.url() === "") {
+              found = p;
+              break;
+            }
+          }
+          if (found) break;
+        }
+        if (found) break;
+        await sleep(250);
+      }
+      if (!found) throw new Error("Could not find terminal page via CDP");
+      page = found;
+      context = page.context();
+    } else {
+      const ctxOpts: {
+        viewport: { width: number; height: number };
+        recordVideo?: { dir: string; size: { width: number; height: number } };
+      } = {
+        viewport: { width: vpW, height: vpH },
+      };
+
+      if (this.record) {
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+        ctxOpts.recordVideo = {
+          dir: path.dirname(rawVideoPath),
+          size: { width: vpW, height: vpH },
+        };
+      }
+
+      context = await this.browser.newContext(ctxOpts);
+      page = await context.newPage();
+    }
 
     // Dark background to avoid white flash before content loads
     await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
@@ -604,10 +667,19 @@ export class Session {
   }): Promise<TerminalActor> {
     if (!this.browser) throw new Error("Session not initialized. Use createSession().");
 
+    if (this._cdpEndpoint && this._onRequestPage) {
+      // Electron mode: delegate to createGrid for a single terminal
+      const grid = await this.createTerminalGrid(
+        [{ command, label: opts?.label }],
+        { viewport: opts?.viewport },
+        true,
+      );
+      return grid.actors[0];
+    }
+
     // Lazy-start terminal WS server (singleton)
     if (!this.terminalServer) {
       this.terminalServer = await startTerminalWsServer();
-      // Auto-cleanup: no manual addCleanup needed
       this.cleanupFns.push(() => this.terminalServer!.close());
     }
 
@@ -623,109 +695,8 @@ export class Session {
 
     const id = `pane-${this.panes.size}`;
 
-    const ctxOpts: {
-      viewport: { width: number; height: number };
-      recordVideo?: { dir: string; size: { width: number; height: number } };
-    } = {
-      viewport: { width: vpW, height: vpH },
-    };
-
-    let rawVideoPath: string | undefined;
-    if (this.record) {
-      rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
-      ctxOpts.recordVideo = {
-        dir: path.dirname(rawVideoPath),
-        size: { width: vpW, height: vpH },
-      };
-    }
-
-    const context = await this.browser.newContext(ctxOpts);
-    const page = await context.newPage();
-
-    // Dark background to avoid white flash
-    await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
-
-    // Init scripts
-    if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
-    if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
-
-    // Navigate to the terminal page served by the WS server
-    const termPageUrl = new URL(`${this.terminalServer.baseHttpUrl}/terminal`);
-    if (command) termPageUrl.searchParams.set("cmd", command);
-    termPageUrl.searchParams.set("testId", testId);
-    termPageUrl.searchParams.set("title", label);
-    await page.goto(termPageUrl.toString(), { waitUntil: "domcontentloaded", timeout: 30000 });
-
-    const selector = `[data-testid="${testId}"]`;
-
-    // Wait for WebSocket connection to be established
-    await page.waitForFunction(
-      (sel: string) => {
-        const el = document.querySelector(sel) as any;
-        return String(el?.dataset?.b2vWsState ?? "") === "open";
-      },
-      selector,
-      { timeout: 15000 },
-    );
-
-    // Wait for initial content (prompt for shell, any output for commands)
-    if (!command) {
-      // Shell: wait for prompt
-      await page.waitForFunction(
-        (sel: string) => {
-          const root = document.querySelector(sel);
-          if (!root) return false;
-          const rows = root.querySelector(".xterm-rows");
-          if (!rows) return false;
-          const text = rows.textContent ?? "";
-          return text.includes("$") || text.includes("#");
-        },
-        selector,
-        { timeout: 30000 },
-      );
-    } else {
-      // Command: wait for any rendered content
-      await page.waitForFunction(
-        (sel: string) => {
-          const root = document.querySelector(sel);
-          if (!root) return false;
-          const rows = root.querySelector(".xterm-rows");
-          const text = String((rows as any)?.textContent ?? "").trim();
-          return text.length > 10;
-        },
-        selector,
-        { timeout: 30000 },
-      );
-    }
-
-    // Create the scoped TerminalActor
-    const actor = new TerminalActor(page, this.mode, selector, { delays: this.delays });
-    this._wireReplayEvents(actor);
-
-    // Auto-inject cursor overlay after every navigation (human mode)
-    if (this.mode === "human") {
-      page.on("framenavigated", (frame) => {
-        if (frame === page.mainFrame()) {
-          actor.injectCursor().catch(() => {});
-        }
-      });
-      // Inject cursor now
-      await actor.injectCursor();
-    }
-
-    // Register pane for video composition
-    const pane: PaneState = {
-      id, type: "terminal", label, context, page, actor,
-      rawVideoPath, createdAtMs: Date.now(),
-    };
-    this.panes.set(id, pane);
-    this.paneOrder.push(id);
-
-    if (this.record) {
-      console.error(`  Terminal started: ${label} (${vpW}x${vpH})`);
-    }
-
-    return actor;
+    // Non-Electron: standalone Playwright browser (legacy path)
+    throw new Error("createTerminal() currently requires Electron mode. Use createGrid() instead.");
   }
 
   // -----------------------------------------------------------------------
@@ -734,10 +705,8 @@ export class Session {
 
   /**
    * Create multiple panes (terminals and/or browser pages) arranged in a
-   * dockview grid on a single Playwright page. Each pane runs in its own
-   * iframe for isolation. Only ONE video is recorded (the grid page).
-   *
-   * Returns a `GridHandle` with the actors and dynamic tab management methods.
+   * dockview grid. In Electron mode, the grid is rendered by the player's
+   * React app using jabterm. Returns actors for each pane.
    *
    * ```ts
    * const grid = await session.createGrid(
@@ -828,33 +797,39 @@ export class Session {
     const label = "terminal-grid";
     let rawVideoPath: string | undefined;
 
-    // Build config parameter for the grid endpoint
     const gridPanes: GridPaneConfig[] = paneConfigs.map((p) => {
       if (p.type === "browser") {
-        return { type: "browser" as const, url: p.url!, title: p.title };
+        return { type: "browser" as const, url: p.url!, testId: p.testId, title: p.title };
       }
       return { type: "terminal" as const, cmd: p.cmd, testId: p.testId, title: p.title, allowAddTab: p.allowAddTab };
     });
 
-    const gridConfig = { panes: gridPanes, grid: opts?.grid, viewport: { width: vpW, height: vpH } };
+    const gridConfig = {
+      panes: gridPanes,
+      grid: opts?.grid,
+      viewport: { width: vpW, height: vpH },
+      jabtermWsUrl: this.terminalServer!.baseWsUrl,
+    };
     this.lastGridConfig = gridConfig;
-    const gridUrl = new URL(`${this.terminalServer!.baseHttpUrl}/terminal-grid`);
-    gridUrl.searchParams.set("config", JSON.stringify(gridConfig));
-    const gridUrlStr = gridUrl.toString();
 
     let page: Page;
     let context: BrowserContext;
 
     if (this._cdpEndpoint && this._onRequestPage) {
-      // Electron mode: ask the main process to create a WebContentsView with the grid URL
-      await this._onRequestPage(gridUrlStr, { width: vpW, height: vpH });
-
-      // Find the page that was created by the Electron main process
+      // Electron mode: the grid is rendered by the player's React app.
+      // The session reports gridConfig via getLayoutInfo() and the executor
+      // pushes it to the player. We find the main Electron window page
+      // via CDP using the __b2vWsInstances marker set by use-player.ts.
       let found: Page | null = null;
-      for (let attempt = 0; attempt < 40; attempt++) {
+      for (let attempt = 0; attempt < 80; attempt++) {
         for (const ctx of this.browser!.contexts()) {
           for (const p of ctx.pages()) {
-            if (p.url().includes("/terminal-grid")) {
+            const url = p.url();
+            if (!url.startsWith("http://localhost") && !url.startsWith("http://127.0.0.1")) continue;
+            const isPlayer = await p.evaluate(
+              () => !!(window as any).__b2vWsInstances,
+            ).catch(() => false);
+            if (isPlayer) {
               found = p;
               break;
             }
@@ -864,132 +839,103 @@ export class Session {
         if (found) break;
         await sleep(250);
       }
-      if (!found) throw new Error("Could not find the scenario page via CDP after Electron created the view");
+      if (!found) throw new Error("Could not find the main Electron window page via CDP");
       page = found;
       context = page.context();
-      console.error(`[session] Found Electron-managed page via CDP: ${page.url()}`);
+      const pageIsClosed = page.isClosed();
+      console.error(`[session] Found main Electron window via CDP: ${page.url()} isClosed=${pageIsClosed}`);
     } else {
-      const ctxOpts: {
-        viewport: { width: number; height: number };
-        recordVideo?: { dir: string; size: { width: number; height: number } };
-      } = {
-        viewport: { width: vpW, height: vpH },
-      };
-
-      if (this.record) {
-        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
-        ctxOpts.recordVideo = {
-          dir: path.dirname(rawVideoPath),
-          size: { width: vpW, height: vpH },
-        };
-      }
-
-      context = await this.browser!.newContext(ctxOpts);
-      page = await context.newPage();
-
-      // Dark background to avoid white flash
-      await page.evaluate(() => { document.documentElement.style.background = "#1e1e1e"; });
-
-      // Init scripts
-      if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
-      if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
-
-      await page.goto(gridUrlStr, { waitUntil: "domcontentloaded", timeout: 30000 });
+      throw new Error("createTerminalGrid() currently requires Electron mode (CDP endpoint + onRequestPage). Non-Electron grid is not supported.");
     }
 
-    // Wait for all iframes to load
+    // Notify executor so it can push the grid config to the player BEFORE
+    // we start waiting for terminal elements to appear in the DOM.
+    this._onGridConfigReady?.();
+
+    // Wait for ALL pane elements to appear in the player's React-rendered grid.
+    // Terminal panes: wait for xterm prompt. Browser panes: wait for iframe to load.
     for (let i = 0; i < paneConfigs.length; i++) {
-      const iframeName = `term-${i}`;
+      const pc = paneConfigs[i];
+      const testIdSel = `[data-testid="${pc.testId}"]`;
 
-      await page.waitForSelector(`iframe[name="${iframeName}"]`, { timeout: 10000 });
-
-      // Wait for Playwright to recognise the frame (may lag behind DOM)
-      let frame: import("playwright").Frame | null = null;
-      for (let attempt = 0; attempt < 20; attempt++) {
-        frame = page.frame(iframeName);
-        if (frame) break;
-        await sleep(250);
+      try {
+        await page.waitForSelector(testIdSel, { timeout: 30000 });
+      } catch (e) {
+        // Debug: check page state at time of failure
+        const isClosed = page.isClosed();
+        const url = isClosed ? "CLOSED" : page.url();
+        console.error(`[session] waitForSelector failed for ${testIdSel}: isClosed=${isClosed} url=${url} error=${(e as Error).message}`);
+        throw e;
       }
-      if (!frame) throw new Error(`Iframe '${iframeName}' not found in grid page`);
 
-      // Only wait for terminal-specific readiness (WS open, content rendered)
-      if (paneConfigs[i].type === "terminal") {
-        const selector = `[data-testid="${paneConfigs[i].testId}"]`;
-
-        await frame.waitForFunction(
+      if (pc.type === "terminal") {
+        // Wait for xterm content — jabterm always spawns a shell, so wait for prompt
+        await page.waitForFunction(
           (sel: string) => {
-            const el = document.querySelector(sel) as any;
-            return String(el?.dataset?.b2vWsState ?? "") === "open";
+            const root = document.querySelector(sel);
+            if (!root) return false;
+            const rows = root.querySelector(".xterm-rows");
+            if (!rows) return false;
+            const text = rows.textContent ?? "";
+            return text.includes("$") || text.includes("#") || text.includes("%");
           },
-          selector,
-          { timeout: 15000 },
+          testIdSel,
+          { timeout: 30000 },
         );
-
-        const cmd = paneConfigs[i].cmd;
-        if (!cmd) {
-          await frame.waitForFunction(
-            (sel: string) => {
-              const root = document.querySelector(sel);
-              if (!root) return false;
-              const rows = root.querySelector(".xterm-rows");
-              if (!rows) return false;
-              const text = rows.textContent ?? "";
-              return text.includes("$") || text.includes("#");
-            },
-            selector,
-            { timeout: 30000 },
-          );
-        } else {
-          await frame.waitForFunction(
-            (sel: string) => {
-              const root = document.querySelector(sel);
-              if (!root) return false;
-              const rows = root.querySelector(".xterm-rows");
-              const text = String((rows as any)?.textContent ?? "").trim();
-              return text.length > 10;
-            },
-            selector,
-            { timeout: 30000 },
-          );
-        }
       } else {
-        // Browser iframe: wait for some content to load
-        try {
-          await frame.waitForLoadState("domcontentloaded", { timeout: 15000 });
-        } catch {
-          // Non-critical: external page might block load detection
-        }
+        // Wait for the iframe element to appear inside the browser pane container
+        await page.waitForSelector(`${testIdSel} iframe`, { timeout: 30000 });
       }
     }
 
-    // Create actors — TerminalActors for terminals, Actors for browser panes
+    // Create actors — terminal actors target elements directly in the main
+    // page DOM, browser pane actors are scoped to their iframe Frame.
     const actors: TerminalActor[] = [];
     for (let i = 0; i < paneConfigs.length; i++) {
-      const iframeName = `term-${i}`;
-      const frame = page.frame(iframeName);
-      if (!frame) throw new Error(`Iframe '${iframeName}' not found`);
+      const pc = paneConfigs[i];
+      const selector = `[data-testid="${pc.testId}"]`;
 
-      if (paneConfigs[i].type === "terminal") {
-        const selector = `[data-testid="${paneConfigs[i].testId}"]`;
-        const actor = new TerminalActor(page, this.mode, selector, {
-          delays: this.delays,
-          frame,
-          iframeName,
-        });
-        this._wireReplayEvents(actor);
-        actors.push(actor);
-      } else {
-        // Browser pane: create a TerminalActor-compatible wrapper (limited but functional)
-        const actor = new TerminalActor(page, this.mode, "body", {
-          delays: this.delays,
-          frame,
-          iframeName,
-        });
-        this._wireReplayEvents(actor);
-        actors.push(actor);
+      let iframeFrame: Frame | undefined;
+      let iframeName: string | undefined;
+
+      if (pc.type === "browser") {
+        // Retry contentFrame() — the iframe element may exist in the DOM
+        // before its content has loaded, in which case contentFrame()
+        // returns null. Falling back to the main page silently would cause
+        // the actor to navigate the player UI itself.
+        const iframeSel = `${selector} iframe`;
+        const CF_TIMEOUT = 10_000;
+        const CF_INTERVAL = 250;
+        const cfDeadline = Date.now() + CF_TIMEOUT;
+        let resolvedFrame: Frame | null = null;
+
+        while (Date.now() < cfDeadline) {
+          const handle = await page.$(iframeSel);
+          if (handle) {
+            resolvedFrame = await handle.contentFrame();
+            if (resolvedFrame) break;
+          }
+          await sleep(CF_INTERVAL);
+        }
+
+        if (!resolvedFrame) {
+          throw new Error(
+            `Browser pane "${pc.testId}": contentFrame() returned null after ${CF_TIMEOUT}ms. ` +
+            `The iframe element exists but its content frame is not accessible.`,
+          );
+        }
+        iframeFrame = resolvedFrame;
+        iframeName = pc.testId;
       }
 
-      // Human mode: inject cursor on the main page (shared)
+      const actor = new TerminalActor(page, this.mode, selector, {
+        delays: this.delays,
+        frame: iframeFrame,
+        iframeName,
+      });
+      this._wireReplayEvents(actor);
+      actors.push(actor);
+
       if (this.mode === "human" && i === 0) {
         page.on("framenavigated", (f) => {
           if (f === page.mainFrame()) {
@@ -997,6 +943,24 @@ export class Session {
           }
         });
         await actors[0].injectCursor();
+      }
+    }
+
+    // Auto-execute commands for terminal panes that have a command specified.
+    // jabterm always spawns a shell, so we type the command.
+    for (let i = 0; i < paneConfigs.length; i++) {
+      const pc = paneConfigs[i];
+      if (pc.type === "terminal" && pc.cmd) {
+        // Focus the terminal's xterm textarea and type the command
+        const xtermTextarea = await page.$(`${actors[i].selector} .xterm-helper-textarea`);
+        if (xtermTextarea) {
+          await xtermTextarea.focus();
+          for (const ch of pc.cmd) {
+            await page.keyboard.type(ch, { delay: 0 });
+          }
+          await page.keyboard.press("Enter");
+          await sleep(500);
+        }
       }
     }
 
@@ -1012,229 +976,29 @@ export class Session {
       console.error(`  Grid started: ${paneConfigs.length} panes (${vpW}x${vpH})`);
     }
 
-    // Build the GridHandle for dynamic tab management
     const gridHandle: GridHandle = {
       actors,
       page,
 
-      addTab: async (tabOpts) => {
-        if (!this.terminalServer) throw new Error("Terminal server not running");
-        const result = await page.evaluate((cfg: any) => {
-          return (window as any).__b2v_addTab(cfg);
-        }, {
-          cmd: tabOpts.command,
-          title: tabOpts.label ?? tabOpts.command ?? "Shell",
-          testId: tabOpts.testId,
-          referencePanel: tabOpts.referencePanel,
-        });
-
-        const iframeName = result.iframeName as string;
-        const testId = result.testId as string;
-
-        // Wait for iframe to appear
-        let frame: import("playwright").Frame | null = null;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          frame = page.frame(iframeName);
-          if (frame) break;
-          await sleep(250);
-        }
-        if (!frame) throw new Error(`Dynamic tab iframe '${iframeName}' not found`);
-
-        const selector = `[data-testid="${testId}"]`;
-
-        // Wait for WS open
-        await frame.waitForFunction(
-          (sel: string) => {
-            const el = document.querySelector(sel) as any;
-            return String(el?.dataset?.b2vWsState ?? "") === "open";
-          },
-          selector,
-          { timeout: 15000 },
-        );
-
-        // Wait for prompt if it's a shell
-        if (!tabOpts.command) {
-          await frame.waitForFunction(
-            (sel: string) => {
-              const root = document.querySelector(sel);
-              if (!root) return false;
-              const rows = root.querySelector(".xterm-rows");
-              return (rows?.textContent ?? "").includes("$");
-            },
-            selector,
-            { timeout: 30000 },
-          );
-        }
-
-        const actor = new TerminalActor(page, this.mode, selector, {
-          delays: this.delays,
-          frame,
-          iframeName,
-        });
-        this._wireReplayEvents(actor);
-        (actor as any)._panelId = result.panelId;
-        return actor;
+      addTab: async (_tabOpts) => {
+        throw new Error("Dynamic tab addition not yet supported in jabterm mode");
       },
 
       wrapLatestTab: async () => {
-        // Find the last iframe (most recently added by "+" button or __b2v_addTab)
-        const info = await page.evaluate(() => {
-          const iframes = document.querySelectorAll('iframe');
-          const last = iframes[iframes.length - 1];
-          if (!last) return null;
-          // Find the panel ID from paneData
-          const paneData = (window as any).__b2v_paneData;
-          const lastPane = paneData ? paneData[paneData.length - 1] : null;
-          return {
-            iframeName: last.name,
-            testId: lastPane?.testId || '',
-            panelId: lastPane ? 'panel-' + lastPane.index : '',
-          };
-        });
-        if (!info) throw new Error("No iframe found to wrap");
-
-        let frame: import("playwright").Frame | null = null;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          frame = page.frame(info.iframeName);
-          if (frame) break;
-          await sleep(250);
-        }
-        if (!frame) throw new Error(`Iframe '${info.iframeName}' not found`);
-
-        const selector = `[data-testid="${info.testId}"]`;
-        await frame.waitForFunction(
-          (sel: string) => {
-            const el = document.querySelector(sel) as any;
-            return String(el?.dataset?.b2vWsState ?? "") === "open";
-          },
-          selector,
-          { timeout: 15000 },
-        );
-
-        const actor = new TerminalActor(page, this.mode, selector, {
-          delays: this.delays,
-          frame,
-          iframeName: info.iframeName,
-        });
-        this._wireReplayEvents(actor);
-        (actor as any)._panelId = info.panelId;
-        return actor;
+        throw new Error("wrapLatestTab not yet supported in jabterm mode");
       },
 
-      closeTab: async (actor) => {
-        const panelId = (actor as any)._panelId;
-        if (!panelId) throw new Error("Actor does not have a panel ID (not created via addTab)");
-        await page.evaluate((pid: string) => {
-          (window as any).__b2v_closeTab(pid);
-        }, panelId);
-        await sleep(100);
+      closeTab: async (_actor) => {
+        throw new Error("closeTab not yet supported in jabterm mode");
       },
 
-      switchLayout: async (layoutId: string, paneConfigs?: Array<{
+      switchLayout: async (_layoutId: string, _paneConfigs?: Array<{
         type?: "browser" | "terminal";
         url?: string;
         command?: string;
         title?: string;
       }>) => {
-        const jsConfigs = paneConfigs?.map((c) => ({
-          type: c.type ?? "terminal",
-          url: c.url,
-          cmd: c.command,
-          title: c.title,
-        }));
-
-        const result = await page.evaluate(({ lid, cfgs }: { lid: string; cfgs: any }) => {
-          return (window as any).__b2v_switchLayout(lid, cfgs);
-        }, { lid: layoutId, cfgs: jsConfigs ?? null }) as { paneCount: number; grid: number[][] } | { error: string };
-
-        if ("error" in result) throw new Error(result.error);
-
-        const resolvedConfigs = paneConfigs ?? [];
-        const newActors: TerminalActor[] = [];
-        for (let i = 0; i < result.paneCount; i++) {
-          const iframeName = `term-${i}`;
-          await page.waitForSelector(`iframe[name="${iframeName}"]`, { timeout: 10000 });
-
-          let frame: import("playwright").Frame | null = null;
-          for (let attempt = 0; attempt < 20; attempt++) {
-            frame = page.frame(iframeName);
-            if (frame) break;
-            await sleep(250);
-          }
-          if (!frame) throw new Error(`Iframe '${iframeName}' not found after layout switch`);
-
-          const paneCfg = resolvedConfigs[i];
-          const isTerminal = !paneCfg || (paneCfg.type ?? "terminal") === "terminal";
-
-          if (isTerminal) {
-            const testId = `xterm-dyn-${i}`;
-            const selector = `[data-testid="${testId}"]`;
-
-            await frame.waitForFunction(
-              (sel: string) => {
-                const el = document.querySelector(sel) as any;
-                return String(el?.dataset?.b2vWsState ?? "") === "open";
-              },
-              selector,
-              { timeout: 15000 },
-            );
-
-            if (!paneCfg?.command) {
-              await frame.waitForFunction(
-                (sel: string) => {
-                  const root = document.querySelector(sel);
-                  if (!root) return false;
-                  const rows = root.querySelector(".xterm-rows");
-                  return (rows?.textContent ?? "").includes("$") || (rows?.textContent ?? "").includes("#");
-                },
-                selector,
-                { timeout: 30000 },
-              );
-            } else {
-              await frame.waitForFunction(
-                (sel: string) => {
-                  const root = document.querySelector(sel);
-                  if (!root) return false;
-                  const rows = root.querySelector(".xterm-rows");
-                  const text = String((rows as any)?.textContent ?? "").trim();
-                  return text.length > 10;
-                },
-                selector,
-                { timeout: 30000 },
-              );
-            }
-
-            const actor = new TerminalActor(page, this.mode, selector, {
-              delays: this.delays,
-              frame,
-              iframeName,
-            });
-            this._wireReplayEvents(actor);
-            (actor as any)._panelId = `panel-${i}`;
-            newActors.push(actor);
-          } else {
-            try {
-              await frame.waitForLoadState("domcontentloaded", { timeout: 15000 });
-            } catch { /* external pages may block */ }
-
-            const actor = new TerminalActor(page, this.mode, "body", {
-              delays: this.delays,
-              frame,
-              iframeName,
-            });
-            this._wireReplayEvents(actor);
-            (actor as any)._panelId = `panel-${i}`;
-            newActors.push(actor);
-          }
-        }
-
-        // Inject cursor on the first actor in human mode
-        if (this.mode === "human" && newActors.length > 0) {
-          await newActors[0].injectCursor();
-        }
-
-        gridHandle.actors = newActors;
-        return newActors;
+        throw new Error("switchLayout not yet supported in jabterm mode");
       },
 
       paneConfigs: paneConfigs.map((p) => ({
@@ -1245,139 +1009,8 @@ export class Session {
 
       viewport: { width: vpW, height: vpH },
 
-      attachToPage: async (playerPage: Page, iframeName = "b2v-scenario") => {
-        const iframeSelector = `iframe[name="${iframeName}"]`;
-        console.error(`[grid] attachToPage: waiting for iframe "${iframeName}" in player page...`);
-
-        // Wait for the scenario iframe to appear in the player page
-        await playerPage.waitForSelector(iframeSelector, { timeout: 30000 });
-
-        // Wait for Playwright to recognise the frame
-        let scenarioFrame: import("playwright").Frame | null = null;
-        for (let attempt = 0; attempt < 60; attempt++) {
-          scenarioFrame = playerPage.frame(iframeName);
-          if (scenarioFrame) break;
-          await sleep(500);
-        }
-        if (!scenarioFrame) throw new Error(`Scenario iframe '${iframeName}' not found in player page`);
-
-        // Wait for nested pane iframes inside the scenario iframe
-        const newActors: TerminalActor[] = [];
-        for (let i = 0; i < paneConfigs.length; i++) {
-          const nestedIframeName = `term-${i}`;
-          let nestedFrame: import("playwright").Frame | null = null;
-          for (let attempt = 0; attempt < 60; attempt++) {
-            nestedFrame = playerPage.frame(nestedIframeName);
-            if (nestedFrame) break;
-            await sleep(500);
-          }
-          if (!nestedFrame) {
-            console.error(`[grid] attachToPage: pane iframe '${nestedIframeName}' not found, skipping`);
-            newActors.push(gridHandle.actors[i]);
-            continue;
-          }
-
-          const cfg = paneConfigs[i];
-          if (cfg.type === "terminal") {
-            const selector = `[data-testid="${cfg.testId}"]`;
-            try {
-              await nestedFrame.waitForFunction(
-                (sel: string) => {
-                  const el = document.querySelector(sel) as any;
-                  return String(el?.dataset?.b2vWsState ?? "") === "open";
-                },
-                selector,
-                { timeout: 15000 },
-              );
-            } catch (err) {
-              console.error(`[grid] attachToPage: timeout waiting for WS open on '${cfg.testId}':`, err);
-            }
-
-            const actor = new TerminalActor(playerPage, this.mode, selector, {
-              delays: this.delays,
-              frame: nestedFrame,
-              iframeName: nestedIframeName,
-            });
-            actor._embedded = true;
-            actor._scenarioIframeSelector = iframeSelector;
-            actor._scenarioViewport = { width: vpW, height: vpH };
-            this._wireReplayEvents(actor);
-            newActors.push(actor);
-          } else {
-            try {
-              await nestedFrame.waitForLoadState("domcontentloaded", { timeout: 15000 });
-            } catch { /* external pages may block */ }
-
-            const actor = new TerminalActor(playerPage, this.mode, "body", {
-              delays: this.delays,
-              frame: nestedFrame,
-              iframeName: nestedIframeName,
-            });
-            actor._embedded = true;
-            actor._scenarioIframeSelector = iframeSelector;
-            actor._scenarioViewport = { width: vpW, height: vpH };
-            this._wireReplayEvents(actor);
-            newActors.push(actor);
-          }
-        }
-
-        gridHandle.actors = newActors;
-        gridHandle.page = playerPage;
-        console.error(`[grid] attachToPage: ${newActors.length} actors re-wired to player page`);
-      },
-
-      addPane: async (paneType: "browser" | "terminal") => {
-        const result = await page.evaluate((pt: string) => {
-          return (window as any).__b2v_addPane(pt);
-        }, paneType) as { panelId: string; iframeName: string; testId: string; paneType: string };
-
-        const iframeName = result.iframeName;
-        const testId = result.testId;
-
-        let frame: import("playwright").Frame | null = null;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          frame = page.frame(iframeName);
-          if (frame) break;
-          await sleep(250);
-        }
-        if (!frame) throw new Error(`Pane iframe '${iframeName}' not found`);
-
-        if (paneType === "terminal") {
-          const selector = `[data-testid="${testId}"]`;
-          await frame.waitForFunction(
-            (sel: string) => {
-              const el = document.querySelector(sel) as any;
-              return String(el?.dataset?.b2vWsState ?? "") === "open";
-            },
-            selector,
-            { timeout: 15000 },
-          );
-          await frame.waitForFunction(
-            (sel: string) => {
-              const root = document.querySelector(sel);
-              if (!root) return false;
-              const rows = root.querySelector(".xterm-rows");
-              return (rows?.textContent ?? "").includes("$") || (rows?.textContent ?? "").includes("#");
-            },
-            selector,
-            { timeout: 30000 },
-          );
-        } else {
-          try {
-            await frame.waitForLoadState("domcontentloaded", { timeout: 10000 });
-          } catch { /* browser pane may not fully load */ }
-        }
-
-        const selector = paneType === "terminal" ? `[data-testid="${testId}"]` : "body";
-        const actor = new TerminalActor(page, this.mode, selector, {
-          delays: this.delays,
-          frame,
-          iframeName,
-        });
-        this._wireReplayEvents(actor);
-        (actor as any)._panelId = result.panelId;
-        gridHandle.actors.push(actor);
-        return actor;
+      addPane: async (_paneType: "browser" | "terminal") => {
+        throw new Error("addPane not yet supported in jabterm mode");
       },
     };
 
@@ -1485,9 +1118,10 @@ export class Session {
     panes: Array<{ id: string; type: "browser" | "terminal"; label: string }>;
     layout: LayoutConfig;
     terminalServerUrl?: string;
-    gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number } };
+    gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string };
     pageUrl?: string;
     viewport: { width: number; height: number };
+    electronView?: boolean;
   } {
     const paneList = [...this.panes.values()].map((p) => ({
       id: p.id,
@@ -1503,10 +1137,11 @@ export class Session {
     return {
       panes: paneList,
       layout: this.layout,
-      terminalServerUrl: this.terminalServer?.baseHttpUrl,
+      terminalServerUrl: this.terminalServer?.baseWsUrl,
       gridConfig: this.lastGridConfig ?? undefined,
       pageUrl,
       viewport: this.lastGridConfig?.viewport ?? { width: 1280, height: 720 },
+      electronView: !!(this._cdpEndpoint && this._onRequestPage),
     };
   }
 
@@ -1556,8 +1191,9 @@ export class Session {
       await sleep(80);
     }
 
-    // Close pages to flush screencast recordings
-    if (this.record) {
+    // Close pages to flush screencast recordings (skip for CDP-connected
+    // sessions — the shared Electron page must stay alive between scenarios).
+    if (this.record && this._ownsBrowser) {
       for (const pane of this.panes.values()) {
         try {
           await pane.page.close();
@@ -1569,11 +1205,16 @@ export class Session {
       }
     }
 
-    // Close all contexts and browser
-    for (const pane of this.panes.values()) {
-      try { await pane.context.close(); } catch { /* ignore */ }
+    if (this._ownsBrowser) {
+      for (const pane of this.panes.values()) {
+        try { await pane.context.close(); } catch { /* ignore */ }
+      }
     }
-    if (this.browser && this._ownsBrowser) await this.browser.close();
+    // For CDP mode, close() disconnects without killing the host browser.
+    // For owned browsers, close() terminates the browser process.
+    if (this.browser) {
+      try { await this.browser.close(); } catch { /* ignore */ }
+    }
 
     // Stop terminal processes
     for (const pane of this.panes.values()) {
@@ -1581,6 +1222,14 @@ export class Session {
         try { pane.process.kill("SIGTERM"); } catch { /* ignore */ }
       }
     }
+
+    // Run registered cleanup functions early (before video processing)
+    // so child processes (sync servers, dev servers) are killed promptly
+    // even if video composition takes a long time or the process exits.
+    for (const fn of this.cleanupFns) {
+      try { await fn(); } catch { /* ignore cleanup errors */ }
+    }
+    this.cleanupFns = [];
 
     // Video composition
     if (this.record && videoPath) {
@@ -1677,11 +1326,6 @@ export class Session {
 
     console.error(`  Duration:   ${(durationMs / 1000).toFixed(1)}s\n`);
 
-    // Run registered cleanup functions (servers, terminal processes, etc.)
-    for (const fn of this.cleanupFns) {
-      try { await fn(); } catch { /* ignore cleanup errors */ }
-    }
-
     return {
       video: videoPath,
       thumbnail: thumbnailPath,
@@ -1715,14 +1359,12 @@ export class Session {
  * ```
  */
 export async function createSession(opts?: SessionOptions & {
-  browser?: Browser;
   cdpEndpoint?: string;
   onRequestPage?: (url: string, viewport: { width: number; height: number }) => Promise<void>;
 }): Promise<Session> {
-  const { browser: externalBrowser, cdpEndpoint, onRequestPage, ...sessionOpts } = opts ?? {};
+  const { cdpEndpoint, onRequestPage, ...sessionOpts } = opts ?? {};
   const session = new Session(sessionOpts as SessionOptions);
   if (cdpEndpoint) session._cdpEndpoint = cdpEndpoint;
-  else if (externalBrowser) session._externalBrowser = externalBrowser;
   if (onRequestPage) session._onRequestPage = onRequestPage;
   await session._init();
   return session;

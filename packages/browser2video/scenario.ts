@@ -35,6 +35,8 @@ import type { SessionOptions, SessionResult } from "./types.ts";
 export interface StepDescriptor<T = any> {
   caption: string;
   narration?: string;
+  /** Narration function that runs concurrently with `run`. Step waits for both. */
+  narrationFn?: (ctx: T) => Promise<void>;
   run: (ctx: T) => Promise<void>;
 }
 
@@ -51,6 +53,12 @@ export interface ScenarioBuilder<T> {
   options(opts: Partial<import("./types.ts").SessionOptions>): void;
   step(caption: string, run: (ctx: T) => Promise<void>): void;
   step(caption: string, narration: string, run: (ctx: T) => Promise<void>): void;
+  /**
+   * Step with a narration function that runs concurrently with the step body.
+   * The step waits for both the narration and body to complete before proceeding.
+   * Use this for per-actor voices: `s.step("Title", ({a}) => a.speak("..."), async ({a}) => { ... })`
+   */
+  step(caption: string, narration: (ctx: T) => Promise<void>, run: (ctx: T) => Promise<void>): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -79,9 +87,16 @@ export function defineScenario<T>(
       fnOrNarration: string | ((ctx: T) => Promise<void>),
       maybeFn?: (ctx: T) => Promise<void>,
     ) {
-      const narration = typeof fnOrNarration === "string" ? fnOrNarration : undefined;
-      const run = typeof fnOrNarration === "function" ? fnOrNarration : maybeFn!;
-      descriptor.steps.push({ caption, narration, run });
+      if (typeof fnOrNarration === "function" && maybeFn) {
+        // 3-arg form with narration function: step(caption, narrationFn, run)
+        descriptor.steps.push({ caption, narrationFn: fnOrNarration, run: maybeFn });
+      } else if (typeof fnOrNarration === "string") {
+        // 3-arg form with narration string: step(caption, "text", run)
+        descriptor.steps.push({ caption, narration: fnOrNarration, run: maybeFn! });
+      } else {
+        // 2-arg form: step(caption, run)
+        descriptor.steps.push({ caption, run: fnOrNarration });
+      }
     },
   };
 
@@ -129,6 +144,13 @@ export async function runScenario<T>(
   for (const s of descriptor.steps) {
     if (s.narration) {
       await step(s.caption, s.narration, () => s.run(ctx));
+    } else if (s.narrationFn) {
+      // Narration function runs concurrently; step waits for both
+      await step(s.caption, async () => {
+        const narrationPromise = s.narrationFn!(ctx);
+        await s.run(ctx);
+        await narrationPromise;
+      });
     } else {
       await step(s.caption, () => s.run(ctx));
     }

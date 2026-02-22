@@ -2,8 +2,7 @@ import { useMemo, useRef, useState, useEffect } from "react";
 import type { ViewMode, StepState, PaneLayoutInfo, CursorState } from "../hooks/use-player";
 import { CursorOverlay } from "./cursor-overlay";
 import { StudioGrid } from "./studio-grid";
-
-const isElectron = !!(window as any).electronAPI?.isElectron;
+import { ScenarioGrid, type ScenarioGridConfig } from "./scenario-grid";
 
 interface PreviewProps {
   screenshot: string | null;
@@ -20,20 +19,6 @@ interface PreviewProps {
   videoPath: string | null;
   cursor: CursorState;
   sendStudioEvent: (msg: Record<string, unknown>) => void;
-}
-
-function buildObserverUrl(layout: PaneLayoutInfo): string | null {
-  if (layout.gridConfig && layout.terminalServerUrl) {
-    const observeConfig = {
-      ...layout.gridConfig,
-      panes: layout.gridConfig.panes.map((p) => ({ ...p })),
-    };
-    const url = new URL(`${layout.terminalServerUrl}/terminal-grid`);
-    url.searchParams.set("config", JSON.stringify(observeConfig));
-    url.searchParams.set("mode", "observe");
-    return url.toString();
-  }
-  return null;
 }
 
 function layoutToFlexClass(layout?: string): string {
@@ -112,18 +97,8 @@ function ElectronScenarioView({
     };
   }, [active]);
 
-  // Cleanup: destroy the view when component unmounts
-  useEffect(() => {
-    return () => {
-      if (window.electronAPI) {
-        window.electronAPI.scenarioView.destroy();
-      }
-    };
-  }, []);
-
   return (
     <div ref={containerRef} className="flex-1 overflow-hidden relative" style={{ background: "transparent" }}>
-      {/* The WebContentsView is rendered by Electron behind/over this area */}
       <div className="absolute inset-0 pointer-events-none z-10">
         <CursorOverlay cursor={cursor} viewportWidth={vp.width} viewportHeight={vp.height} />
       </div>
@@ -136,72 +111,6 @@ function ElectronScenarioView({
           Inspect
         </button>
       )}
-    </div>
-  );
-}
-
-/**
- * Renders the observer iframe at the exact Playwright viewport dimensions
- * and CSS-scales it to fit the available container. This ensures page content
- * has an identical layout to the Playwright session, so cursor coordinates
- * from replay events map 1:1 to actual element positions.
- */
-function ScaledObserverIframe({
-  observerUrl,
-  vp,
-  cursor,
-}: {
-  observerUrl: string;
-  vp: { width: number; height: number };
-  cursor: CursorState;
-}) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      const { width, height } = entry!.contentRect;
-      setContainerSize({ w: width, h: height });
-    });
-    ro.observe(el);
-    setContainerSize({ w: el.clientWidth || 1, h: el.clientHeight || 1 });
-    return () => ro.disconnect();
-  }, []);
-
-  const scale =
-    containerSize.w > 0 && containerSize.h > 0
-      ? Math.min(containerSize.w / vp.width, containerSize.h / vp.height)
-      : 1;
-
-  const scaledW = vp.width * scale;
-  const scaledH = vp.height * scale;
-  const offsetX = Math.max(0, (containerSize.w - scaledW) / 2);
-  const offsetY = Math.max(0, (containerSize.h - scaledH) / 2);
-
-  return (
-    <div ref={containerRef} className="flex-1 overflow-hidden relative bg-black">
-      <div
-        style={{
-          position: "absolute",
-          left: offsetX,
-          top: offsetY,
-          width: vp.width,
-          height: vp.height,
-          transform: `scale(${scale})`,
-          transformOrigin: "top left",
-        }}
-      >
-        <iframe
-          key={observerUrl}
-          name="b2v-scenario"
-          src={observerUrl}
-          style={{ width: vp.width, height: vp.height, border: "none" }}
-          title="Scenario live view"
-        />
-        <CursorOverlay cursor={cursor} viewportWidth={vp.width} viewportHeight={vp.height} />
-      </div>
     </div>
   );
 }
@@ -223,21 +132,19 @@ export function Preview({
   sendStudioEvent,
 }: PreviewProps) {
   const isRunning = stepState === "running" || stepState === "fast-forwarding";
-  const observerUrl = useMemo(() => paneLayout ? buildObserverUrl(paneLayout) : null, [paneLayout]);
-  const singlePageLiveUrl = useMemo(
-    () => (paneLayout && !paneLayout.gridConfig ? paneLayout.pageUrl ?? null : null),
-    [paneLayout],
-  );
   const isMultiPane = (paneLayout?.panes?.length ?? 0) > 1 && !paneLayout?.gridConfig;
   const hasLiveFrames = Object.keys(liveFrames).length > 0;
 
-  console.error(
-    `[preview] mode=${viewMode} step=${activeStep} state=${stepState ?? "none"}`,
-    `observerUrl=${!!observerUrl} paneLayout=${!!paneLayout}`,
-    `showStudio=${showStudio} termSrv=${!!terminalServerUrl}`,
-    `gridConfig=${!!paneLayout?.gridConfig} termSrv=${!!paneLayout?.terminalServerUrl}`,
-    `liveFrame=${!!liveFrame} screenshot=${!!screenshot} isRunning=${isRunning}`,
-  );
+  // Stabilize the gridConfig reference: JSON-serialize to detect actual
+  // data changes, so ScenarioGrid doesn't rebuild panels when only
+  // pageUrl or other non-grid fields in paneLayout change.
+  const gridConfigJson = paneLayout?.gridConfig?.jabtermWsUrl
+    ? JSON.stringify(paneLayout.gridConfig)
+    : "";
+  const scenarioGridConfig = useMemo<ScenarioGridConfig | null>(() => {
+    if (!gridConfigJson) return null;
+    return JSON.parse(gridConfigJson) as ScenarioGridConfig;
+  }, [gridConfigJson]);
 
   // --- Cached video (no steps run yet) ---
   if (viewMode === "video" && videoPath && activeStep < 0) {
@@ -267,6 +174,19 @@ export function Preview({
           <span className="ml-auto">{liveBadge}</span>
         </div>
         <StudioGrid terminalServerUrl={terminalServerUrl} studioFrames={studioFrames} sendStudioEvent={sendStudioEvent} />
+      </div>
+    );
+  }
+
+  // Grid mode must come BEFORE the activeStep < 0 guard because setupFn()
+  // pushes the grid config before any steps have run (activeStep is still -1).
+  if (scenarioGridConfig) {
+    return (
+      <div data-preview-mode="scenario-grid" className="flex flex-col h-full">
+        <StepHeader activeStep={activeStep} stepCaption={stepCaption} badge={liveBadge} />
+        <div className="flex-1 min-h-0">
+          <ScenarioGrid gridConfig={scenarioGridConfig} />
+        </div>
       </div>
     );
   }
@@ -321,41 +241,13 @@ export function Preview({
     );
   }
 
-  // --- Electron live mode: WebContentsView for real DOM interactions ---
-  if (isElectron && viewMode === "live" && paneLayout?.gridConfig) {
+  // --- Live mode: Electron WebContentsView for real DOM interactions ---
+  if (paneLayout?.gridConfig || paneLayout?.electronView) {
     const vp = paneLayout?.viewport ?? { width: 1280, height: 720 };
     return (
       <div data-preview-mode="electron-scenario-view" className="flex flex-col h-full">
         <StepHeader activeStep={activeStep} stepCaption={stepCaption} badge={liveBadge} />
         <ElectronScenarioView vp={vp} cursor={cursor} active={isRunning} />
-      </div>
-    );
-  }
-
-  // --- Live mode: grid observer (non-Electron fallback) ---
-  if (observerUrl) {
-    const vp = paneLayout?.viewport ?? { width: 1280, height: 720 };
-    return (
-      <div data-preview-mode="observer-iframe" className="flex flex-col h-full">
-        <StepHeader activeStep={activeStep} stepCaption={stepCaption} badge={liveBadge} />
-        <ScaledObserverIframe observerUrl={observerUrl} vp={vp} cursor={cursor} />
-      </div>
-    );
-  }
-
-  // --- Live mode: single page iframe (debuggable DOM) ---
-  if (viewMode === "live" && singlePageLiveUrl) {
-    return (
-      <div data-preview-mode="single-page-iframe" className="flex flex-col h-full">
-        <StepHeader activeStep={activeStep} stepCaption={stepCaption} badge={liveBadge} />
-        <div className="flex-1 overflow-hidden bg-black">
-          <iframe
-            key={singlePageLiveUrl}
-            src={singlePageLiveUrl}
-            className="w-full h-full border-none"
-            title="Scenario live view"
-          />
-        </div>
       </div>
     );
   }

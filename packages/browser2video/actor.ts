@@ -178,33 +178,58 @@ export function linearPath(
 
 export const CURSOR_OVERLAY_SCRIPT = `
 (function() {
-  if (document.getElementById('__b2v_cursor')) return;
+  // Clean up cursors from previous scenario
+  if (window.__b2v_cursors) {
+    for (var id in window.__b2v_cursors) {
+      var el = window.__b2v_cursors[id];
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    }
+  }
+  window.__b2v_cursors = {};
 
-  const cursor = document.createElement('div');
-  cursor.id = '__b2v_cursor';
-  cursor.style.cssText = \`
-    position: fixed; top: 0; left: 0; z-index: 999999;
-    width: 20px; height: 20px; pointer-events: none;
-    transform: translate(-2px, -2px);
-    transition: transform 40ms ease-in-out;
-    will-change: transform;
-  \`;
-  var svgNS = 'http://www.w3.org/2000/svg';
-  var svg = document.createElementNS(svgNS, 'svg');
-  svg.setAttribute('width', '20');
-  svg.setAttribute('height', '20');
-  svg.setAttribute('viewBox', '0 0 20 20');
-  svg.setAttribute('fill', 'none');
-  var pathEl = document.createElementNS(svgNS, 'path');
-  pathEl.setAttribute('d', 'M3 2L3 17L7.5 12.5L11.5 18L14 16.5L10 11L16 11L3 2Z');
-  pathEl.setAttribute('fill', 'white');
-  pathEl.setAttribute('stroke', 'black');
-  pathEl.setAttribute('stroke-width', '1.2');
-  pathEl.setAttribute('stroke-linejoin', 'round');
-  svg.appendChild(pathEl);
-  cursor.appendChild(svg);
-  document.body.appendChild(cursor);
+  var CURSOR_COLORS = {
+    'default': { fill: 'white', stroke: 'black' },
+    'alice':   { fill: '#f0abfc', stroke: '#86198f' },
+    'bob':     { fill: '#93c5fd', stroke: '#1e40af' },
+    'narrator':{ fill: '#fde68a', stroke: '#92400e' },
+  };
 
+  function getCursorEl(id) {
+    if (window.__b2v_cursors[id]) return window.__b2v_cursors[id];
+    var colors = CURSOR_COLORS[id] || CURSOR_COLORS['default'];
+    var cursor = document.createElement('div');
+    cursor.id = '__b2v_cursor_' + id;
+    cursor.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'z-index:' + (999999 - Object.keys(window.__b2v_cursors).length),
+      'width:20px', 'height:20px', 'pointer-events:none',
+      'transform:translate(-2px,-2px)',
+      'transition:transform 40ms ease-in-out',
+      'will-change:transform',
+    ].join(';');
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '20');
+    svg.setAttribute('height', '20');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('fill', 'none');
+    var pathEl = document.createElementNS(svgNS, 'path');
+    pathEl.setAttribute('d', 'M3 2L3 17L7.5 12.5L11.5 18L14 16.5L10 11L16 11L3 2Z');
+    pathEl.setAttribute('fill', colors.fill);
+    pathEl.setAttribute('stroke', colors.stroke);
+    pathEl.setAttribute('stroke-width', '1.2');
+    pathEl.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(pathEl);
+    cursor.appendChild(svg);
+    document.body.appendChild(cursor);
+    window.__b2v_cursors[id] = cursor;
+    return cursor;
+  }
+
+  // Legacy single-cursor element for backwards compat
+  getCursorEl('default');
+
+  var oldRipple = document.getElementById('__b2v_ripple_container');
+  if (oldRipple) oldRipple.remove();
   const rippleContainer = document.createElement('div');
   rippleContainer.id = '__b2v_ripple_container';
   rippleContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999998;pointer-events:none;';
@@ -212,8 +237,9 @@ export const CURSOR_OVERLAY_SCRIPT = `
 
   document.documentElement.style.scrollBehavior = 'smooth';
 
-  window.__b2v_moveCursor = function(x, y) {
-    cursor.style.transform = \`translate(\${x - 2}px, \${y - 2}px)\`;
+  window.__b2v_moveCursor = function(x, y, actorId) {
+    var el = getCursorEl(actorId || 'default');
+    el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
   };
 
   window.__b2v_clickEffect = function(x, y) {
@@ -315,6 +341,9 @@ export class Actor {
     this.speed = opts?.speed;
   }
 
+  /** Actor identifier used for per-actor cursor overlay. */
+  cursorId: string = 'default';
+
   /** Set the session start time for replay event timestamps */
   setSessionStartTime(t: number) { this._sessionStartTime = t; }
 
@@ -411,7 +440,7 @@ export class Actor {
     for (let i = 0; i < points.length; i++) {
       const p = points[i]!;
       await this.page.mouse.move(p.x, p.y);
-      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
       this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
     }
@@ -475,7 +504,7 @@ export class Actor {
         const p = points[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(
-          `window.__b2v_moveCursor?.(${p.x}, ${p.y})`,
+          `window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`,
         );
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
@@ -519,15 +548,28 @@ export class Actor {
 
   /**
    * Type text into an element.
-   * Automatically detects xterm.js terminal panes (looks for `.xterm-helper-textarea`
-   * inside the target) and handles them correctly — newlines are sent as Enter.
-   * For regular DOM inputs, clicks to focus first, then types with human-like delays.
+   * Returns a `TypeAction` that can be awaited directly or chained with `.speak()`.
+   *
+   * ```ts
+   * await actor.type("#input", "hello");            // just type
+   * await actor.type("#input", "hello").speak();     // type + speak simultaneously
+   * await actor.type("#input", "hello").speak("hi"); // type "hello", speak "hi"
+   * ```
    */
-  async type(selector: string, text: string) {
+  type(selector: string, text: string): TypeAction {
+    return new TypeAction(this, null, selector, text);
+  }
+
+  /**
+   * Internal type implementation. Called by TypeAction.
+   * @internal
+   */
+  async _typeImpl(selector: string, text: string, onTypeStart?: () => void) {
     // Auto-detect xterm.js terminal containers
     const xtermTextarea = await this._context.$(`${selector} .xterm-helper-textarea`);
     if (xtermTextarea) {
       await xtermTextarea.focus();
+      onTypeStart?.();
       const charDelay = this.mode === "fast" ? 0 : pickMs(this.delays.keyDelayMs);
       for (const ch of text) {
         if (ch === "\n") {
@@ -544,6 +586,8 @@ export class Actor {
     // Regular DOM input
     await this.click(selector);
     await sleep(pickMs(this.delays.beforeTypeMs));
+
+    onTypeStart?.();
 
     if (this.mode === "fast") {
       await this._context.type(selector, text, { delay: 0 });
@@ -592,7 +636,7 @@ export class Actor {
           for (let i = 0; i < points.length; i++) {
             const p = points[i]!;
             await this.page.mouse.move(p.x, p.y);
-            await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+            await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
             this._emitCursorMove(p.x, p.y);
             await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
           }
@@ -641,8 +685,8 @@ export class Actor {
           const descendantScrollable =
             Array.from(root.querySelectorAll("*"))
               .find((n) => n instanceof HTMLElement && isScrollable(n as HTMLElement)) as
-              | HTMLElement
-              | undefined;
+            | HTMLElement
+            | undefined;
 
           const target = direct ?? radixViewport ?? descendantScrollable ?? root;
           target.scrollBy({ top: deltaY, behavior });
@@ -678,7 +722,7 @@ export class Actor {
       for (let i = 0; i < movePoints.length; i++) {
         const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
@@ -695,7 +739,7 @@ export class Actor {
       const p = dragPoints[i]!;
       await this.page.mouse.move(p.x, p.y);
       if (this.mode === "human") {
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, dragPoints.length));
       }
@@ -799,7 +843,7 @@ export class Actor {
       for (let i = 0; i < movePoints.length; i++) {
         const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
@@ -815,7 +859,7 @@ export class Actor {
         const p = segPoints[j]!;
         await this.page.mouse.move(p.x, p.y);
         if (this.mode === "human") {
-          await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+          await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
           this._emitCursorMove(p.x, p.y);
           await sleep(
             easedStepMs(pickMs(this.delays.mouseMoveStepMs), j, segPoints.length, 2),
@@ -868,15 +912,15 @@ export class Actor {
     for (let i = 0; i < movePoints.length; i++) {
       const p = movePoints[i]!;
       await this.page.mouse.move(p.x, p.y);
-      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
       this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
     }
 
-    // Auto-calculate duration from path length: ~400px/s, clamped to [800, 4000] ms
+    // Auto-calculate duration from path length: ~400px/s, clamped to [800, 1500] ms
     const avgRadius = (baseRx + baseRy) / 2;
     const pathLength = 1.5 * 2 * Math.PI * avgRadius * ((rStart + rEnd) / 2);
-    const autoDuration = Math.max(800, Math.min(4000, Math.round(pathLength / 400 * 1000)));
+    const autoDuration = Math.max(800, Math.min(1500, Math.round(pathLength / 400 * 1000)));
     const duration = opts?.durationMs ?? autoDuration;
     const totalSteps = Math.max(40, Math.floor(duration / 20));
     const stepDelay = duration / totalSteps;
@@ -893,7 +937,7 @@ export class Actor {
 
       if (px !== Math.round(prevX) || py !== Math.round(prevY)) {
         await this.page.mouse.move(px, py);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${px}, ${py})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${px}, ${py}, '${this.cursorId}')`);
         this._emitCursorMove(px, py);
         prevX = px;
         prevY = py;
@@ -943,6 +987,69 @@ export class Actor {
     await sleep(pickMs(this.delays.breatheMs));
   }
 
+}
+
+// ---------------------------------------------------------------------------
+//  TypeAction — fluent builder for type() with optional .speak()
+// ---------------------------------------------------------------------------
+
+/**
+ * Returned by `actor.type(selector, text)`.
+ * Implements `PromiseLike<void>` so `await actor.type(...)` works directly.
+ * Chain `.speak()` to start speaking when typing begins:
+ *
+ * ```ts
+ * await actor.type("#input", "hello").speak();      // speaks "hello"
+ * await actor.type("#input", "hello").speak("hi");   // speaks "hi"
+ * ```
+ */
+export class TypeAction implements PromiseLike<void> {
+  _actor: Actor;
+  _setup: (() => Promise<void>) | null;
+  _selector: string;
+  _text: string;
+  _promise: Promise<void> | null = null;
+  _speakText: string | null = null;
+
+  constructor(
+    actor: Actor,
+    setup: (() => Promise<void>) | null,
+    selector: string,
+    text: string,
+  ) {
+    this._actor = actor;
+    this._setup = setup;
+    this._selector = selector;
+    this._text = text;
+  }
+
+  /** Start speaking when typing begins. Defaults to the typed text. */
+  speak(text?: string): Promise<void> {
+    this._speakText = text ?? this._text;
+    return this._execute();
+  }
+
+  then<TResult1 = void, TResult2 = never>(
+    onfulfilled?: ((value: void) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+  ): Promise<TResult1 | TResult2> {
+    return this._execute().then(onfulfilled, onrejected);
+  }
+
+  _execute(): Promise<void> {
+    if (!this._promise) {
+      const speakText = this._speakText;
+      const actor = this._actor;
+      const onTypeStart = speakText
+        ? () => { actor.speak(speakText); }
+        : undefined;
+      this._promise = (async () => {
+        if (this._setup) await this._setup();
+        await actor._typeImpl(this._selector, this._text, onTypeStart);
+      })();
+    }
+    return this._promise;
+  }
 }
 
 // ---------------------------------------------------------------------------

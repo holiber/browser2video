@@ -28,9 +28,11 @@ export interface PaneLayoutInfo {
     }>;
     grid?: number[][];
     viewport: { width: number; height: number };
+    jabtermWsUrl?: string;
   };
   pageUrl?: string;
   viewport: { width: number; height: number };
+  electronView?: boolean;
 }
 
 export interface PlayerState {
@@ -52,6 +54,7 @@ export interface PlayerState {
   error: string | null;
   importing: boolean;
   importResult: { count: number; scenarios: string[] } | null;
+  cacheSize: number;
 }
 
 type Action =
@@ -68,11 +71,12 @@ type Action =
   | { type: "error"; message: string }
   | { type: "reset" }
   | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
-  | { type: "cacheCleared" }
+  | { type: "cacheCleared"; cacheSize?: number }
+  | { type: "cancelled" }
   | { type: "viewMode"; mode: ViewMode }
   | { type: "importStart" }
   | { type: "artifactsImported"; count: number; scenarios: string[] }
-  | { type: "studioFrame"; paneId: string; data: string };
+  ;
 
 const initial: PlayerState = {
   connected: false,
@@ -93,6 +97,7 @@ const initial: PlayerState = {
   error: null,
   importing: false,
   importResult: null,
+  cacheSize: 0,
 };
 
 function reducer(state: PlayerState, action: Action): PlayerState {
@@ -133,6 +138,15 @@ function reducer(state: PlayerState, action: Action): PlayerState {
         ...state,
         screenshots: state.scenario?.steps.map(() => null) ?? [],
         stepDurations: state.scenario?.steps.map(() => null) ?? [],
+        cacheSize: action.cacheSize ?? 0,
+      };
+    case "cancelled":
+      return {
+        ...state,
+        stepStates: state.stepStates.map((s) => s === "running" || s === "fast-forwarding" ? "pending" : s),
+        liveFrame: null,
+        liveFrames: {},
+        error: null,
       };
     case "stepStart": {
       const stepStates = [...state.stepStates];
@@ -171,8 +185,6 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, error: action.message };
     case "viewMode":
       return { ...state, viewMode: action.mode };
-    case "studioFrame":
-      return { ...state, studioFrames: { ...state.studioFrames, [action.paneId]: action.data } };
     case "importStart":
       return { ...state, importing: true, importResult: null };
     case "artifactsImported":
@@ -213,90 +225,123 @@ export function usePlayer(wsUrl: string) {
   const pendingCursorRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let disposed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoff = 500;
+    const MAX_BACKOFF = 5000;
 
-    ws.onopen = () => dispatch({ type: "connected" });
-    ws.onclose = () => dispatch({ type: "disconnected" });
-    ws.onerror = () => dispatch({ type: "error", message: "WebSocket connection failed" });
+    function connect() {
+      if (disposed) return;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      // Expose for e2e testing: allows tests to force-close the connection
+      (window as any).__b2vWsInstances = [(window as any).__b2vWsInstances ?? [], ws].flat();
 
-    ws.onmessage = (ev) => {
-      try {
-        const msg = JSON.parse(ev.data as string);
-        switch (msg.type) {
-          case "studioReady":
-            dispatch({ type: "studioReady", terminalServerUrl: msg.terminalServerUrl });
-            break;
-          case "scenarioFiles":
-            dispatch({ type: "scenarioFiles", files: msg.files });
-            break;
-          case "scenario":
-            dispatch({ type: "scenario", name: msg.name, steps: msg.steps });
-            setCursor({ x: 0, y: 0, clickEffect: false, visible: false });
-            break;
-          case "cachedData":
-            dispatch({ type: "cachedData", screenshots: msg.screenshots, stepDurations: msg.stepDurations, stepHasAudio: msg.stepHasAudio, videoPath: msg.videoPath });
-            break;
-          case "cacheCleared":
-            dispatch({ type: "cacheCleared" });
-            break;
-          case "stepStart":
-            dispatch({ type: "stepStart", index: msg.index, fastForward: msg.fastForward });
-            break;
-          case "stepComplete":
-            dispatch({ type: "stepComplete", index: msg.index, screenshot: msg.screenshot, mode: msg.mode, durationMs: msg.durationMs ?? 0 });
-            setCursor((c) => ({ ...c, clickEffect: false }));
-            break;
-          case "liveFrame":
-            dispatch({ type: "liveFrame", data: msg.data, paneId: msg.paneId });
-            break;
-          case "paneLayout":
-            dispatch({ type: "paneLayout", layout: msg.layout });
-            break;
-          case "finished":
-            dispatch({ type: "finished", videoPath: msg.videoPath });
-            setCursor({ x: 0, y: 0, clickEffect: false, visible: false });
-            break;
-          case "viewMode":
-            dispatch({ type: "viewMode", mode: msg.mode });
-            break;
-          case "replayEvent": {
-            const event = msg.event;
-            if (event.type === "cursorMove") {
-              pendingCursorRef.current = { x: event.x, y: event.y };
-              if (!cursorRafRef.current) {
-                cursorRafRef.current = requestAnimationFrame(() => {
-                  cursorRafRef.current = 0;
-                  const p = pendingCursorRef.current;
-                  if (p) {
-                    setCursor((c) => ({ ...c, x: p.x, y: p.y, visible: true }));
-                    pendingCursorRef.current = null;
-                  }
-                });
-              }
-            } else if (event.type === "click") {
-              setCursor((c) => ({ ...c, x: event.x, y: event.y, clickEffect: true, visible: true }));
-              setTimeout(() => setCursor((c) => ({ ...c, clickEffect: false })), 600);
-            }
-            break;
-          }
-          case "studioFrame":
-            dispatch({ type: "studioFrame", paneId: msg.paneId, data: msg.data });
-            break;
-          case "artifactsImported":
-            dispatch({ type: "artifactsImported", count: msg.count, scenarios: msg.scenarios });
-            break;
-          case "error":
-            dispatch({ type: "error", message: msg.message });
-            break;
-          case "status":
-            break;
+      ws.onopen = () => {
+        backoff = 500;
+        dispatch({ type: "connected" });
+      };
+
+      ws.onclose = () => {
+        // Only update state if this WS is still the active one.
+        // React strict mode double-mounts can cause a stale WS's onclose
+        // to fire after a new WS has already been assigned.
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+          dispatch({ type: "disconnected" });
         }
-      } catch { /* ignore parse errors */ }
-    };
+        if (!disposed) {
+          reconnectTimer = setTimeout(() => {
+            backoff = Math.min(backoff * 2, MAX_BACKOFF);
+            connect();
+          }, backoff);
+        }
+      };
+
+      ws.onerror = () => { };
+
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data as string);
+          switch (msg.type) {
+            case "studioReady":
+              dispatch({ type: "studioReady", terminalServerUrl: msg.terminalServerUrl });
+              break;
+            case "scenarioFiles":
+              dispatch({ type: "scenarioFiles", files: msg.files });
+              break;
+            case "scenario":
+              dispatch({ type: "scenario", name: msg.name, steps: msg.steps });
+              setCursor({ x: 0, y: 0, clickEffect: false, visible: false });
+              break;
+            case "cachedData":
+              dispatch({ type: "cachedData", screenshots: msg.screenshots, stepDurations: msg.stepDurations, stepHasAudio: msg.stepHasAudio, videoPath: msg.videoPath });
+              break;
+            case "cacheCleared":
+              dispatch({ type: "cacheCleared", cacheSize: msg.cacheSize });
+              break;
+            case "cancelled":
+              dispatch({ type: "cancelled" });
+              break;
+            case "stepStart":
+              dispatch({ type: "stepStart", index: msg.index, fastForward: msg.fastForward });
+              break;
+            case "stepComplete":
+              dispatch({ type: "stepComplete", index: msg.index, screenshot: msg.screenshot, mode: msg.mode, durationMs: msg.durationMs ?? 0 });
+              setCursor((c) => ({ ...c, clickEffect: false }));
+              break;
+            case "liveFrame":
+              dispatch({ type: "liveFrame", data: msg.data, paneId: msg.paneId });
+              break;
+            case "paneLayout":
+              dispatch({ type: "paneLayout", layout: msg.layout });
+              break;
+            case "finished":
+              dispatch({ type: "finished", videoPath: msg.videoPath });
+              setCursor({ x: 0, y: 0, clickEffect: false, visible: false });
+              break;
+            case "viewMode":
+              dispatch({ type: "viewMode", mode: msg.mode });
+              break;
+            case "replayEvent": {
+              const event = msg.event;
+              if (event.type === "cursorMove") {
+                pendingCursorRef.current = { x: event.x, y: event.y };
+                if (!cursorRafRef.current) {
+                  cursorRafRef.current = requestAnimationFrame(() => {
+                    cursorRafRef.current = 0;
+                    const p = pendingCursorRef.current;
+                    if (p) {
+                      setCursor((c) => ({ ...c, x: p.x, y: p.y, visible: true }));
+                      pendingCursorRef.current = null;
+                    }
+                  });
+                }
+              } else if (event.type === "click") {
+                setCursor((c) => ({ ...c, x: event.x, y: event.y, clickEffect: true, visible: true }));
+                setTimeout(() => setCursor((c) => ({ ...c, clickEffect: false })), 600);
+              }
+              break;
+            }
+            case "artifactsImported":
+              dispatch({ type: "artifactsImported", count: msg.count, scenarios: msg.scenarios });
+              break;
+            case "error":
+              dispatch({ type: "error", message: msg.message });
+              break;
+            case "status":
+              break;
+          }
+        } catch { /* ignore parse errors */ }
+      };
+    }
+
+    connect();
 
     return () => {
-      ws.close();
+      disposed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (wsRef.current) wsRef.current.close();
       wsRef.current = null;
       if (cursorRafRef.current) cancelAnimationFrame(cursorRafRef.current);
     };
@@ -329,6 +374,10 @@ export function usePlayer(wsUrl: string) {
     sendMsg({ type: "clearCache" });
   }, [sendMsg]);
 
+  const cancel = useCallback(() => {
+    sendMsg({ type: "cancel" });
+  }, [sendMsg]);
+
   const setViewMode = useCallback((mode: ViewMode) => {
     dispatch({ type: "viewMode", mode });
     sendMsg({ type: "setViewMode", mode });
@@ -348,5 +397,5 @@ export function usePlayer(wsUrl: string) {
     sendMsg(msg);
   }, [sendMsg]);
 
-  return { state, cursor, loadScenario, runStep, runAll, reset, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent };
+  return { state, cursor, loadScenario, runStep, runAll, reset, cancel, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent };
 }

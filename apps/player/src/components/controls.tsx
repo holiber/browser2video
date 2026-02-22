@@ -1,16 +1,18 @@
 import { useState } from "react";
-import { Play, SkipForward, SkipBack, RotateCcw, Trash2, Download, FolderInput } from "lucide-react";
+import { Play, Square, SkipForward, SkipBack, RotateCcw, Trash2, Download, FolderInput } from "lucide-react";
 import type { StepState } from "../hooks/use-player";
 
 interface ControlsProps {
   stepCount: number;
   activeStep: number;
   stepStates: StepState[];
+  connected: boolean;
   importing: boolean;
   importResult: { count: number; scenarios: string[] } | null;
   onRunStep: (index: number) => void;
   onRunAll: () => void;
   onReset: () => void;
+  onCancel: () => void;
   onClearCache: () => void;
   onImportArtifacts: (dir: string) => void;
   onDownloadArtifacts: (runId?: string) => void;
@@ -20,11 +22,13 @@ export function Controls({
   stepCount,
   activeStep,
   stepStates,
+  connected,
   importing,
   importResult,
   onRunStep,
   onRunAll,
   onReset,
+  onCancel,
   onClearCache,
   onImportArtifacts,
   onDownloadArtifacts,
@@ -42,28 +46,39 @@ export function Controls({
             const prev = Math.max(0, activeStep - 1);
             if (prev !== activeStep) onRunStep(prev);
           }}
-          disabled={isRunning || activeStep <= 0}
+          disabled={!connected || isRunning || activeStep <= 0}
           className="p-2 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors"
           title="Previous step"
         >
           <SkipBack size={16} />
         </button>
 
-        <button
-          onClick={onRunAll}
-          disabled={isRunning || allDone}
-          className="p-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium flex items-center gap-1.5 transition-colors"
-          title="Play all"
-        >
-          <Play size={14} />
-          Play all
-        </button>
+        {isRunning ? (
+          <button
+            onClick={onCancel}
+            className="p-1.5 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium flex items-center gap-1.5 transition-colors"
+            title="Stop"
+          >
+            <Square size={14} />
+            Stop
+          </button>
+        ) : (
+          <button
+            onClick={onRunAll}
+            disabled={!connected || allDone}
+            className="p-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium flex items-center gap-1.5 transition-colors"
+            title={connected ? "Play all" : "Disconnected"}
+          >
+            <Play size={14} />
+            Play all
+          </button>
+        )}
 
         <button
           onClick={() => {
             if (nextStep >= 0) onRunStep(nextStep);
           }}
-          disabled={isRunning || nextStep < 0}
+          disabled={!connected || isRunning || nextStep < 0}
           className="p-2 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors"
           title="Next step"
         >

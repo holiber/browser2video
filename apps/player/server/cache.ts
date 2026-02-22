@@ -276,4 +276,19 @@ export class PlayerCache {
       fs.rmSync(this.cacheRoot, { recursive: true, force: true });
     }
   }
+
+  /** Get total cache size in bytes (recursive). */
+  getCacheSize(): number {
+    if (!fs.existsSync(this.cacheRoot)) return 0;
+    let total = 0;
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else try { total += fs.statSync(p).size; } catch { }
+      }
+    };
+    walk(this.cacheRoot);
+    return total;
+  }
 }
