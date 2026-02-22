@@ -16,7 +16,7 @@ function sleep(ms: number) {
 type DOMContext = Page | Frame;
 
 /** Track which iframe is currently focused on a given page */
-const _focusedIframe = new WeakMap<Page, string>();
+const _focusedPane = new WeakMap<Page, string>();
 
 export class TerminalActor extends Actor {
   /** CSS selector for the terminal container element */
@@ -87,9 +87,10 @@ export class TerminalActor extends Actor {
     const x = Math.round(iframeOffsetX + box.x + box.width * relXOrSelector);
     const y = Math.round(iframeOffsetY + box.y + box.height * (relY ?? 0.5));
     await this.clickAt(x, y);
-    // Track focus — this iframe is now focused
     if (this._iframeName) {
-      _focusedIframe.set(this.page, this._iframeName);
+      _focusedPane.set(this.page, this._iframeName);
+    } else {
+      _focusedPane.set(this.page, this.selector);
     }
   }
 
@@ -147,24 +148,37 @@ export class TerminalActor extends Actor {
   }
 
   /**
-   * Ensure this terminal's iframe is focused on the grid page.
+   * Ensure this terminal pane is focused on the grid page.
+   * For iframes: clicks the iframe center. For direct DOM terminals: clicks the pane container.
    * Only clicks if focus needs to change (avoids redundant clicks).
    */
   private async _ensureFocus() {
-    if (!this._iframeName) return;
-    if (_focusedIframe.get(this.page) === this._iframeName) return;
+    const paneId = this._iframeName ?? this.selector;
+    if (_focusedPane.get(this.page) === paneId) return;
 
-    const iframeBox = await this.page.$eval(
-      `iframe[name="${this._iframeName}"]`,
-      (el: any) => {
+    if (this._iframeName) {
+      // Browser pane inside an iframe
+      const iframeBox = await this.page.$eval(
+        `iframe[name="${this._iframeName}"]`,
+        (el: any) => {
+          const r = el.getBoundingClientRect();
+          return { x: r.x, y: r.y, width: r.width, height: r.height };
+        },
+      );
+      const x = Math.round(iframeBox.x + iframeBox.width / 2);
+      const y = Math.round(iframeBox.y + iframeBox.height / 2);
+      await this.clickAt(x, y);
+    } else {
+      // Terminal pane (JabTerm React component, no iframe) — click pane container
+      const paneBox = await this._dom.$eval(this.selector, (el: any) => {
         const r = el.getBoundingClientRect();
         return { x: r.x, y: r.y, width: r.width, height: r.height };
-      },
-    );
-    const x = Math.round(iframeBox.x + iframeBox.width / 2);
-    const y = Math.round(iframeBox.y + iframeBox.height / 2);
-    await this.clickAt(x, y);
-    _focusedIframe.set(this.page, this._iframeName);
+      });
+      const x = Math.round(paneBox.x + paneBox.width / 2);
+      const y = Math.round(paneBox.y + paneBox.height / 2);
+      await this.clickAt(x, y);
+    }
+    _focusedPane.set(this.page, paneId);
   }
 
   /**
