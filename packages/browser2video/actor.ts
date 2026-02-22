@@ -186,17 +186,33 @@ export const CURSOR_OVERLAY_SCRIPT = `
     }
   }
   window.__b2v_cursors = {};
+  window.__b2v_cursorIndex = 0;
 
-  var CURSOR_COLORS = {
-    'default': { fill: 'white', stroke: 'black' },
-    'alice':   { fill: '#f0abfc', stroke: '#86198f' },
-    'bob':     { fill: '#93c5fd', stroke: '#1e40af' },
-    'narrator':{ fill: '#fde68a', stroke: '#92400e' },
-  };
+  // Auto-rotating high-visibility palette for multi-actor scenarios
+  var AUTO_COLORS = [
+    { fill: '#fb923c', stroke: '#9a3412' },  // coral/orange
+    { fill: '#38bdf8', stroke: '#0c4a6e' },  // sky blue
+    { fill: '#a3e635', stroke: '#365314' },  // lime
+    { fill: '#c084fc', stroke: '#581c87' },  // violet
+    { fill: '#fbbf24', stroke: '#78350f' },  // amber
+    { fill: '#2dd4bf', stroke: '#134e4a' },  // teal
+    { fill: '#fb7185', stroke: '#881337' },  // rose
+    { fill: '#818cf8', stroke: '#3730a3' },  // indigo
+  ];
 
   function getCursorEl(id) {
     if (window.__b2v_cursors[id]) return window.__b2v_cursors[id];
-    var colors = CURSOR_COLORS[id] || CURSOR_COLORS['default'];
+
+    // First actor ('default' or index 0) → classic white cursor
+    // Subsequent actors → pick from rotating palette
+    var colors;
+    if (id === 'default' || window.__b2v_cursorIndex === 0) {
+      colors = { fill: 'white', stroke: 'black' };
+    } else {
+      colors = AUTO_COLORS[(window.__b2v_cursorIndex - 1) % AUTO_COLORS.length];
+    }
+    window.__b2v_cursorIndex++;
+
     var cursor = document.createElement('div');
     cursor.id = '__b2v_cursor_' + id;
     cursor.style.cssText = [
@@ -205,6 +221,7 @@ export const CURSOR_OVERLAY_SCRIPT = `
       'transform:translate(-2px,-2px)',
       'transition:transform 40ms ease-in-out',
       'will-change:transform',
+      'display:none',
     ].join(';');
     var svgNS = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(svgNS, 'svg');
@@ -219,14 +236,20 @@ export const CURSOR_OVERLAY_SCRIPT = `
     pathEl.setAttribute('stroke-width', '1.2');
     pathEl.setAttribute('stroke-linejoin', 'round');
     svg.appendChild(pathEl);
+
+    // Add colored label for non-default cursors
+    if (id !== 'default' && window.__b2v_cursorIndex > 1) {
+      var label = document.createElement('div');
+      label.style.cssText = 'position:absolute;top:18px;left:4px;font-size:10px;font-weight:600;color:' + colors.fill + ';text-shadow:0 0 3px rgba(0,0,0,0.8);white-space:nowrap;pointer-events:none;';
+      label.textContent = id;
+      cursor.appendChild(label);
+    }
+
     cursor.appendChild(svg);
     document.body.appendChild(cursor);
     window.__b2v_cursors[id] = cursor;
     return cursor;
   }
-
-  // Legacy single-cursor element for backwards compat
-  getCursorEl('default');
 
   var oldRipple = document.getElementById('__b2v_ripple_container');
   if (oldRipple) oldRipple.remove();
@@ -239,6 +262,7 @@ export const CURSOR_OVERLAY_SCRIPT = `
 
   window.__b2v_moveCursor = function(x, y, actorId) {
     var el = getCursorEl(actorId || 'default');
+    el.style.display = '';
     el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
   };
 

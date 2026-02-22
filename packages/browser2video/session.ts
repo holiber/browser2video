@@ -496,7 +496,7 @@ export class Session {
     if (this.mode === "human") {
       page.on("framenavigated", (frame) => {
         if (frame === page.mainFrame()) {
-          actor.injectCursor().catch(() => {});
+          actor.injectCursor().catch(() => { });
         }
       });
     }
@@ -592,7 +592,7 @@ export class Session {
       const pushOutput = (data: Buffer) => {
         const text = String(data);
         fs.appendFileSync(logPath, text, "utf-8");
-        page.evaluate((t: string) => (window as any).__b2v_appendOutput?.(t), text).catch(() => {});
+        page.evaluate((t: string) => (window as any).__b2v_appendOutput?.(t), text).catch(() => { });
       };
       proc.stdout?.on("data", pushOutput);
       proc.stderr?.on("data", pushOutput);
@@ -610,11 +610,11 @@ export class Session {
               ? pickMs(delays.keyDelayMs as [number, number])
               : pickMs(DEFAULT_DELAYS.human.keyDelayMs);
             for (const ch of text) {
-              page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), ch).catch(() => {});
+              page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), ch).catch(() => { });
               await sleep(keyDelay);
             }
             // Show newline visually
-            page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), "\n").catch(() => {});
+            page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), "\n").catch(() => { });
             await sleep(50);
           }
 
@@ -627,7 +627,7 @@ export class Session {
 
       await sleep(300); // let process start
     } else {
-      termHandle = { send: async () => {}, page };
+      termHandle = { send: async () => { }, page };
     }
 
     const pane: PaneState = {
@@ -933,17 +933,21 @@ export class Session {
         frame: iframeFrame,
         iframeName,
       });
+      // Assign unique cursor identity from pane label — each actor gets its own colored cursor
+      actor.cursorId = (pc.title ?? pc.testId ?? `actor-${i}`).toLowerCase().replace(/\s+/g, '-');
       this._wireReplayEvents(actor);
       actors.push(actor);
+    }
 
-      if (this.mode === "human" && i === 0) {
-        page.on("framenavigated", (f) => {
-          if (f === page.mainFrame()) {
-            actors[0].injectCursor().catch(() => {});
-          }
-        });
-        await actors[0].injectCursor();
-      }
+    // Inject cursor overlay once for all actors — cursors are lazily created
+    // on first moveCursor call, so each actor's cursor appears when it starts interacting
+    if (this.mode === "human" && actors.length > 0) {
+      page.on("framenavigated", (f) => {
+        if (f === page.mainFrame()) {
+          actors[0].injectCursor().catch(() => { });
+        }
+      });
+      await actors[0].injectCursor();
     }
 
     // Auto-execute commands for terminal panes that have a command specified.
