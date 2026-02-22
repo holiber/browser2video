@@ -178,32 +178,49 @@ export function linearPath(
 
 export const CURSOR_OVERLAY_SCRIPT = `
 (function() {
-  if (document.getElementById('__b2v_cursor')) return;
+  if (window.__b2v_cursors) return;
+  window.__b2v_cursors = {};
 
-  const cursor = document.createElement('div');
-  cursor.id = '__b2v_cursor';
-  cursor.style.cssText = \`
-    position: fixed; top: 0; left: 0; z-index: 999999;
-    width: 20px; height: 20px; pointer-events: none;
-    transform: translate(-2px, -2px);
-    transition: transform 40ms ease-in-out;
-    will-change: transform;
-  \`;
-  var svgNS = 'http://www.w3.org/2000/svg';
-  var svg = document.createElementNS(svgNS, 'svg');
-  svg.setAttribute('width', '20');
-  svg.setAttribute('height', '20');
-  svg.setAttribute('viewBox', '0 0 20 20');
-  svg.setAttribute('fill', 'none');
-  var pathEl = document.createElementNS(svgNS, 'path');
-  pathEl.setAttribute('d', 'M3 2L3 17L7.5 12.5L11.5 18L14 16.5L10 11L16 11L3 2Z');
-  pathEl.setAttribute('fill', 'white');
-  pathEl.setAttribute('stroke', 'black');
-  pathEl.setAttribute('stroke-width', '1.2');
-  pathEl.setAttribute('stroke-linejoin', 'round');
-  svg.appendChild(pathEl);
-  cursor.appendChild(svg);
-  document.body.appendChild(cursor);
+  var CURSOR_COLORS = {
+    'default': { fill: 'white', stroke: 'black' },
+    'alice':   { fill: '#f0abfc', stroke: '#86198f' },
+    'bob':     { fill: '#93c5fd', stroke: '#1e40af' },
+    'narrator':{ fill: '#fde68a', stroke: '#92400e' },
+  };
+
+  function getCursorEl(id) {
+    if (window.__b2v_cursors[id]) return window.__b2v_cursors[id];
+    var colors = CURSOR_COLORS[id] || CURSOR_COLORS['default'];
+    var cursor = document.createElement('div');
+    cursor.id = '__b2v_cursor_' + id;
+    cursor.style.cssText = [
+      'position:fixed', 'top:0', 'left:0', 'z-index:' + (999999 - Object.keys(window.__b2v_cursors).length),
+      'width:20px', 'height:20px', 'pointer-events:none',
+      'transform:translate(-2px,-2px)',
+      'transition:transform 40ms ease-in-out',
+      'will-change:transform',
+    ].join(';');
+    var svgNS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '20');
+    svg.setAttribute('height', '20');
+    svg.setAttribute('viewBox', '0 0 20 20');
+    svg.setAttribute('fill', 'none');
+    var pathEl = document.createElementNS(svgNS, 'path');
+    pathEl.setAttribute('d', 'M3 2L3 17L7.5 12.5L11.5 18L14 16.5L10 11L16 11L3 2Z');
+    pathEl.setAttribute('fill', colors.fill);
+    pathEl.setAttribute('stroke', colors.stroke);
+    pathEl.setAttribute('stroke-width', '1.2');
+    pathEl.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(pathEl);
+    cursor.appendChild(svg);
+    document.body.appendChild(cursor);
+    window.__b2v_cursors[id] = cursor;
+    return cursor;
+  }
+
+  // Legacy single-cursor element for backwards compat
+  getCursorEl('default');
 
   const rippleContainer = document.createElement('div');
   rippleContainer.id = '__b2v_ripple_container';
@@ -212,8 +229,9 @@ export const CURSOR_OVERLAY_SCRIPT = `
 
   document.documentElement.style.scrollBehavior = 'smooth';
 
-  window.__b2v_moveCursor = function(x, y) {
-    cursor.style.transform = \`translate(\${x - 2}px, \${y - 2}px)\`;
+  window.__b2v_moveCursor = function(x, y, actorId) {
+    var el = getCursorEl(actorId || 'default');
+    el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
   };
 
   window.__b2v_clickEffect = function(x, y) {
@@ -315,6 +333,9 @@ export class Actor {
     this.speed = opts?.speed;
   }
 
+  /** Actor identifier used for per-actor cursor overlay. */
+  cursorId: string = 'default';
+
   /** Set the session start time for replay event timestamps */
   setSessionStartTime(t: number) { this._sessionStartTime = t; }
 
@@ -411,7 +432,7 @@ export class Actor {
     for (let i = 0; i < points.length; i++) {
       const p = points[i]!;
       await this.page.mouse.move(p.x, p.y);
-      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
       this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
     }
@@ -475,7 +496,7 @@ export class Actor {
         const p = points[i]!;
         await this.page.mouse.move(p.x, p.y);
         await this.page.evaluate(
-          `window.__b2v_moveCursor?.(${p.x}, ${p.y})`,
+          `window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`,
         );
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
@@ -607,7 +628,7 @@ export class Actor {
           for (let i = 0; i < points.length; i++) {
             const p = points[i]!;
             await this.page.mouse.move(p.x, p.y);
-            await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+            await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
             this._emitCursorMove(p.x, p.y);
             await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
           }
@@ -693,7 +714,7 @@ export class Actor {
       for (let i = 0; i < movePoints.length; i++) {
         const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
@@ -710,7 +731,7 @@ export class Actor {
       const p = dragPoints[i]!;
       await this.page.mouse.move(p.x, p.y);
       if (this.mode === "human") {
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, dragPoints.length));
       }
@@ -814,7 +835,7 @@ export class Actor {
       for (let i = 0; i < movePoints.length; i++) {
         const p = movePoints[i]!;
         await this.page.mouse.move(p.x, p.y);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
         this._emitCursorMove(p.x, p.y);
         await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
       }
@@ -830,7 +851,7 @@ export class Actor {
         const p = segPoints[j]!;
         await this.page.mouse.move(p.x, p.y);
         if (this.mode === "human") {
-          await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+          await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
           this._emitCursorMove(p.x, p.y);
           await sleep(
             easedStepMs(pickMs(this.delays.mouseMoveStepMs), j, segPoints.length, 2),
@@ -883,15 +904,15 @@ export class Actor {
     for (let i = 0; i < movePoints.length; i++) {
       const p = movePoints[i]!;
       await this.page.mouse.move(p.x, p.y);
-      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y})`);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
       this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
     }
 
-    // Auto-calculate duration from path length: ~400px/s, clamped to [800, 4000] ms
+    // Auto-calculate duration from path length: ~400px/s, clamped to [800, 1500] ms
     const avgRadius = (baseRx + baseRy) / 2;
     const pathLength = 1.5 * 2 * Math.PI * avgRadius * ((rStart + rEnd) / 2);
-    const autoDuration = Math.max(800, Math.min(4000, Math.round(pathLength / 400 * 1000)));
+    const autoDuration = Math.max(800, Math.min(1500, Math.round(pathLength / 400 * 1000)));
     const duration = opts?.durationMs ?? autoDuration;
     const totalSteps = Math.max(40, Math.floor(duration / 20));
     const stepDelay = duration / totalSteps;
@@ -908,7 +929,7 @@ export class Actor {
 
       if (px !== Math.round(prevX) || py !== Math.round(prevY)) {
         await this.page.mouse.move(px, py);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${px}, ${py})`);
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${px}, ${py}, '${this.cursorId}')`);
         this._emitCursorMove(px, py);
         prevX = px;
         prevY = py;

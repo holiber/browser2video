@@ -77,10 +77,14 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
 
         // Narrator pointer on the grid page — only used during intro, never concurrently with actors
         const pointer = new Actor(grid.page, "human");
+        pointer.cursorId = 'narrator';
 
         alice.setVoice("shimmer");
+        alice.cursorId = 'alice';
         bobBrowser.setVoice("echo");
+        bobBrowser.cursorId = 'bob';
         bobTerminal.setVoice("echo");
+        bobTerminal.cursorId = 'bob';
 
         const narrate = (text: string) => alice.speak(text, { voice: NARRATOR_VOICE });
 
