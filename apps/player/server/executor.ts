@@ -40,6 +40,7 @@ export class Executor<T = any> {
   private session: Session | null = null;
   private ctx: T | null = null;
   private executedUpTo = -1;
+  private _aborted = false;
   private descriptor: ScenarioDescriptor<T>;
   private sessionOpts: Partial<SessionOptions>;
   private projectRoot: string | null;
@@ -281,6 +282,7 @@ export class Executor<T = any> {
     await this.ensureSession(mode);
 
     for (let i = this.executedUpTo + 1; i < targetIndex; i++) {
+      if (this._aborted) throw new Error("Execution aborted");
       onStepStart?.(i, true);
       const { screenshot, durationMs } = await this.executeStep(this.descriptor.steps[i], i, "fast");
       this.executedUpTo = i;
@@ -288,6 +290,7 @@ export class Executor<T = any> {
     }
 
     if (targetIndex > this.executedUpTo) {
+      if (this._aborted) throw new Error("Execution aborted");
       onStepStart?.(targetIndex, false);
       const { screenshot, durationMs } = await this.executeStep(
         this.descriptor.steps[targetIndex],
@@ -304,6 +307,7 @@ export class Executor<T = any> {
   }
 
   async reset(): Promise<void> {
+    this._aborted = true;
     await this.stopScreencast();
     if (this.session) {
       try {
@@ -315,6 +319,7 @@ export class Executor<T = any> {
       this.executedUpTo = -1;
       this.lastEmittedLayout = "";
     }
+    this._aborted = false;
   }
 
   async dispose(): Promise<void> {

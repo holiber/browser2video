@@ -544,35 +544,44 @@ wss.on("connection", (ws) => {
             send(ws, { type: "error", message: "No scenario loaded" });
             break;
           }
-          for (let i = 0; i < executor.stepCount; i++) {
-            await executor.runTo(
-              i,
-              "human",
-              (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
-              (result) => {
-                send(ws, { type: "stepComplete", ...result });
-                persistStepCache(result.index, result.screenshot, result.durationMs, executor!);
-              },
-            );
-          }
-          await executor.reset();
-          const videoPath = executor.videoPath ?? undefined;
-          if (videoPath && currentCacheDir) {
-            try {
-              if (fs.existsSync(videoPath)) {
-                cache.saveVideo(currentCacheDir, videoPath);
+          try {
+            for (let i = 0; i < executor.stepCount; i++) {
+              await executor.runTo(
+                i,
+                "human",
+                (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
+                (result) => {
+                  send(ws, { type: "stepComplete", ...result });
+                  persistStepCache(result.index, result.screenshot, result.durationMs, executor!);
+                },
+              );
+            }
+            await executor.reset();
+            const videoPath = executor.videoPath ?? undefined;
+            if (videoPath && currentCacheDir) {
+              try {
+                if (fs.existsSync(videoPath)) {
+                  cache.saveVideo(currentCacheDir, videoPath);
+                }
+                const subtitlesDir = path.dirname(videoPath);
+                const vttPath = path.join(subtitlesDir, "captions.vtt");
+                if (fs.existsSync(vttPath)) cache.saveSubtitles(currentCacheDir, vttPath);
+              } catch (err) {
+                console.error("[player] Failed to save video to cache:", err);
               }
-              const subtitlesDir = path.dirname(videoPath);
-              const vttPath = path.join(subtitlesDir, "captions.vtt");
-              if (fs.existsSync(vttPath)) cache.saveSubtitles(currentCacheDir, vttPath);
-            } catch (err) {
-              console.error("[player] Failed to save video to cache:", err);
+            }
+            send(ws, { type: "finished", videoPath: videoPath ?? (currentCacheDir ? cache.getVideoPath(currentCacheDir) : null) ?? undefined });
+          } catch (err) {
+            if ((err as Error).message?.includes("aborted")) {
+              console.error("[player] Execution aborted by user");
+              send(ws, { type: "cancelled" });
+            } else {
+              console.error("[player] runAll error:", err);
+              send(ws, { type: "error", message: (err as Error).message ?? "Unknown error" });
             }
           }
-          send(ws, { type: "finished", videoPath: videoPath ?? (currentCacheDir ? cache.getVideoPath(currentCacheDir) : null) ?? undefined });
           break;
         }
-
         case "reset": {
           if (executor) await executor.reset();
           if (electronMain) electronMain.destroyScenarioView();

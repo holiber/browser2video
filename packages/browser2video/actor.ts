@@ -237,13 +237,6 @@ export const CURSOR_OVERLAY_SCRIPT = `
     pathEl.setAttribute('stroke-linejoin', 'round');
     svg.appendChild(pathEl);
 
-    // Add colored label for non-default cursors
-    if (id !== 'default' && window.__b2v_cursorIndex > 1) {
-      var label = document.createElement('div');
-      label.style.cssText = 'position:absolute;top:18px;left:4px;font-size:10px;font-weight:600;color:' + colors.fill + ';text-shadow:0 0 3px rgba(0,0,0,0.8);white-space:nowrap;pointer-events:none;';
-      label.textContent = id;
-      cursor.appendChild(label);
-    }
 
     cursor.appendChild(svg);
     document.body.appendChild(cursor);
@@ -262,8 +255,17 @@ export const CURSOR_OVERLAY_SCRIPT = `
 
   window.__b2v_moveCursor = function(x, y, actorId) {
     var el = getCursorEl(actorId || 'default');
-    el.style.display = '';
-    el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
+    var wasHidden = el.style.display === 'none';
+    if (wasHidden) {
+      // First appearance: teleport without transition to avoid sliding from corner
+      el.style.transition = 'none';
+      el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
+      el.style.display = '';
+      // Re-enable transition after a frame
+      requestAnimationFrame(function() { el.style.transition = 'transform 40ms ease-in-out'; });
+    } else {
+      el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
+    }
   };
 
   window.__b2v_clickEffect = function(x, y) {

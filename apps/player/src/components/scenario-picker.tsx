@@ -113,7 +113,7 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
         >
           <Trash2 size={12} />
           {cacheSize && cacheSize > 0
-            ? `${formatBytes(cacheSize)} clear cache`
+            ? `Clear cache (${formatBytes(cacheSize)})`
             : "Clear cache"}
         </button>
       )}
