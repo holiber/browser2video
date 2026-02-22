@@ -140,18 +140,14 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
         },
     );
 
-    // ── Alice types message + Bob codes in terminal (concurrent) ─────
+    // ── Alice types message while Bob's terminal shows activity ────────
     s.step("Alice sends, Bob codes", async ({ alice, bobTerminal, grid }) => {
         await grid.page.waitForTimeout(500);
-        await Promise.all([
-            // Alice types + speaks her message, then sends
-            (async () => {
-                await alice.type('[data-testid="chat-input"]', CHAT.aliceMsg).speak(CHAT.aliceMsg);
-                await alice.click('[data-testid="chat-send"]');
-            })(),
-            // Bob types brainfuck in terminal concurrently
-            bobTerminal.typeAndEnter('echo "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>." | head -c 40'),
-        ]);
+        // Bob starts a script that produces output over time (uses keyboard first)
+        await bobTerminal.typeAndEnter('for i in 1 2 3 4 5; do sleep 0.4 && echo "compiling module $i..."; done');
+        // Now Alice types + speaks (Bob's script output scrolls concurrently)
+        await alice.type('[data-testid="chat-input"]', CHAT.aliceMsg).speak(CHAT.aliceMsg);
+        await alice.click('[data-testid="chat-send"]');
         await grid.page.waitForTimeout(500);
     });
 
