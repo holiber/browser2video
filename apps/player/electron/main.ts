@@ -15,22 +15,59 @@ import { app, BrowserWindow, WebContentsView, ipcMain } from "electron";
 console.error(`[electron ${elt()}] Electron imports loaded`);
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { execSync } from "node:child_process";
+import net from "node:net";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 console.error(`[electron ${elt()}] All imports done`);
-const CDP_PORT = parseInt(process.env.B2V_CDP_PORT ?? "9334", 10);
+const PREFERRED_CDP_PORT = parseInt(process.env.B2V_CDP_PORT ?? "9334", 10);
+
+// Probe if the preferred port is available; if not, find a free one
+function isPortFree(port: number): boolean {
+  try {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on("error", () => { });
+    // Listen synchronously by using a blocking flag trick
+    let free = true;
+    try {
+      execSync(
+        `node -e "const s=require('net').createServer();s.listen(${port},'127.0.0.1',()=>{s.close();process.exit(0)});s.on('error',()=>process.exit(1))"`,
+        { timeout: 2000, stdio: "ignore" },
+      );
+    } catch { free = false; }
+    return free;
+  } catch { return false; }
+}
+
+function findFreePort(preferred: number): number {
+  if (isPortFree(preferred)) return preferred;
+  for (let port = preferred + 1; port < preferred + 65; port++) {
+    if (isPortFree(port)) return port;
+  }
+  return 0; // let OS pick
+}
+
+let CDP_PORT = PREFERRED_CDP_PORT;
 
 // Kill any stale process holding the CDP port from a previous run
 try {
-  const pids = execSync(`lsof -ti :${CDP_PORT} 2>/dev/null`, { encoding: "utf8" }).trim();
+  const pids = execSync(`lsof -ti :${CDP_PORT} 2>/dev/null`, { encoding: "utf8", timeout: 3000 }).trim();
   for (const pid of pids.split("\n").filter(Boolean)) {
     if (pid.trim() === String(process.pid)) continue;
-    try { execSync(`kill -9 ${pid.trim()} 2>/dev/null`); } catch { }
+    try { execSync(`kill -9 ${pid.trim()} 2>/dev/null`, { timeout: 2000 }); } catch { }
     console.error(`[electron] Killed stale process ${pid.trim()} on CDP port ${CDP_PORT}`);
   }
 } catch { }
+
+// Check if port is actually available now; if not, find a free one
+{
+  const actualPort = findFreePort(CDP_PORT);
+  if (actualPort !== CDP_PORT) {
+    console.error(`[electron] CDP port ${CDP_PORT} is busy, using ${actualPort} instead`);
+    CDP_PORT = actualPort;
+  }
+}
 
 // Enable CDP so Playwright can connect to WebContentsView pages
 app.commandLine.appendSwitch("remote-debugging-port", String(CDP_PORT));
