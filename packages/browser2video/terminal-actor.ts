@@ -200,11 +200,9 @@ export class TerminalActor extends Actor {
       ([sel, inc]: [string, string[]]) => {
         const root = document.querySelector(sel);
         if (!root) return false;
-        // Prefer .xterm-rows textContent, fall back to data-b2v-output (JabTerm capture buffer)
         const rows = root.querySelector(".xterm-rows");
-        let text = String((rows as any)?.textContent ?? "").trim();
-        if (!text) text = (root as any)?.getAttribute?.("data-b2v-output") ?? "";
-        if (!text) text = String((root as any)?.textContent ?? "");
+        const text = String((rows as any)?.textContent ?? "").trim();
+        if (!text) return false;
         return inc.every((s: string) => text.includes(s));
       },
       [this.selector, includes] as [string, string[]],
@@ -222,10 +220,8 @@ export class TerminalActor extends Actor {
       (sel: string) => {
         const root = document.querySelector(sel);
         if (!root) return false;
-        // Prefer .xterm-rows textContent, fall back to data-b2v-output (JabTerm capture buffer)
         const rows = root.querySelector(".xterm-rows");
-        let rawText = String((rows as any)?.textContent ?? "").trim();
-        if (!rawText) rawText = (root as any)?.getAttribute?.("data-b2v-output") ?? "";
+        const rawText = String((rows as any)?.textContent ?? "").trim();
         if (!rawText) return false;
         const lines = rawText.split("\n");
         for (let i = lines.length - 1; i >= 0; i--) {
