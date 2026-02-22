@@ -200,8 +200,10 @@ export class TerminalActor extends Actor {
       ([sel, inc]: [string, string[]]) => {
         const root = document.querySelector(sel);
         if (!root) return false;
+        // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+        const tree = root.querySelector(".xterm-accessibility-tree");
         const rows = root.querySelector(".xterm-rows");
-        const text = String((rows as any)?.textContent ?? "").trim();
+        const text = String((tree ?? rows as any)?.textContent ?? "").trim();
         if (!text) return false;
         return inc.every((s: string) => text.includes(s));
       },
@@ -220,8 +222,10 @@ export class TerminalActor extends Actor {
       (sel: string) => {
         const root = document.querySelector(sel);
         if (!root) return false;
+        // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+        const tree = root.querySelector(".xterm-accessibility-tree");
         const rows = root.querySelector(".xterm-rows");
-        const rawText = String((rows as any)?.textContent ?? "").trim();
+        const rawText = String((tree ?? rows as any)?.textContent ?? "").trim();
         if (!rawText) return false;
         const lines = rawText.split("\n");
         for (let i = lines.length - 1; i >= 0; i--) {
@@ -244,9 +248,11 @@ export class TerminalActor extends Actor {
     return this._dom.evaluate((sel: string) => {
       const root = document.querySelector(sel);
       if (!root) return true;
+      // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+      const tree = root.querySelector(".xterm-accessibility-tree");
       const rows = root.querySelector(".xterm-rows");
-      if (!rows) return true;
-      const lines = (rows.textContent ?? "").split("\n");
+      if (!tree && !rows) return true;
+      const lines = ((tree ?? rows as any)?.textContent ?? "").split("\n");
       for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i].trim();
         if (!line) continue;

@@ -335,6 +335,7 @@ export class Actor {
   speed?: number;
   private cursorX = 0;
   private cursorY = 0;
+  private _cursorInitialized = false;
   protected delays: ActorDelays;
   /** DOM context for selector lookups — page by default, iframe Frame when inside a grid */
   protected _context: Page | Frame;
@@ -461,8 +462,20 @@ export class Actor {
   async moveCursorTo(x: number, y: number) {
     if (this.mode !== "human") return;
     await this._refreshIframeBox();
+    const tx = Math.round(x);
+    const ty = Math.round(y);
+    if (!this._cursorInitialized) {
+      // First cursor movement: teleport to target (skip windMouse from 0,0)
+      this._cursorInitialized = true;
+      this.cursorX = tx;
+      this.cursorY = ty;
+      await this.page.mouse.move(tx, ty);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${tx}, ${ty}, '${this.cursorId}')`);
+      this._emitCursorMove(tx, ty);
+      return;
+    }
     const from = { x: this.cursorX, y: this.cursorY };
-    const points = windMouse(from, { x: Math.round(x), y: Math.round(y) });
+    const points = windMouse(from, { x: tx, y: ty });
     for (let i = 0; i < points.length; i++) {
       const p = points[i]!;
       await this.page.mouse.move(p.x, p.y);
@@ -470,8 +483,8 @@ export class Actor {
       this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
     }
-    this.cursorX = Math.round(x);
-    this.cursorY = Math.round(y);
+    this.cursorX = tx;
+    this.cursorY = ty;
   }
 
   /**
@@ -523,17 +536,27 @@ export class Actor {
     };
 
     if (this.mode === "human") {
-      const from = { x: this.cursorX, y: this.cursorY };
-      const points = windMouse(from, target);
-
-      for (let i = 0; i < points.length; i++) {
-        const p = points[i]!;
-        await this.page.mouse.move(p.x, p.y);
+      if (!this._cursorInitialized) {
+        // First cursor movement: teleport to target (skip windMouse from 0,0)
+        this._cursorInitialized = true;
+        await this.page.mouse.move(target.x, target.y);
         await this.page.evaluate(
-          `window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`,
+          `window.__b2v_moveCursor?.(${target.x}, ${target.y}, '${this.cursorId}')`,
         );
-        this._emitCursorMove(p.x, p.y);
-        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
+        this._emitCursorMove(target.x, target.y);
+      } else {
+        const from = { x: this.cursorX, y: this.cursorY };
+        const points = windMouse(from, target);
+
+        for (let i = 0; i < points.length; i++) {
+          const p = points[i]!;
+          await this.page.mouse.move(p.x, p.y);
+          await this.page.evaluate(
+            `window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`,
+          );
+          this._emitCursorMove(p.x, p.y);
+          await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
+        }
       }
     }
 

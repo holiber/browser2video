@@ -874,9 +874,11 @@ export class Session {
           (sel: string) => {
             const root = document.querySelector(sel);
             if (!root) return false;
+            // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+            const tree = root.querySelector(".xterm-accessibility-tree");
             const rows = root.querySelector(".xterm-rows");
-            if (!rows) return false;
-            const text = rows.textContent ?? "";
+            if (!tree && !rows) return false;
+            const text = (tree ?? rows as any)?.textContent ?? "";
             return text.includes("$") || text.includes("#") || text.includes("%");
           },
           testIdSel,
