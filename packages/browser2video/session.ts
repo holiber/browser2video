@@ -21,7 +21,7 @@ import type {
   ActorDelays,
 } from "./types.ts";
 
-import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
+import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, CURSOR_OVERLAY_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
 import { TerminalActor } from "./terminal-actor.ts";
 import { ReplayLog } from "./replay-log.ts";
 import { composeVideos } from "./video-compositor.ts";
@@ -478,7 +478,12 @@ export class Session {
     }
 
     // Init scripts
-    if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+    if (this.mode === "human") {
+      await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+      // Register cursor overlay as init script so it persists across navigations
+      // (page.evaluate is lost on navigation; framenavigated re-inject races with page load)
+      await page.addInitScript(CURSOR_OVERLAY_SCRIPT);
+    }
     if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
 
     // Console/error listeners
@@ -492,7 +497,7 @@ export class Session {
     const actor = new Actor(page, this.mode, { delays: this.delays });
     this._wireReplayEvents(actor);
 
-    // Auto-inject cursor overlay after every navigation (human mode)
+    // Also keep framenavigated fallback for cursor injection (belt & suspenders)
     if (this.mode === "human") {
       page.on("framenavigated", (frame) => {
         if (frame === page.mainFrame()) {
