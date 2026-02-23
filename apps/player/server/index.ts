@@ -609,7 +609,7 @@ wss.on("connection", (ws) => {
         case "cancel": {
           if (executor) {
             console.error("[player] Cancelling current execution...");
-            await executor.reset();
+            await executor.abort();
           }
           send(ws, { type: "cancelled" });
           break;

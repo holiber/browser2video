@@ -307,12 +307,19 @@ export class Executor<T = any> {
   }
 
   async reset(): Promise<void> {
+    const wasAborted = this._aborted;
     this._aborted = true;
     await this.stopScreencast();
     if (this.session) {
       try {
-        const result = await this.session.finish();
-        this.lastVideoPath = result.video ?? null;
+        if (wasAborted) {
+          // Force-abort: close pages immediately (interrupts running steps)
+          await this.session.abort();
+        } else {
+          // Graceful finish: compose video, generate subtitles, etc.
+          const result = await this.session.finish();
+          this.lastVideoPath = result.video ?? null;
+        }
       } catch { /* ignore */ }
       this.session = null;
       this.ctx = null;
@@ -320,6 +327,19 @@ export class Executor<T = any> {
       this.lastEmittedLayout = "";
     }
     this._aborted = false;
+  }
+
+  /** Force-abort the current execution (called by cancel button). */
+  async abort(): Promise<void> {
+    this._aborted = true;
+    await this.stopScreencast();
+    if (this.session) {
+      try { await this.session.abort(); } catch { /* ignore */ }
+      this.session = null;
+      this.ctx = null;
+      this.executedUpTo = -1;
+      this.lastEmittedLayout = "";
+    }
   }
 
   async dispose(): Promise<void> {

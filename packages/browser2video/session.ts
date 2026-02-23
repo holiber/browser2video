@@ -1397,6 +1397,48 @@ export class Session {
       audioEvents: audioEvents.length > 0 ? audioEvents : undefined,
     };
   }
+
+  /**
+   * Force-abort the session: close all pages and browser immediately.
+   * Unlike finish(), this skips video composition and renders nothing.
+   * Used when the user presses Stop during execution.
+   */
+  async abort(): Promise<void> {
+    if (this.finished) return;
+    this.finished = true;
+
+    // Force-close all pages — this interrupts any running Playwright operations
+    for (const pane of this.panes.values()) {
+      try { await pane.page.close(); } catch { /* already closed */ }
+    }
+
+    // Close browser contexts
+    if (this._ownsBrowser) {
+      for (const pane of this.panes.values()) {
+        try { await pane.context.close(); } catch { /* ignore */ }
+      }
+    }
+
+    // Disconnect/close browser
+    if (this.browser) {
+      try { await this.browser.close(); } catch { /* ignore */ }
+    }
+
+    // Kill terminal processes
+    for (const pane of this.panes.values()) {
+      if (pane.process) {
+        try { pane.process.kill("SIGTERM"); } catch { /* ignore */ }
+      }
+    }
+
+    // Run registered cleanup functions
+    for (const fn of this.cleanupFns) {
+      try { await fn(); } catch { /* ignore */ }
+    }
+    this.cleanupFns = [];
+
+    console.error("  Session aborted by user.");
+  }
 }
 
 // ---------------------------------------------------------------------------
