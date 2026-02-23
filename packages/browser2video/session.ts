@@ -679,7 +679,7 @@ export class Session {
 
     // Lazy-start terminal WS server (singleton)
     if (!this.terminalServer) {
-      this.terminalServer = await startTerminalWsServer();
+      this.terminalServer = await startTerminalWsServer(0, this.artifactDir);
       this.cleanupFns.push(() => this.terminalServer!.close());
     }
 
@@ -763,7 +763,7 @@ export class Session {
 
     // Lazy-start terminal WS server (singleton)
     if (!this.terminalServer) {
-      this.terminalServer = await startTerminalWsServer();
+      this.terminalServer = await startTerminalWsServer(0, this.artifactDir);
       this.cleanupFns.push(() => this.terminalServer!.close());
     }
 

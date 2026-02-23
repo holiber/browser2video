@@ -21,11 +21,11 @@ export type GridPaneConfig =
  * Start a terminal WebSocket server powered by jabterm.
  * Each WebSocket connection spawns a real PTY process.
  */
-export async function startTerminalWsServer(port = 0): Promise<TerminalServer> {
+export async function startTerminalWsServer(port = 0, cwd?: string): Promise<TerminalServer> {
   const server: JabtermServer = await createTerminalServer({
     port,
     host: "127.0.0.1",
-    cwd: process.cwd(),
+    cwd: cwd ?? process.cwd(),
   });
 
   const baseWsUrl = `ws://127.0.0.1:${server.port}`;
