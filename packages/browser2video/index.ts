@@ -38,6 +38,7 @@ export {
 
 export { Actor, TypeAction, generateWebVTT } from "./actor.ts";
 export { TerminalActor } from "./terminal-actor.ts";
+export { InjectedActor } from "./injected-actor.ts";
 export { ReplayLog, type ReplayEvent } from "./replay-log.ts";
 
 // ---------------------------------------------------------------------------
