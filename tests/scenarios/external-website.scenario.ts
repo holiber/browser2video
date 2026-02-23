@@ -20,10 +20,14 @@ export default defineScenario<Ctx>("External Website", (s) => {
 
     s.step("Wait for portfolio page", async ({ actor }) => {
         await actor.waitFor("main", 20000);
+        // Move cursor to center so it's visible from the start
+        await actor.moveCursorTo(640, 360);
     });
 
     s.step("Scroll to projects section", async ({ actor }) => {
+        await actor.moveCursorTo(640, 400);
         await actor.scroll(null, 800);
+        await actor.moveCursorTo(640, 350);
         await actor.scroll(null, 600);
     });
 
@@ -31,16 +35,15 @@ export default defineScenario<Ctx>("External Website", (s) => {
         const threeCharts = page.locator("text=Three charts").first();
         await threeCharts.waitFor({ state: "visible", timeout: 15000 });
         await actor.clickLocator(threeCharts);
-        // Wait for any navigation or popup
         await page.waitForTimeout(2000);
     });
 
     s.step("Navigate to Three Charts demo", async ({ actor, page }) => {
-        // Go directly to the demo page
         await actor.goto("https://holiber.github.io/three-charts/demo/");
         await page.waitForLoadState("networkidle", { timeout: 15000 }).catch(() => { });
-        // Wait for the WebGL chart to render
         await page.waitForTimeout(3000);
+        // Move cursor to chart area
+        await actor.moveCursorTo(640, 400);
     });
 
     s.step("Switch to bars view", async ({ actor, page }) => {
@@ -76,11 +79,9 @@ export default defineScenario<Ctx>("External Website", (s) => {
     });
 
     s.step("Toggle trend overlays", async ({ actor, page }) => {
-        // Enable Red trend
         const redTrend = page.locator('input[name="redtrend"]');
         await actor.clickLocator(redTrend);
         await page.waitForTimeout(500);
-        // Enable Blue trend
         const blueTrend = page.locator('input[name="bluetrend"]');
         await actor.clickLocator(blueTrend);
         await page.waitForTimeout(500);
