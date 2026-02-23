@@ -869,9 +869,11 @@ export class Session {
       }
 
       if (pc.type === "terminal") {
-        // Wait for xterm content — jabterm always spawns a shell, so wait for prompt
+        // Command panes (mc, htop, etc.) render TUI — wait for any non-empty content.
+        // Shell panes (no command) show a prompt — wait for prompt characters.
+        const isCommandPane = !!pc.cmd;
         await page.waitForFunction(
-          (sel: string) => {
+          ([sel, waitForPrompt]: [string, boolean]) => {
             const root = document.querySelector(sel);
             if (!root) return false;
             // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
@@ -879,9 +881,13 @@ export class Session {
             const rows = root.querySelector(".xterm-rows");
             if (!tree && !rows) return false;
             const text = (tree ?? rows as any)?.textContent ?? "";
-            return text.includes("$") || text.includes("#") || text.includes("%");
+            if (waitForPrompt) {
+              return text.includes("$") || text.includes("#") || text.includes("%");
+            }
+            // For command panes, any non-empty content means the TUI has rendered
+            return text.trim().length > 0;
           },
-          testIdSel,
+          [testIdSel, !isCommandPane] as [string, boolean],
           { timeout: 30000 },
         );
       } else {
