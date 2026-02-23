@@ -12,10 +12,11 @@ import { startServer } from "browser2video";
 
 test.describe("Notes Demo", () => {
     test.beforeAll(async () => {
-        const session = getSession();
+        const session = await getSession();
 
         // Start the project's demo Vite server
         const server = await startServer({ type: "vite", root: "apps/demo" });
+        if (!server) throw new Error("Failed to start demo server");
         session.addCleanup(() => server.stop());
 
         const { actor } = await session.openPage({

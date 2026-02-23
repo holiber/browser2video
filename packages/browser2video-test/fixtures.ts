@@ -2,15 +2,16 @@
  * Playwright fixtures for browser2video integration.
  *
  * Provides:
- * - `session` — worker-scoped b2v Session (one per test file)
+ * - `session` — b2v Session (lazily created, shared across all tests)
  * - `actor` — test-scoped convenience accessor for the current actor
  * - Auto step wrapping — each test(title) → session.beginStep(title) / endStep()
  *
  * Usage with openPage:
  * ```ts
- * import { test, expect, setActor } from '@browser2video/test';
+ * import { test, expect, setActor, getSession } from '@browser2video/test';
  *
- * test.beforeAll(async ({ session }) => {
+ * test.beforeAll(async () => {
+ *   const session = await getSession();
  *   const { actor } = await session.openPage({ url: 'http://localhost:3000' });
  *   setActor(actor);
  * });
@@ -23,9 +24,10 @@
  *
  * Usage with createGrid:
  * ```ts
- * import { test, expect, setGrid } from '@browser2video/test';
+ * import { test, expect, setGrid, getSession } from '@browser2video/test';
  *
- * test.beforeAll(async ({ session }) => {
+ * test.beforeAll(async () => {
+ *   const session = await getSession();
  *   const grid = await session.createGrid([...], { ... });
  *   setGrid(grid);
  * });
@@ -43,6 +45,7 @@ import { createSession, type Session, type GridHandle, type Actor, TerminalActor
 // ---------------------------------------------------------------------------
 
 let _session: Session | null = null;
+let _sessionPromise: Promise<Session> | null = null;
 let _currentGrid: GridHandle | null = null;
 let _currentActor: Actor | TerminalActor | null = null;
 
@@ -51,7 +54,7 @@ let _currentActor: Actor | TerminalActor | null = null;
 // ---------------------------------------------------------------------------
 
 export interface B2VTestFixtures {
-    /** The b2v Session (worker-scoped, shared). */
+    /** The b2v Session. */
     session: Session;
     /** The current grid handle. Set via `setGrid()` in beforeAll. */
     grid: GridHandle;
@@ -62,8 +65,8 @@ export interface B2VTestFixtures {
 }
 
 export interface B2VWorkerFixtures {
-    /** Internal: worker-level Session. */
-    _b2vSession: Session;
+    /** Internal: worker-level Session lifecycle. */
+    _b2vWorker: void;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,27 +74,30 @@ export interface B2VWorkerFixtures {
 // ---------------------------------------------------------------------------
 
 export const test = base.extend<B2VTestFixtures, B2VWorkerFixtures>({
-    // Worker-scoped session
-    _b2vSession: [async ({ }, use) => {
-        const session = await createSession();
-        _session = session;
-        await use(session);
-        try { await session.finish(); } catch { /* cleanup */ }
-        _session = null;
-        _currentGrid = null;
-        _currentActor = null;
-    }, { scope: "worker" }],
+    // Worker-scoped: ensure session is cleaned up after all tests
+    _b2vWorker: [async ({ }, use) => {
+        await use();
+        // Cleanup when worker is done
+        if (_session) {
+            try { await _session.finish(); } catch { /* cleanup */ }
+            _session = null;
+            _sessionPromise = null;
+            _currentGrid = null;
+            _currentActor = null;
+        }
+    }, { scope: "worker", auto: true }],
 
     // Test-scoped session accessor
-    session: async ({ _b2vSession }, use) => {
-        await use(_b2vSession);
+    session: async ({ }, use) => {
+        await use(await getSession());
     },
 
     // Auto-fixture: wraps test body in beginStep / endStep
-    _b2vAutoStep: [async ({ _b2vSession }, use, testInfo) => {
-        _b2vSession.beginStep(testInfo.title);
+    _b2vAutoStep: [async ({ }, use, testInfo) => {
+        const session = await getSession();
+        session.beginStep(testInfo.title);
         await use();
-        await _b2vSession.endStep();
+        await session.endStep();
     }, { auto: true }],
 
     // Grid accessor
@@ -121,6 +127,21 @@ export const test = base.extend<B2VTestFixtures, B2VWorkerFixtures>({
 // ---------------------------------------------------------------------------
 
 /**
+ * Get or create the b2v Session. Safe to call from test.beforeAll.
+ * The session is created once and shared across all tests in the worker.
+ */
+export async function getSession(): Promise<Session> {
+    if (_session) return _session;
+    if (!_sessionPromise) {
+        _sessionPromise = createSession().then((s) => {
+            _session = s;
+            return s;
+        });
+    }
+    return _sessionPromise;
+}
+
+/**
  * Set the active actor for subsequent tests.
  * Call from test.beforeAll after session.openPage().
  */
@@ -137,12 +158,4 @@ export function setGrid(grid: GridHandle): void {
     if (!_currentActor) {
         _currentActor = grid.actors[0];
     }
-}
-
-/**
- * Get the current session (for use outside fixtures, e.g. beforeAll).
- */
-export function getSession(): Session {
-    if (!_session) throw new Error("No b2v session — use @browser2video/test");
-    return _session;
 }
