@@ -202,6 +202,7 @@ export const CURSOR_OVERLAY_SCRIPT = `
 
   function getCursorEl(id) {
     if (window.__b2v_cursors[id]) return window.__b2v_cursors[id];
+    if (!document.body) return null;  // body not ready yet
 
     // First actor ('default' or index 0) → classic white cursor
     // Subsequent actors → pick from rotating palette
@@ -237,24 +238,34 @@ export const CURSOR_OVERLAY_SCRIPT = `
     pathEl.setAttribute('stroke-linejoin', 'round');
     svg.appendChild(pathEl);
 
-
     cursor.appendChild(svg);
     document.body.appendChild(cursor);
     window.__b2v_cursors[id] = cursor;
     return cursor;
   }
 
-  var oldRipple = document.getElementById('__b2v_ripple_container');
-  if (oldRipple) oldRipple.remove();
-  const rippleContainer = document.createElement('div');
-  rippleContainer.id = '__b2v_ripple_container';
-  rippleContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999998;pointer-events:none;';
-  document.body.appendChild(rippleContainer);
+  // Ripple container for click effects — deferred until body exists
+  var rippleContainer = null;
+  function ensureRippleContainer() {
+    if (rippleContainer && rippleContainer.parentNode) return rippleContainer;
+    if (!document.body) return null;
+    var old = document.getElementById('__b2v_ripple_container');
+    if (old) old.remove();
+    rippleContainer = document.createElement('div');
+    rippleContainer.id = '__b2v_ripple_container';
+    rippleContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999998;pointer-events:none;';
+    document.body.appendChild(rippleContainer);
+    return rippleContainer;
+  }
 
-  document.documentElement.style.scrollBehavior = 'smooth';
+  // Set smooth scrolling on documentElement (available before body)
+  if (document.documentElement) {
+    document.documentElement.style.scrollBehavior = 'smooth';
+  }
 
   window.__b2v_moveCursor = function(x, y, actorId) {
     var el = getCursorEl(actorId || 'default');
+    if (!el) return;  // body not ready
     var wasHidden = el.style.display === 'none';
     if (wasHidden) {
       // First appearance: teleport without transition to avoid sliding from corner
@@ -269,6 +280,8 @@ export const CURSOR_OVERLAY_SCRIPT = `
   };
 
   window.__b2v_clickEffect = function(x, y) {
+    var rc = ensureRippleContainer();
+    if (!rc) return;
     const ring = document.createElement('div');
     ring.style.cssText = \`
       position: fixed; pointer-events: none;
@@ -279,23 +292,29 @@ export const CURSOR_OVERLAY_SCRIPT = `
       transform: translate(-50%, -50%);
       animation: __b2v_ripple 0.6s ease-out forwards;
     \`;
-    rippleContainer.appendChild(ring);
+    rc.appendChild(ring);
     setTimeout(() => ring.remove(), 700);
   };
 
   if (!document.getElementById('__b2v_style')) {
-    const style = document.createElement('style');
-    style.id = '__b2v_style';
-    style.textContent = \`
-      @keyframes __b2v_ripple {
-        0%   { width: 0;   height: 0;   opacity: 1; }
-        100% { width: 80px; height: 80px; opacity: 0; }
-      }
-    \`;
-    document.head.appendChild(style);
+    var ensureStyle = function() {
+      if (!document.head) return;
+      const style = document.createElement('style');
+      style.id = '__b2v_style';
+      style.textContent = \`
+        @keyframes __b2v_ripple {
+          0%   { width: 0;   height: 0;   opacity: 1; }
+          100% { width: 80px; height: 80px; opacity: 0; }
+        }
+      \`;
+      document.head.appendChild(style);
+    };
+    if (document.head) ensureStyle();
+    else document.addEventListener('DOMContentLoaded', ensureStyle);
   }
 })();
 `;
+
 
 // ---------------------------------------------------------------------------
 //  Init scripts injected into every page
