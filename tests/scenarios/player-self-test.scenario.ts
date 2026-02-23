@@ -91,6 +91,7 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
                     NODE_OPTIONS: "--experimental-strip-types --no-warnings",
                     PORT: String(INNER_PORT),
                     B2V_CDP_PORT: String(INNER_CDP_PORT),
+                    B2V_EMBEDDED: "1",
                 },
                 stdio: ["ignore", "pipe", "pipe"],
             },

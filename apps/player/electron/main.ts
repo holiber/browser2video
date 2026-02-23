@@ -80,10 +80,15 @@ let scenarioView: WebContentsView | null = null;
 
 const SERVER_PORT = parseInt(process.env.PORT ?? "9521", 10);
 
+const isEmbedded = process.env.B2V_EMBEDDED === "1";
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
+    // When running embedded inside another player (self-test), hide the window.
+    // The UI is rendered in the parent player's scenario WebContentsView.
+    show: !isEmbedded,
     title: "b2v Player",
     icon: path.join(__dirname, "..", "assets", "icon.png"),
     webPreferences: {
