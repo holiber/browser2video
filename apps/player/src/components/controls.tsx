@@ -49,6 +49,7 @@ export function Controls({
           disabled={!connected || isRunning || activeStep <= 0}
           className="p-2 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors"
           title="Previous step"
+          data-testid="ctrl-prev"
         >
           <SkipBack size={16} />
         </button>
@@ -58,6 +59,7 @@ export function Controls({
             onClick={onCancel}
             className="p-1.5 px-3 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium flex items-center gap-1.5 transition-colors"
             title="Stop"
+            data-testid="ctrl-stop"
           >
             <Square size={14} />
             Stop
@@ -68,6 +70,7 @@ export function Controls({
             disabled={!connected || allDone}
             className="p-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-medium flex items-center gap-1.5 transition-colors"
             title={connected ? "Play all" : "Disconnected"}
+            data-testid="ctrl-play-all"
           >
             <Play size={14} />
             Play all
@@ -81,6 +84,7 @@ export function Controls({
           disabled={!connected || isRunning || nextStep < 0}
           className="p-2 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors"
           title="Next step"
+          data-testid="ctrl-next"
         >
           <SkipForward size={16} />
         </button>
@@ -142,6 +146,7 @@ export function Controls({
           disabled={isRunning}
           className="p-1.5 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors"
           title="Reset"
+          data-testid="ctrl-reset"
         >
           <RotateCcw size={14} />
         </button>
@@ -151,6 +156,7 @@ export function Controls({
           disabled={isRunning}
           className="p-1.5 px-2.5 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1.5"
           title="Clear cache"
+          data-testid="ctrl-clear-cache"
         >
           <Trash2 size={14} />
           <span className="text-xs">Clear cache</span>
