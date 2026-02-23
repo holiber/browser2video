@@ -201,6 +201,15 @@ importers:
         specifier: ~5.7.0
         version: 5.7.3
 
+  packages/browser2video-test:
+    dependencies:
+      '@playwright/test':
+        specifier: '>=1.40.0'
+        version: 1.58.2
+      browser2video:
+        specifier: workspace:*
+        version: link:../browser2video
+
   packages/test-runner:
     dependencies:
       yargs:
@@ -218,6 +227,9 @@ importers:
 
   tests/scenarios:
     dependencies:
+      '@browser2video/test':
+        specifier: workspace:*
+        version: link:../../packages/browser2video-test
       '@playwright/test':
         specifier: ^1.50.0
         version: 1.58.2

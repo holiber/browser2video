@@ -1111,6 +1111,49 @@ export class Session {
     this.steps.push({ index: idx, caption, startMs, endMs });
   };
 
+  // ---------------------------------------------------------------------------
+  //  Open/close step API (for Playwright fixture integration)
+  // ---------------------------------------------------------------------------
+
+  private _currentStepCaption: string | null = null;
+  private _currentStepStartMs: number = 0;
+
+  /**
+   * Begin a step boundary. Call `endStep()` when the step is done.
+   * This is the "open" half of `step()` — designed for Playwright fixtures
+   * where the test body runs between `beginStep` and `endStep`.
+   *
+   * ```ts
+   * session.beginStep("Create Todo");
+   * // ... test body ...
+   * await session.endStep();
+   * ```
+   */
+  beginStep(caption: string, narration?: string): void {
+    this.stepIndex++;
+    this._currentStepCaption = caption;
+    this._currentStepStartMs = Date.now() - this.startTime;
+    console.error(`  [Step ${this.stepIndex}] ${caption}`);
+    this.replayLog.emit({ type: "stepStart", index: this.stepIndex, caption, ts: this._currentStepStartMs });
+  }
+
+  /**
+   * End the current step boundary started by `beginStep()`.
+   * Emits `stepEnd`, records step metadata, and adds a breathing pause.
+   */
+  async endStep(): Promise<void> {
+    if (!this._currentStepCaption) return;
+    const endMs = Date.now() - this.startTime;
+    this.replayLog.emit({ type: "stepEnd", index: this.stepIndex, ts: endMs });
+    this.steps.push({ index: this.stepIndex, caption: this._currentStepCaption, startMs: this._currentStepStartMs, endMs });
+
+    // Breathing pause after each step (human mode)
+    const firstActor = [...this.panes.values()].find((p) => p.actor)?.actor;
+    if (firstActor) await firstActor.breathe();
+
+    this._currentStepCaption = null;
+  }
+
   /** Access the audio director for narration/sound effects. */
   get audio(): AudioDirectorAPI {
     return this.audioDirector;

@@ -1,0 +1,15 @@
+{
+    "name": "@browser2video/test",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module",
+    "exports": {
+        ".": "./index.ts"
+    },
+    "dependencies": {
+        "browser2video": "workspace:*"
+    },
+    "peerDependencies": {
+        "@playwright/test": ">=1.40.0"
+    }
+}
