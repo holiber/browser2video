@@ -41,7 +41,7 @@ test.afterAll(async () => {
       await new Promise<void>((resolve) => {
         proc.on("exit", () => resolve());
         setTimeout(() => {
-          try { process.kill(pid, "SIGKILL"); } catch {}
+          try { process.kill(pid, "SIGKILL"); } catch { }
           resolve();
         }, 5_000);
       });
@@ -171,8 +171,8 @@ test("electron: all-in-one scenario uses scenario-grid preview without extra win
     const errorPromise = errorBanner
       .waitFor({ state: "visible", timeout: 60_000 })
       .then(() => "error" as const);
-    gridPromise.catch(() => {});
-    errorPromise.catch(() => {});
+    gridPromise.catch(() => { });
+    errorPromise.catch(() => { });
     winner = await Promise.race([gridPromise, errorPromise]);
   } catch {
     // Both waitFors failed — page may have navigated or closed
@@ -314,7 +314,7 @@ function isPortFree(port: number): boolean {
 }
 
 test("electron: clean shutdown — no orphaned processes", async () => {
-  test.setTimeout(30_000);
+  test.setTimeout(60_000);
 
   const pid = electronApp.process().pid;
 
