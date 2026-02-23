@@ -22,8 +22,8 @@ import { defineScenario, type Actor, type Page } from "browser2video";
 import { InjectedActor } from "browser2video/injected-actor";
 
 const PLAYER_DIR = path.resolve(import.meta.dirname, "../../apps/player");
-const INNER_PORT = 9581;
-const INNER_CDP_PORT = 9385;
+const INNER_PORT = 9591;
+const INNER_CDP_PORT = 9395;
 const DEMO_VITE_PORT = 5199;
 
 interface Ctx {
@@ -55,10 +55,30 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
     s.options({ layout: "row" });
 
     s.setup(async (session) => {
-        // Resolve electron binary from the player package
+        // Resolve the electron binary.
+        // Inside Electron's runtime `require("electron")` returns the module
+        // object rather than the binary path.  We resolve the package then read
+        // the actual executable from its internal helper.
         const { createRequire } = await import("node:module");
         const playerRequire = createRequire(path.join(PLAYER_DIR, "package.json"));
-        const electronPath = playerRequire("electron") as unknown as string;
+        let electronPath: string;
+        const raw = playerRequire("electron");
+        if (typeof raw === "string") {
+            electronPath = raw;
+        } else {
+            // Running inside Electron — find the binary through the package dir
+            const electronPkgDir = path.dirname(playerRequire.resolve("electron/package.json"));
+            // The electron package has a `path.txt` that contains the binary path
+            const { default: fs } = await import("node:fs");
+            const pathTxtFile = path.join(electronPkgDir, "path.txt");
+            if (fs.existsSync(pathTxtFile)) {
+                const rel = fs.readFileSync(pathTxtFile, "utf-8").trim();
+                electronPath = path.join(electronPkgDir, "dist", rel);
+            } else {
+                // Fallback: current Electron binary (process.execPath)
+                electronPath = process.execPath;
+            }
+        }
 
         console.error(`[self-test] Spawning inner player on port ${INNER_PORT}...`);
         const innerProcess = spawn(
@@ -132,6 +152,12 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         // Create InjectedActor
         const injected = new InjectedActor(page, "tester", { mode: "human" });
         await injected.init();
+
+        // Sync Playwright's internal viewport tracking with the actual view size.
+        // The Electron WebContentsView starts at 0×0 and is later resized via IPC,
+        // but Playwright's CDP-side viewport tracking keeps the initial 0×0 value,
+        // causing ALL elements to be reported as "outside of the viewport".
+        await page.setViewportSize({ width: 1280, height: 720 });
 
         return { page, injected, innerProcess, consoleErrors };
     });
