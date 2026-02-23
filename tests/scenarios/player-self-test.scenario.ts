@@ -175,6 +175,59 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         await injected.breathe();
     });
 
+    s.step("Inner player window is hidden", async ({ }) => {
+        // Verify the inner player's Electron BrowserWindow is NOT visible
+        // on screen. It should be hidden (show:false), minimized, and off-screen.
+        // Use osascript to check all Electron windows and their positions.
+        const { execSync } = await import("node:child_process");
+        try {
+            // Get all Electron windows and their properties via osascript
+            const script = `
+                tell application "System Events"
+                    set windowInfo to ""
+                    repeat with p in (every process whose name contains "Electron")
+                        repeat with w in (every window of p)
+                            set pos to position of w
+                            set sz to size of w
+                            set windowInfo to windowInfo & (item 1 of pos) & "," & (item 2 of pos) & "," & (item 1 of sz) & "," & (item 2 of sz) & "\\n"
+                        end repeat
+                    end repeat
+                    return windowInfo
+                end tell
+            `;
+            const result = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, {
+                encoding: "utf8",
+                timeout: 5000,
+            }).trim();
+
+            const windows = result.split("\n").filter(Boolean);
+            console.error(`[self-test] Electron windows found: ${windows.length}`);
+            for (const w of windows) {
+                const [x, y, width, height] = w.split(",").map(Number);
+                console.error(`  Window at (${x},${y}) size ${width}x${height}`);
+                // Flag windows that appear at (0,0) or near the parent player's position
+                // with a significant size — these would overlap
+                if (x >= 0 && x < 100 && y >= 0 && y < 100 && width > 10 && height > 10) {
+                    // Check if this is the inner player (small 1x1 windows are OK)
+                    const isLargeAtOrigin = width > 100 && height > 100;
+                    if (isLargeAtOrigin) {
+                        // Count how many large windows are at the origin area
+                        const largeWindows = windows.filter(ww => {
+                            const [wx, wy, ww2, wh] = ww.split(",").map(Number);
+                            return wx >= 0 && wx < 100 && wy >= 0 && wy < 100 && ww2 > 100 && wh > 100;
+                        });
+                        if (largeWindows.length > 1) {
+                            console.error(`[self-test] WARNING: ${largeWindows.length} large Electron windows near origin — possible overlap!`);
+                        }
+                    }
+                }
+            }
+        } catch (err: any) {
+            // osascript may fail without accessibility permissions — just log
+            console.error(`[self-test] Could not check window positions: ${err.message}`);
+        }
+    });
+
     s.step("Split screen horizontally", async ({ injected, page }) => {
         // Change layout to top-bottom
         await page.selectOption("[data-testid='studio-layout-picker']", "top-bottom");

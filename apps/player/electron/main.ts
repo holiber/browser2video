@@ -94,6 +94,8 @@ function createMainWindow() {
     y: isEmbedded ? -10000 : undefined,
     show: !isEmbedded,
     skipTaskbar: isEmbedded,
+    // Prevent embedded window from appearing in Mission Control / Expose
+    ...(isEmbedded ? { type: "toolbar" as any, focusable: false, hasShadow: false } : {}),
     title: "b2v Player",
     icon: path.join(__dirname, "..", "assets", "icon.png"),
     webPreferences: {
@@ -102,6 +104,15 @@ function createMainWindow() {
       nodeIntegration: false,
     },
   });
+
+  // For embedded instances: aggressively hide the window.
+  // macOS can show windows during loadURL or other async operations.
+  if (isEmbedded) {
+    mainWindow.hide();
+    mainWindow.setVisibleOnAllWorkspaces(false);
+    // Minimize to ensure it never appears in front of the parent
+    mainWindow.minimize();
+  }
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" as const }));
 
@@ -234,6 +245,8 @@ app.whenReady().then(async () => {
   // Load a minimal splash page immediately. This unblocks Playwright's
   // firstWindow() which otherwise waits ~15s for the first navigation.
   mainWindow!.loadURL("data:text/html,<html><body style='background:%230d1117;color:%23888;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui'><div>Starting…</div></body></html>");
+  // Re-hide after loadURL for embedded instances (macOS can show the window)
+  if (isEmbedded) mainWindow!.hide();
 
   // Import and start the server in-process (~0.5s)
   console.error(`[electron ${elt()}] Importing server module...`);
@@ -248,6 +261,8 @@ app.whenReady().then(async () => {
   const playerUrl = `http://localhost:${SERVER_PORT}`;
   console.error(`[electron ${elt()}] Loading player UI: ${playerUrl}`);
   mainWindow!.loadURL(playerUrl);
+  // Re-hide after loadURL for embedded instances
+  if (isEmbedded) mainWindow!.hide();
 
   // Verify CDP port is actually listening
   const http = await import("node:http");
