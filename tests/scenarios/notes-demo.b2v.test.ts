@@ -8,29 +8,33 @@
  *   npx playwright test notes-demo.b2v.test.ts
  */
 import { test, expect, setActor, getSession } from "@browser2video/test";
+import { startServer } from "browser2video";
 
 test.describe("Notes Demo", () => {
     test.beforeAll(async () => {
         const session = getSession();
+
+        // Start the project's demo Vite server
+        const server = await startServer({ type: "vite", root: "apps/demo" });
+        session.addCleanup(() => server.stop());
+
         const { actor } = await session.openPage({
-            url: "https://demo.playwright.dev/todomvc/#/",
+            url: `${server.baseURL}/notes?role=boss`,
         });
         setActor(actor);
     });
 
-    test("Add first todo", async ({ actor }) => {
-        // This test title "Add first todo" becomes step caption
-        await actor.type(".new-todo", "Setup database");
-        await actor.pressKey("Enter");
+    test("Add first task", async ({ actor }) => {
+        await actor.type('[data-testid="note-input"]', "Setup database");
+        await actor.click('[data-testid="note-add-btn"]');
     });
 
-    test("Add second todo", async ({ actor }) => {
-        await actor.type(".new-todo", "Write API routes");
-        await actor.pressKey("Enter");
+    test("Add second task", async ({ actor }) => {
+        await actor.type('[data-testid="note-input"]', "Write API routes");
+        await actor.click('[data-testid="note-add-btn"]');
     });
 
-    test("Add third todo", async ({ actor }) => {
-        await actor.type(".new-todo", "Deploy to production");
-        await actor.pressKey("Enter");
+    test("Complete first task", async ({ actor }) => {
+        await actor.click('[data-testid="note-check-0"]');
     });
 });
