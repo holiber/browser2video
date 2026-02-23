@@ -100,10 +100,13 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         innerProcess.stderr?.on("data", (d) => process.stderr.write(`[inner] ${d}`));
 
         session.addCleanup(async () => {
-            console.error("[self-test] Cleaning up inner player...");
-            try { innerProcess.kill("SIGTERM"); } catch { }
-            await new Promise((r) => setTimeout(r, 1000));
-            try { innerProcess.kill("SIGKILL"); } catch { }
+            // Safety-net: kill inner player if it wasn't cleaned up by the test step
+            if (!innerProcess.killed && innerProcess.exitCode === null) {
+                console.error("[self-test] Cleaning up inner player (safety-net)...");
+                try { innerProcess.kill("SIGTERM"); } catch { }
+                await new Promise((r) => setTimeout(r, 1000));
+                try { innerProcess.kill("SIGKILL"); } catch { }
+            }
         });
 
         // Wait for inner player to be FULLY ready (HTTP + WS + Vite)
@@ -420,8 +423,49 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
     });
 
     // ═══════════════════════════════════════════════════════════════════
-    //  Phase 6 — Console error check
+    //  Phase 6 — Cleanup & verification
     // ═══════════════════════════════════════════════════════════════════
+
+    s.step("Inner player shuts down cleanly", async ({ innerProcess }) => {
+        // Send SIGTERM and wait for graceful exit
+        const exitPromise = new Promise<number | null>((resolve) => {
+            innerProcess.on("exit", (code) => resolve(code));
+        });
+
+        console.error("[self-test] Sending SIGTERM to inner player...");
+        innerProcess.kill("SIGTERM");
+
+        const exitCode = await Promise.race([
+            exitPromise,
+            new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 10_000)),
+        ]);
+
+        if (exitCode === "timeout") {
+            console.error("[self-test] Inner player didn't exit in 10s, sending SIGKILL...");
+            innerProcess.kill("SIGKILL");
+            const killResult = await Promise.race([
+                exitPromise,
+                new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 5_000)),
+            ]);
+            if (killResult === "timeout") {
+                throw new Error("Inner player process didn't exit after SIGKILL");
+            }
+            console.error(`[self-test] Inner player killed (exit code: ${killResult})`);
+        } else {
+            console.error(`[self-test] Inner player exited cleanly (code: ${exitCode})`);
+        }
+
+        // Verify the inner player's port is freed
+        await new Promise((r) => setTimeout(r, 500));
+        try {
+            const probe = await fetch(`http://localhost:${INNER_PORT}`);
+            throw new Error(`Inner player port ${INNER_PORT} is still responding (status: ${probe.status})`);
+        } catch (err: any) {
+            if (err.message.includes("still responding")) throw err;
+            // fetch failed = port is freed = good
+            console.error(`[self-test] Port ${INNER_PORT} is freed`);
+        }
+    });
 
     s.step("No unexpected console errors", async ({ consoleErrors }) => {
         if (consoleErrors.length > 0) {
@@ -429,8 +473,6 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
             for (const err of consoleErrors) {
                 console.error(`  - ${err}`);
             }
-            // Don't throw — log them as warnings but don't fail the test
-            // throw new Error(`Found ${consoleErrors.length} console error(s)`);
         }
         console.error(`[self-test] Console errors: ${consoleErrors.length}`);
     });

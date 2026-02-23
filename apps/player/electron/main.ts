@@ -84,11 +84,16 @@ const isEmbedded = process.env.B2V_EMBEDDED === "1";
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
-    // When running embedded inside another player (self-test), hide the window.
-    // The UI is rendered in the parent player's scenario WebContentsView.
+    // When running embedded inside another player (self-test), hide the window
+    // completely. The UI is served via HTTP and rendered in the parent player's
+    // scenario WebContentsView. On macOS, show:false alone can still flash;
+    // we also use off-screen position and minimal size.
+    width: isEmbedded ? 1 : 1440,
+    height: isEmbedded ? 1 : 900,
+    x: isEmbedded ? -10000 : undefined,
+    y: isEmbedded ? -10000 : undefined,
     show: !isEmbedded,
+    skipTaskbar: isEmbedded,
     title: "b2v Player",
     icon: path.join(__dirname, "..", "assets", "icon.png"),
     webPreferences: {
