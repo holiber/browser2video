@@ -153,6 +153,100 @@ const TERMINAL_PAGE_HTML = `<!DOCTYPE html>
 //  Pane state
 // ---------------------------------------------------------------------------
 
+/**
+ * Records the CDP page screencast to a raw webm file via ffmpeg.
+ * Used for Electron/CDP pages where Playwright's recordVideo is unavailable.
+ */
+class CdpScreencastRecorder {
+  private ffmpegProc: ChildProcess | null = null;
+  private cdpSession: any = null;
+  private stopped = false;
+  private page: Page;
+  private outputPath: string;
+  private ffmpeg: string;
+  private width: number;
+  private height: number;
+
+  constructor(page: Page, outputPath: string, ffmpeg: string, width: number, height: number) {
+    this.page = page;
+    this.outputPath = outputPath;
+    this.ffmpeg = ffmpeg;
+    this.width = width;
+    this.height = height;
+  }
+
+  async start(): Promise<void> {
+    let frameCount = 0;
+
+    // Start ffmpeg to receive JPEG frames on stdin and output raw webm
+    this.ffmpegProc = spawn(this.ffmpeg, [
+      "-y",
+      "-f", "image2pipe",
+      "-vcodec", "mjpeg",       // explicit input codec for JPEG frames
+      "-framerate", "25",
+      "-i", "pipe:0",
+      "-c:v", "libvpx",
+      "-b:v", "2M",
+      "-pix_fmt", "yuv420p",
+      "-auto-alt-ref", "0",
+      this.outputPath,
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    // Drain stderr but capture last line for errors
+    let lastStderr = "";
+    this.ffmpegProc.stderr?.on("data", (d: Buffer) => { lastStderr = d.toString().trim(); });
+    this.ffmpegProc.on("error", (e) => console.error(`[cdp-recorder] ffmpeg error:`, e.message));
+    this.ffmpegProc.on("close", (code) => {
+      if (code !== 0 && frameCount > 0) {
+        console.error(`[cdp-recorder] ffmpeg exited with code ${code}: ${lastStderr}`);
+      }
+    });
+
+    // Start CDP screencast
+    this.cdpSession = await this.page.context().newCDPSession(this.page);
+    this.cdpSession.on("Page.screencastFrame", (params: any) => {
+      if (this.stopped) return;
+      // Ack the frame so CDP sends the next one
+      this.cdpSession.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => { });
+      // Write JPEG data to ffmpeg stdin
+      const buf = Buffer.from(params.data, "base64");
+      try { this.ffmpegProc?.stdin?.write(buf); } catch { }
+      frameCount++;
+    });
+    await this.cdpSession.send("Page.startScreencast", {
+      format: "jpeg",
+      quality: 80,
+      maxWidth: this.width,
+      maxHeight: this.height,
+      everyNthFrame: 1,
+    });
+
+    // Save frame count for logging on stop
+    (this as any)._frameCount = () => frameCount;
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    try {
+      await this.cdpSession?.send("Page.stopScreencast").catch(() => { });
+      await this.cdpSession?.detach().catch(() => { });
+    } catch { }
+    const fc = (this as any)._frameCount?.() ?? 0;
+    console.error(`[cdp-recorder] Stopped: ${fc} frames captured → ${this.outputPath}`);
+    // Close ffmpeg stdin to signal end-of-input and wait for it to finish
+    return new Promise((resolve) => {
+      if (!this.ffmpegProc) { resolve(); return; }
+      this.ffmpegProc.on("close", () => resolve());
+      try { this.ffmpegProc.stdin?.end(); } catch { }
+      // Timeout: kill ffmpeg if it doesn't finish in 10s
+      setTimeout(() => {
+        try { this.ffmpegProc?.kill("SIGKILL"); } catch { }
+        resolve();
+      }, 10_000);
+    });
+  }
+}
+
 interface PaneState {
   id: string;
   type: "browser" | "terminal";
@@ -162,6 +256,7 @@ interface PaneState {
   actor?: Actor;
   terminal?: TerminalHandle;
   rawVideoPath?: string;
+  cdpRecorder?: CdpScreencastRecorder;
   process?: ChildProcess;
   createdAtMs: number;
 }
@@ -449,6 +544,11 @@ export class Session {
       page = found;
       context = page.context();
       console.error(`[session] Found Electron-managed page via CDP: ${page.url()}`);
+
+      // Start CDP screencast recording for Electron pages
+      if (this.record) {
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+      }
     } else {
       const ctxOpts: {
         viewport: { width: number; height: number };
@@ -509,6 +609,13 @@ export class Session {
     const pane: PaneState = { id, type: "browser", label, context, page, actor, rawVideoPath, createdAtMs: Date.now() };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
+
+    // Start CDP screencast recorder for Electron pages (Playwright's recordVideo is unavailable)
+    if (this.record && rawVideoPath && this._cdpEndpoint) {
+      const recorder = new CdpScreencastRecorder(page, rawVideoPath, this.ffmpeg, vpW, vpH);
+      await recorder.start();
+      pane.cdpRecorder = recorder;
+    }
 
     if (this.record) {
       console.error(`  Recording started: ${label} (${vpW}x${vpH})`);
@@ -1251,6 +1358,14 @@ export class Session {
       await sleep(80);
     }
 
+    // Stop CDP screencast recorders (Electron mode) — must complete before
+    // compositing so the raw webm files are flushed and closed.
+    for (const pane of this.panes.values()) {
+      if (pane.cdpRecorder) {
+        try { await pane.cdpRecorder.stop(); } catch { }
+      }
+    }
+
     // Close pages to flush screencast recordings (skip for CDP-connected
     // sessions — the shared Electron page must stay alive between scenarios).
     if (this.record && this._ownsBrowser) {
@@ -1323,6 +1438,7 @@ export class Session {
             try {
               execFileSync(this.ffmpeg, [
                 "-y", "-i", rawPaths[0],
+                "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                 videoPath,
