@@ -595,25 +595,26 @@ export class Session {
       // Set dark background on the blank page immediately to avoid white flash in recordings
       await page.evaluate(() => { document.documentElement.style.background = "#1a1a2e"; });
 
+      // Init scripts — MUST be registered BEFORE navigation so they run on the initial page load.
+      // addInitScript only fires on subsequent navigations if added after goto.
+      if (this.mode === "human") {
+        await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+        // Register cursor overlay as init script so it persists across navigations
+        // (page.evaluate is lost on navigation; framenavigated re-inject races with page load)
+        await page.addInitScript(CURSOR_OVERLAY_SCRIPT);
+        // Pre-register custom cursor color if set (must run after CURSOR_OVERLAY_SCRIPT)
+        if (this.cursorColor) {
+          const { fill, stroke } = this.cursorColor;
+          await page.addInitScript(`window.__b2v_setCursorColor?.('default', '${fill}', '${stroke}')`);
+        }
+      }
+      if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
+
       // Navigate if URL provided
       if (opts.url) {
         await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30000 });
       }
     }
-
-    // Init scripts
-    if (this.mode === "human") {
-      await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
-      // Register cursor overlay as init script so it persists across navigations
-      // (page.evaluate is lost on navigation; framenavigated re-inject races with page load)
-      await page.addInitScript(CURSOR_OVERLAY_SCRIPT);
-      // Pre-register custom cursor color if set (must run after CURSOR_OVERLAY_SCRIPT)
-      if (this.cursorColor) {
-        const { fill, stroke } = this.cursorColor;
-        await page.addInitScript(`window.__b2v_setCursorColor?.('default', '${fill}', '${stroke}')`);
-      }
-    }
-    if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
 
     // Console/error listeners
     page.on("console", (msg) => {
