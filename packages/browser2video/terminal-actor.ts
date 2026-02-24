@@ -5,7 +5,7 @@
  * Created by session.createTerminal().
  */
 import type { Page, Frame } from "playwright";
-import type { Mode, ActorDelays } from "./types.ts";
+import type { Mode, ModeRef, ActorDelays } from "./types.ts";
 import { Actor, TypeAction, pickMs } from "./actor.ts";
 
 function sleep(ms: number) {
@@ -33,7 +33,7 @@ export class TerminalActor extends Actor {
 
   constructor(
     page: Page,
-    mode: Mode,
+    modeOrRef: Mode | ModeRef,
     selector: string,
     opts?: {
       delays?: Partial<ActorDelays>;
@@ -41,7 +41,7 @@ export class TerminalActor extends Actor {
       iframeName?: string;
     },
   ) {
-    super(page, mode, opts);
+    super(page, modeOrRef, opts);
     this.selector = selector;
     this._dom = opts?.frame ?? page;
     this._iframeName = opts?.iframeName;

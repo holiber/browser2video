@@ -15,7 +15,7 @@
  * ```
  */
 import type { Page, Frame } from "playwright";
-import type { Mode, ActorDelays, DelayRange } from "./types.ts";
+import type { Mode, ModeRef, ActorDelays, DelayRange } from "./types.ts";
 import { CURSOR_OVERLAY_SCRIPT, windMouse, linearPath, pickMs, mergeDelays } from "./actor.ts";
 
 function sleep(ms: number) {
@@ -36,7 +36,8 @@ function easedStepMs(baseMs: number, i: number, n: number): number {
 export class InjectedActor {
     readonly page: Page;
     readonly actorId: string;
-    readonly mode: Mode;
+    /** Shared mode reference — same pattern as Actor. */
+    readonly _modeRef: ModeRef;
     private cursorX = 0;
     private cursorY = 0;
     private _initialized = false;
@@ -44,27 +45,41 @@ export class InjectedActor {
     private delays: ActorDelays;
     /** DOM context for selector lookups — page by default, can be an iframe Frame */
     private _context: Page | Frame;
+    /** Custom cursor color (fill + stroke) — set before first cursor movement. */
+    private _cursorColor?: { fill: string; stroke: string };
+
+    /** Current execution mode — reads from the shared ModeRef. */
+    get mode(): Mode { return this._modeRef.current; }
 
     constructor(
         page: Page,
         actorId: string = "injected",
         opts?: {
-            mode?: Mode;
+            mode?: Mode | ModeRef;
             delays?: Partial<ActorDelays>;
             context?: Page | Frame;
+            cursorColor?: { fill: string; stroke: string };
         },
     ) {
         this.page = page;
         this.actorId = actorId;
-        this.mode = opts?.mode ?? "human";
+        const modeOrRef = opts?.mode ?? "human";
+        this._modeRef = typeof modeOrRef === "string" ? { current: modeOrRef } : modeOrRef;
         this.delays = mergeDelays(this.mode, opts?.delays);
         this._context = opts?.context ?? page;
+        this._cursorColor = opts?.cursorColor;
     }
 
     /** Inject the cursor overlay script into the page. Must be called once before interaction. */
     async init(): Promise<void> {
         if (this._initialized) return;
         await this.page.evaluate(CURSOR_OVERLAY_SCRIPT);
+        // Apply custom cursor color if provided
+        if (this._cursorColor) {
+            await this.page.evaluate(
+                `window.__b2v_setCursorColor?.('${this.actorId}', '${this._cursorColor.fill}', '${this._cursorColor.stroke}')`,
+            );
+        }
         this._initialized = true;
     }
 

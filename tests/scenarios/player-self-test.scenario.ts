@@ -80,6 +80,22 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
             }
         }
 
+        // Kill any stale processes on the inner player's ports from previous runs
+        const { execSync } = await import("node:child_process");
+        for (const port of [INNER_PORT, INNER_CDP_PORT]) {
+            try {
+                const pids = execSync(`lsof -ti :${port} 2>/dev/null`, { encoding: "utf8" }).trim();
+                if (pids) {
+                    for (const pid of pids.split("\n").filter(Boolean)) {
+                        if (pid === String(process.pid)) continue;
+                        try { execSync(`kill -9 ${pid} 2>/dev/null`); } catch { }
+                        console.error(`[self-test] Killed stale process ${pid} on port ${port}`);
+                    }
+                    await new Promise((r) => setTimeout(r, 300));
+                }
+            } catch { }
+        }
+
         console.error(`[self-test] Spawning inner player on port ${INNER_PORT}...`);
         const innerProcess = spawn(
             electronPath,
@@ -110,15 +126,12 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         });
 
         // Wait for inner player to be FULLY ready (HTTP + WS + Vite)
-        // waitForPort only checks HTTP, but the WS server starts ~1s later
-        // So we wait for the inner player's server module to finish loading
         console.error("[self-test] Waiting for inner player server...");
         await waitForPort(INNER_PORT, 60_000);
         console.error("[self-test] Inner player HTTP is up, waiting for full server ready...");
 
-        // Wait a bit more for the server module to fully load (WS, Vite proxy)
-        // The server module takes ~0.5-1s to import after HTTP is up
-        await new Promise((r) => setTimeout(r, 3000));
+        // Brief wait for WS + Vite proxy to finish loading after HTTP is up
+        await new Promise((r) => setTimeout(r, 1000));
 
         // Open inner player's web UI in session browser
         const { page } = await session.openPage({
@@ -153,8 +166,12 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
             }
         });
 
-        // Create InjectedActor
-        const injected = new InjectedActor(page, "tester", { mode: "human" });
+        // Create InjectedActor — shares session's mode ref
+        // Coral cursor to distinguish from scenario's white default cursor
+        const injected = new InjectedActor(page, "tester", {
+            mode: session.modeRef,
+            cursorColor: { fill: "#fb923c", stroke: "#9a3412" },
+        });
         await injected.init();
 
         // Sync Playwright's internal viewport tracking with the actual view size.
@@ -471,8 +488,48 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
 
             // Wait for the step to complete (screenshot appears)
             await page.waitForTimeout(5000);
+
+            // Assert: the preview area should NOT be in electron-scenario-view mode
+            // (which shows a black background when the player is embedded).
+            // It should fall back to screenshot mode instead.
+            const previewMode = await page.getAttribute("[data-preview-mode]", "data-preview-mode");
+            if (previewMode === "electron-scenario-view") {
+                throw new Error(
+                    `Step ${i}: Preview is in "electron-scenario-view" mode (black background). ` +
+                    `Embedded players should use screenshot/screencast mode instead.`
+                );
+            }
         }
         console.error(`[self-test] Stepped through ${Math.min(stepCount, 5)} slides`);
+    });
+
+    s.step("Verify scenario screenshots are not blank", async ({ page }) => {
+        // After stepping through BasicUI slides, the step-card thumbnails
+        // should contain actual screenshots (base64 PNG), not be empty.
+        // This proves the scenario executed, the cursor interacted with
+        // elements, and the page rendered visible content.
+        const stepCards = page.locator("[data-testid^='step-card-']");
+        const cardCount = await stepCards.count();
+
+        let screenshotsFound = 0;
+        for (let i = 0; i < Math.min(cardCount, 5); i++) {
+            const img = stepCards.nth(i).locator("img");
+            const imgCount = await img.count();
+            if (imgCount > 0) {
+                const src = await img.first().getAttribute("src");
+                if (src && src.startsWith("data:image/") && src.length > 100) {
+                    screenshotsFound++;
+                }
+            }
+        }
+
+        console.error(`[self-test] Step screenshots found: ${screenshotsFound}/${Math.min(cardCount, 5)}`);
+        if (screenshotsFound === 0) {
+            throw new Error(
+                "No step screenshots found in step cards. " +
+                "The BasicUI scenario should produce visible screenshots after each step."
+            );
+        }
     });
 
     // ═══════════════════════════════════════════════════════════════════

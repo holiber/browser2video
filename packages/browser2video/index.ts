@@ -71,6 +71,7 @@ export type {
   StepRecord,
   TerminalHandle,
   Mode,
+  ModeRef,
   RecordMode,
   DelayRange,
   ActorDelays,
@@ -103,6 +104,7 @@ export {
   ActorDelaysSchema,
   LayoutConfigSchema,
   ViewportSchema, type Viewport,
+  createModeRef,
 } from "./schemas/common.ts";
 
 // Schemas — session

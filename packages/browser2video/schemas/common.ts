@@ -9,6 +9,16 @@ export const ModeSchema = z
 
 export type Mode = z.infer<typeof ModeSchema>;
 
+/**
+ * Shared mutable reference to the current execution mode.
+ * Mode is a session-level concept — all actors read from the same ref.
+ * Change `current` to switch mode mid-scenario for all actors simultaneously.
+ */
+export interface ModeRef { current: Mode }
+
+/** Create a ModeRef from a mode string. */
+export function createModeRef(mode: Mode): ModeRef { return { current: mode }; }
+
 export const RecordModeSchema = z
   .enum(["screencast", "screen", "none"])
   .describe("Video recording backend.");

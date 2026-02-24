@@ -17,6 +17,7 @@ import type {
   StepRecord,
   TerminalHandle,
   Mode,
+  ModeRef,
   LayoutConfig,
   ActorDelays,
 } from "./types.ts";
@@ -294,7 +295,7 @@ export class Session {
   private lastGridConfig: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string } | null = null;
 
   // Resolved options
-  readonly mode: Mode;
+  readonly _modeRef: ModeRef;
   readonly record: boolean;
   readonly headed: boolean;
   readonly artifactDir: string;
@@ -307,12 +308,28 @@ export class Session {
   /** Replay log for streaming cursor/click/step events to the player */
   readonly replayLog = new ReplayLog();
 
+  /** Current execution mode — reads from the shared ModeRef. */
+  get mode(): Mode { return this._modeRef.current; }
+
+  /**
+   * Switch execution mode mid-scenario.
+   * All actors created from this session will immediately see the new mode.
+   */
+  setMode(mode: Mode) { this._modeRef.current = mode; }
+
+  /**
+   * Shared mode reference. Pass this to standalone Actors so they
+   * share the session's mode and respond to setMode() calls.
+   */
+  get modeRef(): ModeRef { return this._modeRef; }
+
   constructor(opts: SessionOptions = {}) {
     const underPW = isUnderPlaywright();
 
-    this.mode = opts.mode
+    const resolvedMode: Mode = opts.mode
       ?? (process.env.B2V_MODE as Mode | undefined)
       ?? (underPW ? "fast" : "human");
+    this._modeRef = { current: resolvedMode };
 
     this.record = opts.record
       ?? (process.env.B2V_RECORD !== undefined ? process.env.B2V_RECORD !== "false" : !underPW);
@@ -594,7 +611,7 @@ export class Session {
       console.error(`  [${label} Error] ${(err as Error).message}`);
     });
 
-    const actor = new Actor(page, this.mode, { delays: this.delays });
+    const actor = new Actor(page, this._modeRef, { delays: this.delays });
     this._wireReplayEvents(actor);
 
     // Also keep framenavigated fallback for cursor injection (belt & suspenders)
@@ -1048,7 +1065,7 @@ export class Session {
         iframeName = pc.testId;
       }
 
-      const actor = new TerminalActor(page, this.mode, selector, {
+      const actor = new TerminalActor(page, this._modeRef, selector, {
         delays: this.delays,
         frame: iframeFrame,
         iframeName,
@@ -1308,7 +1325,11 @@ export class Session {
       gridConfig: this.lastGridConfig ?? undefined,
       pageUrl,
       viewport: this.lastGridConfig?.viewport ?? { width: 1280, height: 720 },
-      electronView: !!(this._cdpEndpoint && this._onRequestPage),
+      // electronView uses Electron's WebContentsView overlay, which only works
+      // when the player IS the native Electron window. In embedded mode
+      // (B2V_EMBEDDED=1), the player is viewed through a browser iframe, so
+      // the WebContentsView would render on the hidden inner window = black screen.
+      electronView: !!(this._cdpEndpoint && this._onRequestPage) && process.env.B2V_EMBEDDED !== "1",
     };
   }
 

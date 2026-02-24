@@ -8,11 +8,14 @@ import type { Page } from "playwright";
 // Re-export all shared types from schemas
 export type {
   Mode,
+  ModeRef,
   RecordMode,
   DelayRange,
   ActorDelays,
   LayoutConfig,
 } from "./schemas/common.ts";
+
+export { createModeRef } from "./schemas/common.ts";
 
 export type {
   SessionOptions,

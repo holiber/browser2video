@@ -4,7 +4,7 @@
  * and drawing.  Shared by the unified runner.
  */
 import type { Page, Frame, ElementHandle, Locator } from "playwright";
-import type { Mode, ActorDelays, DelayRange } from "./types.ts";
+import type { Mode, ModeRef, ActorDelays, DelayRange } from "./types.ts";
 import type { ReplayEvent } from "./replay-log.ts";
 import type { AudioDirectorAPI, SpeakOptions } from "./narrator.ts";
 
@@ -14,7 +14,7 @@ import type { AudioDirectorAPI, SpeakOptions } from "./narrator.ts";
 
 export const DEFAULT_DELAYS: Record<Mode, ActorDelays> = {
   human: {
-    breatheMs: [150, 150],
+    breatheMs: [1000, 1000],
     afterScrollIntoViewMs: [350, 350],
     mouseMoveStepMs: [3, 3],
     clickEffectMs: [25, 25],
@@ -187,6 +187,7 @@ export const CURSOR_OVERLAY_SCRIPT = `
   }
   window.__b2v_cursors = {};
   window.__b2v_cursorIndex = 0;
+  window.__b2v_cursorColors = window.__b2v_cursorColors || {};
 
   // Auto-rotating high-visibility palette for multi-actor scenarios
   var AUTO_COLORS = [
@@ -207,7 +208,10 @@ export const CURSOR_OVERLAY_SCRIPT = `
     // First actor ('default' or index 0) → classic white cursor
     // Subsequent actors → pick from rotating palette
     var colors;
-    if (id === 'default' || window.__b2v_cursorIndex === 0) {
+    // Check for pre-registered custom color first
+    if (window.__b2v_cursorColors[id]) {
+      colors = window.__b2v_cursorColors[id];
+    } else if (id === 'default' || window.__b2v_cursorIndex === 0) {
       colors = { fill: 'white', stroke: 'black' };
     } else {
       colors = AUTO_COLORS[(window.__b2v_cursorIndex - 1) % AUTO_COLORS.length];
@@ -276,6 +280,20 @@ export const CURSOR_OVERLAY_SCRIPT = `
       requestAnimationFrame(function() { el.style.transition = 'transform 40ms ease-in-out'; });
     } else {
       el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
+    }
+  };
+
+  // Pre-register a custom color for an actor ID (call before first moveCursor)
+  window.__b2v_setCursorColor = function(actorId, fill, stroke) {
+    window.__b2v_cursorColors[actorId] = { fill: fill, stroke: stroke };
+    // Update existing cursor if already created
+    var existing = window.__b2v_cursors[actorId];
+    if (existing) {
+      var pathEl = existing.querySelector('path');
+      if (pathEl) {
+        pathEl.setAttribute('fill', fill);
+        pathEl.setAttribute('stroke', stroke);
+      }
     }
   };
 
@@ -349,7 +367,12 @@ export const FAST_MODE_INIT_SCRIPT = `
 
 export class Actor {
   page: Page;
-  mode: Mode;
+  /**
+   * Shared mode reference. Mode is a session-level concept — all actors
+   * created from the same session (or sharing the same ref) switch together.
+   * Read via `this.mode` getter.
+   */
+  readonly _modeRef: ModeRef;
   voice?: string;
   speed?: number;
   private cursorX = 0;
@@ -374,15 +397,18 @@ export class Actor {
   /** Expected viewport size of the scenario iframe (for coordinate conversion) */
   _scenarioViewport: { width: number; height: number } | null = null;
 
+  /** Current execution mode — reads from the shared ModeRef. */
+  get mode(): Mode { return this._modeRef.current; }
+
   constructor(
     page: Page,
-    mode: Mode,
+    modeOrRef: Mode | ModeRef,
     opts?: { delays?: Partial<ActorDelays>; voice?: string; speed?: number },
   ) {
     this.page = page;
     this._context = page;
-    this.mode = mode;
-    this.delays = mergeDelays(mode, opts?.delays);
+    this._modeRef = typeof modeOrRef === "string" ? { current: modeOrRef } : modeOrRef;
+    this.delays = mergeDelays(this.mode, opts?.delays);
     this.voice = opts?.voice;
     this.speed = opts?.speed;
   }

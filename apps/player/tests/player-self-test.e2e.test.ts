@@ -1,26 +1,31 @@
 /**
- * Player Self-Test E2E — InjectedActor smoke test
+ * Player Self-Test E2E — Runs the comprehensive self-test scenario through the player.
  *
- * Launches the player Electron app and uses an InjectedActor to drive the
- * player's own UI. The injected actor's cursor is visible inside the page,
- * clicking buttons and navigating dialogs just like a real user would.
+ * Architecture:
+ *   This Playwright test launches the player (Electron), selects the
+ *   "player-self-test" scenario via the picker, clicks "Play All", and
+ *   watches all steps complete. The actual test logic lives in
+ *   tests/scenarios/player-self-test.scenario.ts which uses InjectedActor
+ *   to drive an inner player instance.
  *
- * This validates both:
- * 1. The InjectedActor API (cursor injection, clicking, typing)
- * 2. The player UI (studio mode, pane popups, URL dialog)
+ * This is "using our player to test our player".
  */
 
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execSync } from "node:child_process";
 import path from "node:path";
 
-// InjectedActor is imported from the workspace package
-import { InjectedActor } from "browser2video/injected-actor";
-
 const PROJECT_ROOT = path.resolve(import.meta.dirname, "../../..");
 const PLAYER_DIR = path.resolve(import.meta.dirname, "..");
 const TEST_PORT = 9561;
 const TEST_CDP_PORT = 9365;
+
+/**
+ * Human mode: visible cursor animations + breathe pauses.
+ * Activated via B2V_HUMAN=1 (which also implies --headed in playwright.config).
+ * --headed alone gives a visible window but keeps fast mode.
+ */
+const isHuman = !!process.env.B2V_HUMAN;
 
 let electronApp: ElectronApplication;
 let page: Page;
@@ -40,7 +45,7 @@ test.beforeAll(async () => {
     const t0 = performance.now();
     const ms = () => `${((performance.now() - t0) / 1000).toFixed(1)}s`;
 
-    console.log(`[self-test ${ms()}] Launching Electron...`);
+    console.log(`[self-test ${ms()}] Launching Electron player...`);
     electronApp = await _electron.launch({
         args: [PLAYER_DIR],
         cwd: PROJECT_ROOT,
@@ -49,6 +54,8 @@ test.beforeAll(async () => {
             NODE_OPTIONS: "--experimental-strip-types --no-warnings",
             PORT: String(TEST_PORT),
             B2V_CDP_PORT: String(TEST_CDP_PORT),
+            // Pass human mode to the player so the session respects it
+            ...(isHuman ? { B2V_MODE: "human" } : {}),
         },
         timeout: 60_000,
     });
@@ -77,93 +84,112 @@ test.afterAll(async () => {
     } catch { /* already exited or disposed */ }
 });
 
-/** Wait for the player's studio-react mode to be ready. */
-async function waitForStudioReady() {
+// ===========================================================================
+//  Test: Run the self-test scenario through the player
+// ===========================================================================
+
+test("load and run player-self-test scenario", async () => {
+    // This test runs the full comprehensive scenario — give it plenty of time
+    test.setTimeout(600_000); // 10 minutes
+
+    // Wait for the player's studio UI to be ready
+    console.log("[self-test] Waiting for studio ready...");
     await page.waitForSelector("[data-preview-mode='studio-react']", { timeout: 90_000 });
-}
+    console.log("[self-test] Studio ready!");
 
-// ---------------------------------------------------------------------------
-//  Tests
-// ---------------------------------------------------------------------------
+    // Select the player-self-test scenario from the picker
+    console.log("[self-test] Loading player-self-test scenario...");
+    await page.selectOption("[data-testid='picker-select']", {
+        label: "tests/scenarios/player-self-test.scenario.ts",
+    });
 
-test("injected actor: cursor overlay appears in the page", async () => {
-    test.setTimeout(120_000);
-    await waitForStudioReady();
+    // Wait for scenario steps to appear
+    await page.waitForSelector("[data-testid='step-card-0']", { timeout: 30_000 });
+    const stepCards = page.locator("[data-testid^='step-card-']");
+    const totalSteps = await stepCards.count();
+    console.log(`[self-test] Scenario loaded: ${totalSteps} steps`);
 
-    const actor = new InjectedActor(page, "self-tester", { mode: "fast" });
-    await actor.init();
+    // Click "Play All"
+    console.log("[self-test] Clicking Play All...");
+    await page.click("[data-testid='ctrl-play-all']");
 
-    // Move cursor to center of viewport
-    await actor.moveCursorTo(640, 360);
+    // Monitor progress — wait for ALL steps to reach "done" state
+    // Poll step-card class names to track state
+    const maxWaitMs = 8 * 60_000; // 8 minutes max for the scenario
+    const pollIntervalMs = 2_000;
+    const deadline = Date.now() + maxWaitMs;
+    let lastLog = "";
 
-    // The cursor element should now exist in the DOM
-    const cursor = page.locator("#__b2v_cursor_self-tester");
-    await expect(cursor).toBeAttached({ timeout: 5_000 });
+    while (Date.now() < deadline) {
+        await page.waitForTimeout(pollIntervalMs);
+
+        // Count states by checking step card CSS classes
+        const states: string[] = [];
+        const count = await stepCards.count();
+        for (let i = 0; i < count; i++) {
+            const card = stepCards.nth(i);
+            const classes = await card.getAttribute("class") ?? "";
+            if (classes.includes("emerald")) states.push("done");
+            else if (classes.includes("blue")) states.push("running");
+            else if (classes.includes("yellow")) states.push("ff");
+            else states.push("pending");
+        }
+
+        const doneCount = states.filter((s) => s === "done").length;
+        const runningIdx = states.findIndex((s) => s === "running" || s === "ff");
+        const summary = `${doneCount}/${count} done` + (runningIdx >= 0 ? `, step ${runningIdx} running` : "");
+
+        if (summary !== lastLog) {
+            console.log(`[self-test] ${summary}`);
+            lastLog = summary;
+        }
+
+        // Check if all done
+        if (doneCount === count) {
+            console.log(`[self-test] All ${count} steps completed!`);
+            break;
+        }
+
+        // Check for no running/ff steps while not all done — scenario may have stopped/errored
+        if (runningIdx < 0 && doneCount < count && doneCount > 0) {
+            // Might be between steps, wait a bit more
+            await page.waitForTimeout(3000);
+            // Re-check
+            const recheck: string[] = [];
+            for (let i = 0; i < count; i++) {
+                const classes = await stepCards.nth(i).getAttribute("class") ?? "";
+                if (classes.includes("emerald")) recheck.push("done");
+                else if (classes.includes("blue") || classes.includes("yellow")) recheck.push("active");
+                else recheck.push("pending");
+            }
+            if (recheck.filter((s) => s === "active").length === 0 && recheck.filter((s) => s === "done").length < count) {
+                const stuckAt = recheck.findIndex((s) => s === "pending");
+                console.error(`[self-test] Scenario appears stuck! ${recheck.filter((s) => s === "done").length}/${count} done, stuck at step ${stuckAt}`);
+                break;
+            }
+        }
+    }
+
+    // Final verification
+    const finalStates: string[] = [];
+    const finalCount = await stepCards.count();
+    for (let i = 0; i < finalCount; i++) {
+        const classes = await stepCards.nth(i).getAttribute("class") ?? "";
+        finalStates.push(classes.includes("emerald") ? "done" : "not-done");
+    }
+
+    const doneTotal = finalStates.filter((s) => s === "done").length;
+    console.log(`[self-test] Final result: ${doneTotal}/${finalCount} steps done`);
+
+    // All steps should be done
+    expect(doneTotal).toBe(finalCount);
 });
 
-test("injected actor: clicks the + placeholder to open popup", async () => {
-    test.setTimeout(30_000);
+// ===========================================================================
+//  Clean shutdown
+// ===========================================================================
 
-    const actor = new InjectedActor(page, "self-tester", { mode: "fast" });
-
-    // Click the "+" placeholder button
-    await actor.click("[data-testid='studio-placeholder-add']");
-
-    // Popup should appear with Browser and Terminal options
-    const popup = page.locator("[data-testid='studio-add-pane-popup']");
-    await expect(popup).toBeVisible({ timeout: 5_000 });
-
-    const browserBtn = page.locator("[data-testid='studio-add-browser']");
-    const terminalBtn = page.locator("[data-testid='studio-add-terminal']");
-    await expect(browserBtn).toBeVisible();
-    await expect(terminalBtn).toBeVisible();
-});
-
-test("injected actor: clicks Browser to open URL dialog", async () => {
-    test.setTimeout(30_000);
-
-    const actor = new InjectedActor(page, "self-tester", { mode: "fast" });
-
-    // Click the Browser option
-    await actor.click("[data-testid='studio-add-browser']");
-
-    // URL dialog should appear
-    const urlDialog = page.locator("[data-testid='studio-browser-url-dialog']");
-    await expect(urlDialog).toBeVisible({ timeout: 5_000 });
-
-    // URL input should have the default GitHub URL
-    const urlInput = page.locator("[data-testid='studio-browser-url-input']");
-    await expect(urlInput).toBeVisible();
-    const value = await urlInput.inputValue();
-    expect(value).toContain("github.com");
-
-    // Confirm button should be visible
-    const confirmBtn = page.locator("[data-testid='studio-browser-url-confirm']");
-    await expect(confirmBtn).toBeVisible();
-});
-
-test("injected actor: confirms URL and browser iframe appears", async () => {
-    test.setTimeout(60_000);
-
-    const actor = new InjectedActor(page, "self-tester", { mode: "fast" });
-
-    // Click confirm
-    await actor.click("[data-testid='studio-browser-url-confirm']");
-
-    // URL dialog should close
-    const urlDialog = page.locator("[data-testid='studio-browser-url-dialog']");
-    await expect(urlDialog).toBeHidden({ timeout: 5_000 });
-
-    // Browser iframe should appear
-    const browserIframe = page.locator("[data-testid='studio-browser-iframe']");
-    await expect(browserIframe).toBeVisible({ timeout: 15_000 });
-
-    // Verify the iframe src contains the GitHub URL
-    const src = await browserIframe.getAttribute("src");
-    expect(src).toContain("github.com");
-});
-
-test("injected actor: clean shutdown — no zombie processes", async () => {
+test("clean shutdown — no zombie processes", async () => {
     test.setTimeout(30_000);
 
     const pid = electronApp.process().pid;
@@ -171,14 +197,12 @@ test("injected actor: clean shutdown — no zombie processes", async () => {
         process.kill(pid, "SIGTERM");
     }
 
-    // Wait for exit
     await new Promise<void>((resolve) => {
         const proc = electronApp.process();
         if (proc.exitCode !== null || proc.signalCode !== null) return resolve();
         proc.on("exit", () => resolve());
     });
 
-    // Wait for ports to be released
     for (let i = 0; i < 20; i++) {
         if (isPortFree(TEST_PORT) && isPortFree(TEST_CDP_PORT)) break;
         await new Promise((r) => setTimeout(r, 500));

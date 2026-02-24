@@ -146,7 +146,9 @@ export class Executor<T = any> {
           this.session.replayLog.onEvent = this.onReplayEvent;
         }
 
-        if (this.onLiveFrame && this.viewMode === "video") {
+        // Start screencasting for video mode, or when embedded (no ElectronView overlay)
+        const isEmbedded = process.env.B2V_EMBEDDED === "1";
+        if (this.onLiveFrame && (this.viewMode === "video" || isEmbedded)) {
           await this.startScreencast();
         }
       } catch (err) {
@@ -217,7 +219,8 @@ export class Executor<T = any> {
         const paneCount = layout.panes?.length ?? 0;
         console.error(`[executor] Layout changed mid-run: panes=${paneCount} grid=${!!layout.gridConfig}`);
         this.onPaneLayout?.(layout);
-        if (this.onLiveFrame && this.viewMode === "video") {
+        const isEmbedded = process.env.B2V_EMBEDDED === "1";
+        if (this.onLiveFrame && (this.viewMode === "video" || isEmbedded)) {
           await this.stopScreencast();
           await this.startScreencast();
         }
