@@ -40,7 +40,8 @@ const CHAT = {
 } as const;
 
 const NARRATOR = {
-    intro: "Welcome to Browser 2 Video. In this demo, we record a scenario with multiple actors, each with their own unique voice. On the left is Alice's chat window. On the right, Bob has a browser and a terminal.",
+    intro: "Welcome to Browser 2 Video. In this demo, we record a scenario with multiple actors, each with their own unique voice.",
+    meetActors: "On the left is Alice's chat window. On the right, Bob has a browser and a terminal.",
     outro: "And that's it. Different actors, different voices, dynamic layouts. All in one recording.",
 } as const;
 
@@ -75,8 +76,8 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
 
         const [alice, bobBrowser, bobTerminal] = grid.actors;
 
-        // Narrator pointer on the grid page — only used during intro, never concurrently with actors
-        const pointer = new Actor(grid.page, "human");
+        // Narrator pointer on the grid page — shares session's mode ref
+        const pointer = new Actor(grid.page, session.modeRef);
         pointer.cursorId = 'narrator';
 
         alice.setVoice("shimmer");
@@ -114,38 +115,43 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
         return { alice, bobBrowser, bobTerminal, pointer, grid, chatBaseUrl, calendarUrl, docHash, narrate };
     });
 
-    // ── Narrator intro: circle around each pane ───────────────────────
+    // ── Narrator intro: speak first, then circle panes ───────────────
     s.step("Introduction",
         ({ narrate }) => narrate(NARRATOR.intro),
+        async ({ grid }) => {
+            await grid.page.waitForTimeout(3000);
+        },
+    );
+
+    // ── Circle each pane as narrator describes them ──────────────────
+    s.step("Meet the actors",
+        ({ narrate }) => narrate(NARRATOR.meetActors),
         async ({ pointer, grid }) => {
-            await grid.page.waitForTimeout(2000);
-            // Circle around Alice's pane
+            await grid.page.waitForTimeout(500);
+            // Circle around Alice's pane — "On the left is Alice's chat window"
             await pointer.circleAround('[data-testid="browser-pane-0"]');
             await grid.page.waitForTimeout(1000);
-            // Circle around Bob's browser pane
+            // Circle around Bob's browser pane — "On the right, Bob has a browser"
             await pointer.circleAround('[data-testid="browser-pane-1"]');
             await grid.page.waitForTimeout(500);
-            // Circle around Bob's terminal pane
+            // Circle around Bob's terminal pane — "and a terminal"
             await pointer.circleAround('[data-testid="xterm-term-shell-2"]');
             await grid.page.waitForTimeout(1000);
         },
     );
 
-    // ── Bob types brainfuck in terminal (sequential, no cursor conflict) ──
-    s.step("Bob codes in terminal", async ({ bobTerminal, grid }) => {
+    // ── Alice types message while Bob's terminal shows activity ────────
+    s.step("Alice sends, Bob codes", async ({ alice, bobTerminal, grid }) => {
         await grid.page.waitForTimeout(500);
-        await bobTerminal.typeAndEnter('echo "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>." | head -c 40');
-        await grid.page.waitForTimeout(1000);
-    });
-
-    // ── Alice types + speaks her message ──────────────────────────────
-    s.step("Alice sends a message", async ({ alice, grid }) => {
-        await alice.type('[data-testid="chat-input"]', CHAT.aliceMsg + " 🎬").speak(CHAT.aliceMsg);
+        // Bob starts a script that produces output over time (uses keyboard first)
+        await bobTerminal.typeAndEnter('for i in 1 2 3 4 5; do sleep 0.4 && echo "compiling module $i..."; done');
+        // Now Alice types + speaks (Bob's script output scrolls concurrently)
+        await alice.type('[data-testid="chat-input"]', CHAT.aliceMsg).speak(CHAT.aliceMsg);
         await alice.click('[data-testid="chat-send"]');
         await grid.page.waitForTimeout(500);
     });
 
-    // ── Bob opens chat, sees Alice's message (silent) ─────────────────
+    // ── Bob opens chat, sees Alice's message + notification beep ─────
     s.step("Bob sees the message", async ({ bobBrowser, grid, chatBaseUrl, docHash }) => {
         await grid.page.waitForTimeout(1000);
         const bobChatUrl = `${chatBaseUrl}#${docHash}`;
@@ -157,12 +163,27 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
             undefined,
             { timeout: 15000 },
         );
+        // Play notification beep when Bob sees Alice's message
+        await f.evaluate(() => {
+            try {
+                const ctx = new AudioContext();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.frequency.value = 880;
+                osc.type = "sine";
+                gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.15);
+            } catch { /* ignore if audio not available */ }
+        });
         await grid.page.waitForTimeout(1000);
     });
 
     // ── Bob types + speaks his reply ──────────────────────────────────
     s.step("Bob responds", async ({ bobBrowser, grid }) => {
-        await bobBrowser.type('[data-testid="chat-input"]', CHAT.bobReply1 + " 📅").speak(CHAT.bobReply1);
+        await bobBrowser.type('[data-testid="chat-input"]', CHAT.bobReply1).speak(CHAT.bobReply1);
         await bobBrowser.click('[data-testid="chat-send"]');
         await grid.page.waitForTimeout(500);
     });
@@ -194,7 +215,7 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
 
     // ── Bob types + speaks his confirmation ───────────────────────────
     s.step("Bob confirms", async ({ bobBrowser, grid }) => {
-        await bobBrowser.type('[data-testid="chat-input"]', CHAT.bobReply2 + " 🍿").speak(CHAT.bobReply2);
+        await bobBrowser.type('[data-testid="chat-input"]', CHAT.bobReply2).speak(CHAT.bobReply2);
         await bobBrowser.click('[data-testid="chat-send"]');
         await grid.page.waitForTimeout(500);
     });
@@ -207,7 +228,7 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
             undefined,
             { timeout: 15000 },
         );
-        await alice.type('[data-testid="chat-input"]', CHAT.aliceReply + " 🎉").speak(CHAT.aliceReply);
+        await alice.type('[data-testid="chat-input"]', CHAT.aliceReply).speak(CHAT.aliceReply);
         await alice.click('[data-testid="chat-send"]');
         await grid.page.waitForTimeout(1000);
     });

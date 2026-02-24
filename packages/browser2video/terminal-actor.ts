@@ -5,7 +5,7 @@
  * Created by session.createTerminal().
  */
 import type { Page, Frame } from "playwright";
-import type { Mode, ActorDelays } from "./types.ts";
+import type { Mode, ModeRef, ActorDelays } from "./types.ts";
 import { Actor, TypeAction, pickMs } from "./actor.ts";
 
 function sleep(ms: number) {
@@ -33,7 +33,7 @@ export class TerminalActor extends Actor {
 
   constructor(
     page: Page,
-    mode: Mode,
+    modeOrRef: Mode | ModeRef,
     selector: string,
     opts?: {
       delays?: Partial<ActorDelays>;
@@ -41,7 +41,7 @@ export class TerminalActor extends Actor {
       iframeName?: string;
     },
   ) {
-    super(page, mode, opts);
+    super(page, modeOrRef, opts);
     this.selector = selector;
     this._dom = opts?.frame ?? page;
     this._iframeName = opts?.iframeName;
@@ -200,11 +200,11 @@ export class TerminalActor extends Actor {
       ([sel, inc]: [string, string[]]) => {
         const root = document.querySelector(sel);
         if (!root) return false;
-        // Prefer .xterm-rows textContent, fall back to data-b2v-output (JabTerm capture buffer)
+        // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+        const tree = root.querySelector(".xterm-accessibility-tree");
         const rows = root.querySelector(".xterm-rows");
-        let text = String((rows as any)?.textContent ?? "").trim();
-        if (!text) text = (root as any)?.getAttribute?.("data-b2v-output") ?? "";
-        if (!text) text = String((root as any)?.textContent ?? "");
+        const text = String((tree ?? rows as any)?.textContent ?? "").trim();
+        if (!text) return false;
         return inc.every((s: string) => text.includes(s));
       },
       [this.selector, includes] as [string, string[]],
@@ -222,10 +222,10 @@ export class TerminalActor extends Actor {
       (sel: string) => {
         const root = document.querySelector(sel);
         if (!root) return false;
-        // Prefer .xterm-rows textContent, fall back to data-b2v-output (JabTerm capture buffer)
+        // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+        const tree = root.querySelector(".xterm-accessibility-tree");
         const rows = root.querySelector(".xterm-rows");
-        let rawText = String((rows as any)?.textContent ?? "").trim();
-        if (!rawText) rawText = (root as any)?.getAttribute?.("data-b2v-output") ?? "";
+        const rawText = String((tree ?? rows as any)?.textContent ?? "").trim();
         if (!rawText) return false;
         const lines = rawText.split("\n");
         for (let i = lines.length - 1; i >= 0; i--) {
@@ -248,9 +248,11 @@ export class TerminalActor extends Actor {
     return this._dom.evaluate((sel: string) => {
       const root = document.querySelector(sel);
       if (!root) return true;
+      // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+      const tree = root.querySelector(".xterm-accessibility-tree");
       const rows = root.querySelector(".xterm-rows");
-      if (!rows) return true;
-      const lines = (rows.textContent ?? "").split("\n");
+      if (!tree && !rows) return true;
+      const lines = ((tree ?? rows as any)?.textContent ?? "").split("\n");
       for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i].trim();
         if (!line) continue;

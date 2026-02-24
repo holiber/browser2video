@@ -42,7 +42,6 @@ type ScenarioPaneParams = {
 
 function TerminalPane({ testId, wsUrl }: { testId: string; wsUrl: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const jabtermRef = useRef<any>(null);
 
   useEffect(() => {
     console.log(`[TerminalPane] ${testId} connecting to ${wsUrl}`);
@@ -58,21 +57,6 @@ function TerminalPane({ testId, wsUrl }: { testId: string; wsUrl: string }) {
     });
     ro.observe(el);
     return () => { ro.disconnect(); clearTimeout(timer); };
-  }, []);
-
-  // Expose JabTerm capture buffer to DOM so waitForPrompt/waitForText can read it
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const interval = setInterval(() => {
-      const ref = jabtermRef.current;
-      if (!ref) return;
-      try {
-        const text = ref.readAll?.() ?? "";
-        el.setAttribute("data-b2v-output", text.slice(-2000));
-      } catch { /* ignore */ }
-    }, 200);
-    return () => clearInterval(interval);
   }, []);
 
   if (!wsUrl) {
@@ -91,10 +75,10 @@ function TerminalPane({ testId, wsUrl }: { testId: string; wsUrl: string }) {
       style={{ background: "#1e1e1e" }}
     >
       <JabTerm
-        ref={jabtermRef}
         wsUrl={wsUrl}
         fontSize={13}
         theme={{ background: "#1e1e1e" }}
+        accessibilitySupport="on"
       />
     </div>
   );

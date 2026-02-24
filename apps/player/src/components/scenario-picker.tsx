@@ -45,6 +45,7 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
                 onChange={(e) => handleSelect(e.target.value)}
                 disabled={!connected}
                 className="appearance-none bg-zinc-800 border border-zinc-700 rounded px-3 py-1 pr-7 text-xs text-zinc-300 cursor-pointer hover:border-zinc-600 focus:outline-none focus:border-blue-600 disabled:opacity-30"
+                data-testid="picker-switch"
               >
                 <option value="">Switch scenario...</option>
                 {scenarioFiles.map((f) => (
@@ -64,6 +65,7 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
                 onChange={(e) => handleSelect(e.target.value)}
                 disabled={!connected}
                 className="w-full appearance-none bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 pr-8 text-sm text-zinc-200 cursor-pointer hover:border-zinc-600 focus:outline-none focus:border-blue-600 disabled:opacity-30"
+                data-testid="picker-select"
               >
                 <option value="">Select a scenario file...</option>
                 {scenarioFiles.map((f) => (
@@ -113,7 +115,7 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
         >
           <Trash2 size={12} />
           {cacheSize && cacheSize > 0
-            ? `${formatBytes(cacheSize)} clear cache`
+            ? `Clear cache (${formatBytes(cacheSize)})`
             : "Clear cache"}
         </button>
       )}

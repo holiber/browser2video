@@ -4,7 +4,7 @@
  * and drawing.  Shared by the unified runner.
  */
 import type { Page, Frame, ElementHandle, Locator } from "playwright";
-import type { Mode, ActorDelays, DelayRange } from "./types.ts";
+import type { Mode, ModeRef, ActorDelays, DelayRange } from "./types.ts";
 import type { ReplayEvent } from "./replay-log.ts";
 import type { AudioDirectorAPI, SpeakOptions } from "./narrator.ts";
 
@@ -14,7 +14,7 @@ import type { AudioDirectorAPI, SpeakOptions } from "./narrator.ts";
 
 export const DEFAULT_DELAYS: Record<Mode, ActorDelays> = {
   human: {
-    breatheMs: [150, 150],
+    breatheMs: [1000, 1000],
     afterScrollIntoViewMs: [350, 350],
     mouseMoveStepMs: [3, 3],
     clickEffectMs: [25, 25],
@@ -186,30 +186,53 @@ export const CURSOR_OVERLAY_SCRIPT = `
     }
   }
   window.__b2v_cursors = {};
+  window.__b2v_cursorIndex = 0;
+  window.__b2v_cursorColors = window.__b2v_cursorColors || {};
 
-  var CURSOR_COLORS = {
-    'default': { fill: 'white', stroke: 'black' },
-    'alice':   { fill: '#f0abfc', stroke: '#86198f' },
-    'bob':     { fill: '#93c5fd', stroke: '#1e40af' },
-    'narrator':{ fill: '#fde68a', stroke: '#92400e' },
-  };
+  // Auto-rotating high-visibility palette for multi-actor scenarios
+  var AUTO_COLORS = [
+    { fill: '#fb923c', stroke: '#9a3412' },  // coral/orange
+    { fill: '#38bdf8', stroke: '#0c4a6e' },  // sky blue
+    { fill: '#a3e635', stroke: '#365314' },  // lime
+    { fill: '#c084fc', stroke: '#581c87' },  // violet
+    { fill: '#fbbf24', stroke: '#78350f' },  // amber
+    { fill: '#2dd4bf', stroke: '#134e4a' },  // teal
+    { fill: '#fb7185', stroke: '#881337' },  // rose
+    { fill: '#818cf8', stroke: '#3730a3' },  // indigo
+  ];
 
   function getCursorEl(id) {
     if (window.__b2v_cursors[id]) return window.__b2v_cursors[id];
-    var colors = CURSOR_COLORS[id] || CURSOR_COLORS['default'];
+    if (!document.body) return null;  // body not ready yet
+
+    // First actor ('default' or index 0) → classic white cursor
+    // Subsequent actors → pick from rotating palette
+    var colors;
+    // Check for pre-registered custom color first
+    if (window.__b2v_cursorColors[id]) {
+      colors = window.__b2v_cursorColors[id];
+    } else if (id === 'default' || window.__b2v_cursorIndex === 0) {
+      colors = { fill: 'white', stroke: 'black' };
+    } else {
+      colors = AUTO_COLORS[(window.__b2v_cursorIndex - 1) % AUTO_COLORS.length];
+    }
+    window.__b2v_cursorIndex++;
+
     var cursor = document.createElement('div');
     cursor.id = '__b2v_cursor_' + id;
     cursor.style.cssText = [
       'position:fixed', 'top:0', 'left:0', 'z-index:' + (999999 - Object.keys(window.__b2v_cursors).length),
-      'width:20px', 'height:20px', 'pointer-events:none',
-      'transform:translate(-2px,-2px)',
+      'width:32px', 'height:32px', 'pointer-events:none',
+      'transform:translate(-3px,-3px)',
       'transition:transform 40ms ease-in-out',
       'will-change:transform',
+      'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5))',
+      'display:none',
     ].join(';');
     var svgNS = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('width', '20');
-    svg.setAttribute('height', '20');
+    svg.setAttribute('width', '32');
+    svg.setAttribute('height', '32');
     svg.setAttribute('viewBox', '0 0 20 20');
     svg.setAttribute('fill', 'none');
     var pathEl = document.createElementNS(svgNS, 'path');
@@ -219,30 +242,65 @@ export const CURSOR_OVERLAY_SCRIPT = `
     pathEl.setAttribute('stroke-width', '1.2');
     pathEl.setAttribute('stroke-linejoin', 'round');
     svg.appendChild(pathEl);
+
     cursor.appendChild(svg);
     document.body.appendChild(cursor);
     window.__b2v_cursors[id] = cursor;
     return cursor;
   }
 
-  // Legacy single-cursor element for backwards compat
-  getCursorEl('default');
+  // Ripple container for click effects — deferred until body exists
+  var rippleContainer = null;
+  function ensureRippleContainer() {
+    if (rippleContainer && rippleContainer.parentNode) return rippleContainer;
+    if (!document.body) return null;
+    var old = document.getElementById('__b2v_ripple_container');
+    if (old) old.remove();
+    rippleContainer = document.createElement('div');
+    rippleContainer.id = '__b2v_ripple_container';
+    rippleContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999998;pointer-events:none;';
+    document.body.appendChild(rippleContainer);
+    return rippleContainer;
+  }
 
-  var oldRipple = document.getElementById('__b2v_ripple_container');
-  if (oldRipple) oldRipple.remove();
-  const rippleContainer = document.createElement('div');
-  rippleContainer.id = '__b2v_ripple_container';
-  rippleContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999998;pointer-events:none;';
-  document.body.appendChild(rippleContainer);
-
-  document.documentElement.style.scrollBehavior = 'smooth';
+  // Set smooth scrolling on documentElement (available before body)
+  if (document.documentElement) {
+    document.documentElement.style.scrollBehavior = 'smooth';
+  }
 
   window.__b2v_moveCursor = function(x, y, actorId) {
     var el = getCursorEl(actorId || 'default');
-    el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
+    if (!el) return;  // body not ready
+    var wasHidden = el.style.display === 'none';
+    if (wasHidden) {
+      // First appearance: teleport without transition to avoid sliding from corner
+      el.style.transition = 'none';
+      el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
+      el.style.display = '';
+      // Re-enable transition after a frame
+      requestAnimationFrame(function() { el.style.transition = 'transform 40ms ease-in-out'; });
+    } else {
+      el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
+    }
+  };
+
+  // Pre-register a custom color for an actor ID (call before first moveCursor)
+  window.__b2v_setCursorColor = function(actorId, fill, stroke) {
+    window.__b2v_cursorColors[actorId] = { fill: fill, stroke: stroke };
+    // Update existing cursor if already created
+    var existing = window.__b2v_cursors[actorId];
+    if (existing) {
+      var pathEl = existing.querySelector('path');
+      if (pathEl) {
+        pathEl.setAttribute('fill', fill);
+        pathEl.setAttribute('stroke', stroke);
+      }
+    }
   };
 
   window.__b2v_clickEffect = function(x, y) {
+    var rc = ensureRippleContainer();
+    if (!rc) return;
     const ring = document.createElement('div');
     ring.style.cssText = \`
       position: fixed; pointer-events: none;
@@ -253,23 +311,29 @@ export const CURSOR_OVERLAY_SCRIPT = `
       transform: translate(-50%, -50%);
       animation: __b2v_ripple 0.6s ease-out forwards;
     \`;
-    rippleContainer.appendChild(ring);
+    rc.appendChild(ring);
     setTimeout(() => ring.remove(), 700);
   };
 
   if (!document.getElementById('__b2v_style')) {
-    const style = document.createElement('style');
-    style.id = '__b2v_style';
-    style.textContent = \`
-      @keyframes __b2v_ripple {
-        0%   { width: 0;   height: 0;   opacity: 1; }
-        100% { width: 80px; height: 80px; opacity: 0; }
-      }
-    \`;
-    document.head.appendChild(style);
+    var ensureStyle = function() {
+      if (!document.head) return;
+      const style = document.createElement('style');
+      style.id = '__b2v_style';
+      style.textContent = \`
+        @keyframes __b2v_ripple {
+          0%   { width: 0;   height: 0;   opacity: 1; }
+          100% { width: 80px; height: 80px; opacity: 0; }
+        }
+      \`;
+      document.head.appendChild(style);
+    };
+    if (document.head) ensureStyle();
+    else document.addEventListener('DOMContentLoaded', ensureStyle);
   }
 })();
 `;
+
 
 // ---------------------------------------------------------------------------
 //  Init scripts injected into every page
@@ -304,11 +368,17 @@ export const FAST_MODE_INIT_SCRIPT = `
 
 export class Actor {
   page: Page;
-  mode: Mode;
+  /**
+   * Shared mode reference. Mode is a session-level concept — all actors
+   * created from the same session (or sharing the same ref) switch together.
+   * Read via `this.mode` getter.
+   */
+  readonly _modeRef: ModeRef;
   voice?: string;
   speed?: number;
   private cursorX = 0;
   private cursorY = 0;
+  private _cursorInitialized = false;
   protected delays: ActorDelays;
   /** DOM context for selector lookups — page by default, iframe Frame when inside a grid */
   protected _context: Page | Frame;
@@ -327,18 +397,24 @@ export class Actor {
   _scenarioIframeSelector: string | null = null;
   /** Expected viewport size of the scenario iframe (for coordinate conversion) */
   _scenarioViewport: { width: number; height: number } | null = null;
+  /** Custom cursor color (fill + stroke). */
+  private _cursorColor?: { fill: string; stroke: string };
+
+  /** Current execution mode — reads from the shared ModeRef. */
+  get mode(): Mode { return this._modeRef.current; }
 
   constructor(
     page: Page,
-    mode: Mode,
-    opts?: { delays?: Partial<ActorDelays>; voice?: string; speed?: number },
+    modeOrRef: Mode | ModeRef,
+    opts?: { delays?: Partial<ActorDelays>; voice?: string; speed?: number; cursorColor?: { fill: string; stroke: string } },
   ) {
     this.page = page;
     this._context = page;
-    this.mode = mode;
-    this.delays = mergeDelays(mode, opts?.delays);
+    this._modeRef = typeof modeOrRef === "string" ? { current: modeOrRef } : modeOrRef;
+    this.delays = mergeDelays(this.mode, opts?.delays);
     this.voice = opts?.voice;
     this.speed = opts?.speed;
+    this._cursorColor = opts?.cursorColor;
   }
 
   /** Actor identifier used for per-actor cursor overlay. */
@@ -426,6 +502,12 @@ export class Actor {
   async injectCursor() {
     if (this.mode !== "human" || this._embedded) return;
     await this.page.evaluate(CURSOR_OVERLAY_SCRIPT);
+    if (this._cursorColor) {
+      const { fill, stroke } = this._cursorColor;
+      await this.page.evaluate(
+        `window.__b2v_setCursorColor?.('${this.cursorId}', '${fill}', '${stroke}')`,
+      );
+    }
   }
 
   /**
@@ -435,8 +517,20 @@ export class Actor {
   async moveCursorTo(x: number, y: number) {
     if (this.mode !== "human") return;
     await this._refreshIframeBox();
+    const tx = Math.round(x);
+    const ty = Math.round(y);
+    if (!this._cursorInitialized) {
+      // First cursor movement: teleport to target (skip windMouse from 0,0)
+      this._cursorInitialized = true;
+      this.cursorX = tx;
+      this.cursorY = ty;
+      await this.page.mouse.move(tx, ty);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${tx}, ${ty}, '${this.cursorId}')`);
+      this._emitCursorMove(tx, ty);
+      return;
+    }
     const from = { x: this.cursorX, y: this.cursorY };
-    const points = windMouse(from, { x: Math.round(x), y: Math.round(y) });
+    const points = windMouse(from, { x: tx, y: ty });
     for (let i = 0; i < points.length; i++) {
       const p = points[i]!;
       await this.page.mouse.move(p.x, p.y);
@@ -444,8 +538,8 @@ export class Actor {
       this._emitCursorMove(p.x, p.y);
       await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
     }
-    this.cursorX = Math.round(x);
-    this.cursorY = Math.round(y);
+    this.cursorX = tx;
+    this.cursorY = ty;
   }
 
   /**
@@ -497,17 +591,27 @@ export class Actor {
     };
 
     if (this.mode === "human") {
-      const from = { x: this.cursorX, y: this.cursorY };
-      const points = windMouse(from, target);
-
-      for (let i = 0; i < points.length; i++) {
-        const p = points[i]!;
-        await this.page.mouse.move(p.x, p.y);
+      if (!this._cursorInitialized) {
+        // First cursor movement: teleport to target (skip windMouse from 0,0)
+        this._cursorInitialized = true;
+        await this.page.mouse.move(target.x, target.y);
         await this.page.evaluate(
-          `window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`,
+          `window.__b2v_moveCursor?.(${target.x}, ${target.y}, '${this.cursorId}')`,
         );
-        this._emitCursorMove(p.x, p.y);
-        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
+        this._emitCursorMove(target.x, target.y);
+      } else {
+        const from = { x: this.cursorX, y: this.cursorY };
+        const points = windMouse(from, target);
+
+        for (let i = 0; i < points.length; i++) {
+          const p = points[i]!;
+          await this.page.mouse.move(p.x, p.y);
+          await this.page.evaluate(
+            `window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`,
+          );
+          this._emitCursorMove(p.x, p.y);
+          await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
+        }
       }
     }
 

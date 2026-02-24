@@ -15,22 +15,59 @@ import { app, BrowserWindow, WebContentsView, ipcMain } from "electron";
 console.error(`[electron ${elt()}] Electron imports loaded`);
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
 import { execSync } from "node:child_process";
+import net from "node:net";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 console.error(`[electron ${elt()}] All imports done`);
-const CDP_PORT = parseInt(process.env.B2V_CDP_PORT ?? "9334", 10);
+const PREFERRED_CDP_PORT = parseInt(process.env.B2V_CDP_PORT ?? "9334", 10);
+
+// Probe if the preferred port is available; if not, find a free one
+function isPortFree(port: number): boolean {
+  try {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on("error", () => { });
+    // Listen synchronously by using a blocking flag trick
+    let free = true;
+    try {
+      execSync(
+        `node -e "const s=require('net').createServer();s.listen(${port},'127.0.0.1',()=>{s.close();process.exit(0)});s.on('error',()=>process.exit(1))"`,
+        { timeout: 2000, stdio: "ignore" },
+      );
+    } catch { free = false; }
+    return free;
+  } catch { return false; }
+}
+
+function findFreePort(preferred: number): number {
+  if (isPortFree(preferred)) return preferred;
+  for (let port = preferred + 1; port < preferred + 65; port++) {
+    if (isPortFree(port)) return port;
+  }
+  return 0; // let OS pick
+}
+
+let CDP_PORT = PREFERRED_CDP_PORT;
 
 // Kill any stale process holding the CDP port from a previous run
 try {
-  const pids = execSync(`lsof -ti :${CDP_PORT} 2>/dev/null`, { encoding: "utf8" }).trim();
+  const pids = execSync(`lsof -ti :${CDP_PORT} 2>/dev/null`, { encoding: "utf8", timeout: 3000 }).trim();
   for (const pid of pids.split("\n").filter(Boolean)) {
     if (pid.trim() === String(process.pid)) continue;
-    try { execSync(`kill -9 ${pid.trim()} 2>/dev/null`); } catch { }
+    try { execSync(`kill -9 ${pid.trim()} 2>/dev/null`, { timeout: 2000 }); } catch { }
     console.error(`[electron] Killed stale process ${pid.trim()} on CDP port ${CDP_PORT}`);
   }
 } catch { }
+
+// Check if port is actually available now; if not, find a free one
+{
+  const actualPort = findFreePort(CDP_PORT);
+  if (actualPort !== CDP_PORT) {
+    console.error(`[electron] CDP port ${CDP_PORT} is busy, using ${actualPort} instead`);
+    CDP_PORT = actualPort;
+  }
+}
 
 // Enable CDP so Playwright can connect to WebContentsView pages
 app.commandLine.appendSwitch("remote-debugging-port", String(CDP_PORT));
@@ -43,10 +80,22 @@ let scenarioView: WebContentsView | null = null;
 
 const SERVER_PORT = parseInt(process.env.PORT ?? "9521", 10);
 
+const isEmbedded = process.env.B2V_EMBEDDED === "1";
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    // When running embedded inside another player (self-test), hide the window
+    // completely. The UI is served via HTTP and rendered in the parent player's
+    // scenario WebContentsView. On macOS, show:false alone can still flash;
+    // we also use off-screen position and minimal size.
+    width: isEmbedded ? 1 : 1440,
+    height: isEmbedded ? 1 : 900,
+    x: isEmbedded ? -10000 : undefined,
+    y: isEmbedded ? -10000 : undefined,
+    show: !isEmbedded,
+    skipTaskbar: isEmbedded,
+    // Prevent embedded window from appearing in Mission Control / Expose
+    ...(isEmbedded ? { type: "toolbar" as any, focusable: false, hasShadow: false } : {}),
     title: "b2v Player",
     icon: path.join(__dirname, "..", "assets", "icon.png"),
     webPreferences: {
@@ -55,6 +104,15 @@ function createMainWindow() {
       nodeIntegration: false,
     },
   });
+
+  // For embedded instances: aggressively hide the window.
+  // macOS can show windows during loadURL or other async operations.
+  if (isEmbedded) {
+    mainWindow.hide();
+    mainWindow.setVisibleOnAllWorkspaces(false);
+    // Minimize to ensure it never appears in front of the parent
+    mainWindow.minimize();
+  }
 
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" as const }));
 
@@ -187,6 +245,8 @@ app.whenReady().then(async () => {
   // Load a minimal splash page immediately. This unblocks Playwright's
   // firstWindow() which otherwise waits ~15s for the first navigation.
   mainWindow!.loadURL("data:text/html,<html><body style='background:%230d1117;color:%23888;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui'><div>Starting…</div></body></html>");
+  // Re-hide after loadURL for embedded instances (macOS can show the window)
+  if (isEmbedded) mainWindow!.hide();
 
   // Import and start the server in-process (~0.5s)
   console.error(`[electron ${elt()}] Importing server module...`);
@@ -201,6 +261,8 @@ app.whenReady().then(async () => {
   const playerUrl = `http://localhost:${SERVER_PORT}`;
   console.error(`[electron ${elt()}] Loading player UI: ${playerUrl}`);
   mainWindow!.loadURL(playerUrl);
+  // Re-hide after loadURL for embedded instances
+  if (isEmbedded) mainWindow!.hide();
 
   // Verify CDP port is actually listening
   const http = await import("node:http");

@@ -40,6 +40,7 @@ export class Executor<T = any> {
   private session: Session | null = null;
   private ctx: T | null = null;
   private executedUpTo = -1;
+  private _aborted = false;
   private descriptor: ScenarioDescriptor<T>;
   private sessionOpts: Partial<SessionOptions>;
   private projectRoot: string | null;
@@ -145,7 +146,9 @@ export class Executor<T = any> {
           this.session.replayLog.onEvent = this.onReplayEvent;
         }
 
-        if (this.onLiveFrame && this.viewMode === "video") {
+        // Start screencasting for video mode, or when embedded (no ElectronView overlay)
+        const isEmbedded = process.env.B2V_EMBEDDED === "1";
+        if (this.onLiveFrame && (this.viewMode === "video" || isEmbedded)) {
           await this.startScreencast();
         }
       } catch (err) {
@@ -216,7 +219,8 @@ export class Executor<T = any> {
         const paneCount = layout.panes?.length ?? 0;
         console.error(`[executor] Layout changed mid-run: panes=${paneCount} grid=${!!layout.gridConfig}`);
         this.onPaneLayout?.(layout);
-        if (this.onLiveFrame && this.viewMode === "video") {
+        const isEmbedded = process.env.B2V_EMBEDDED === "1";
+        if (this.onLiveFrame && (this.viewMode === "video" || isEmbedded)) {
           await this.stopScreencast();
           await this.startScreencast();
         }
@@ -274,13 +278,14 @@ export class Executor<T = any> {
     onStepComplete?: (result: StepResult) => void,
   ): Promise<StepResult> {
     if (targetIndex < 0 || targetIndex >= this.descriptor.steps.length) {
-      throw new Error(`Step index ${targetIndex} out of range (0-${this.descriptor.steps.length - 1})`);
+      throw new Error(`Step index ${targetIndex} out of range(0 - ${this.descriptor.steps.length - 1})`);
     }
 
     // Ensure session is initialised in the target mode before fast-forwarding
     await this.ensureSession(mode);
 
     for (let i = this.executedUpTo + 1; i < targetIndex; i++) {
+      if (this._aborted) throw new Error("Execution aborted");
       onStepStart?.(i, true);
       const { screenshot, durationMs } = await this.executeStep(this.descriptor.steps[i], i, "fast");
       this.executedUpTo = i;
@@ -288,6 +293,7 @@ export class Executor<T = any> {
     }
 
     if (targetIndex > this.executedUpTo) {
+      if (this._aborted) throw new Error("Execution aborted");
       onStepStart?.(targetIndex, false);
       const { screenshot, durationMs } = await this.executeStep(
         this.descriptor.steps[targetIndex],
@@ -304,12 +310,34 @@ export class Executor<T = any> {
   }
 
   async reset(): Promise<void> {
+    const wasAborted = this._aborted;
+    this._aborted = true;
     await this.stopScreencast();
     if (this.session) {
       try {
-        const result = await this.session.finish();
-        this.lastVideoPath = result.video ?? null;
+        if (wasAborted) {
+          // Force-abort: close pages immediately (interrupts running steps)
+          await this.session.abort();
+        } else {
+          // Graceful finish: compose video, generate subtitles, etc.
+          const result = await this.session.finish();
+          this.lastVideoPath = result.video ?? null;
+        }
       } catch { /* ignore */ }
+      this.session = null;
+      this.ctx = null;
+      this.executedUpTo = -1;
+      this.lastEmittedLayout = "";
+    }
+    this._aborted = false;
+  }
+
+  /** Force-abort the current execution (called by cancel button). */
+  async abort(): Promise<void> {
+    this._aborted = true;
+    await this.stopScreencast();
+    if (this.session) {
+      try { await this.session.abort(); } catch { /* ignore */ }
       this.session = null;
       this.ctx = null;
       this.executedUpTo = -1;

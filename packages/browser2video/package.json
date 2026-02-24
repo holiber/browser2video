@@ -28,7 +28,8 @@
   "exports": {
     ".": "./index.ts",
     "./scenario": "./scenario.ts",
-    "./terminal": "./terminal-ws-server.ts"
+    "./terminal": "./terminal-ws-server.ts",
+    "./injected-actor": "./injected-actor.ts"
   },
   "bin": {
     "b2v": "./bin/b2v.js",

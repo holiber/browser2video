@@ -17,11 +17,12 @@ import type {
   StepRecord,
   TerminalHandle,
   Mode,
+  ModeRef,
   LayoutConfig,
   ActorDelays,
 } from "./types.ts";
 
-import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
+import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, CURSOR_OVERLAY_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
 import { TerminalActor } from "./terminal-actor.ts";
 import { ReplayLog } from "./replay-log.ts";
 import { composeVideos } from "./video-compositor.ts";
@@ -153,6 +154,100 @@ const TERMINAL_PAGE_HTML = `<!DOCTYPE html>
 //  Pane state
 // ---------------------------------------------------------------------------
 
+/**
+ * Records the CDP page screencast to a raw webm file via ffmpeg.
+ * Used for Electron/CDP pages where Playwright's recordVideo is unavailable.
+ */
+class CdpScreencastRecorder {
+  private ffmpegProc: ChildProcess | null = null;
+  private cdpSession: any = null;
+  private stopped = false;
+  private page: Page;
+  private outputPath: string;
+  private ffmpeg: string;
+  private width: number;
+  private height: number;
+
+  constructor(page: Page, outputPath: string, ffmpeg: string, width: number, height: number) {
+    this.page = page;
+    this.outputPath = outputPath;
+    this.ffmpeg = ffmpeg;
+    this.width = width;
+    this.height = height;
+  }
+
+  async start(): Promise<void> {
+    let frameCount = 0;
+
+    // Start ffmpeg to receive JPEG frames on stdin and output raw webm
+    this.ffmpegProc = spawn(this.ffmpeg, [
+      "-y",
+      "-f", "image2pipe",
+      "-vcodec", "mjpeg",       // explicit input codec for JPEG frames
+      "-framerate", "25",
+      "-i", "pipe:0",
+      "-c:v", "libvpx",
+      "-b:v", "2M",
+      "-pix_fmt", "yuv420p",
+      "-auto-alt-ref", "0",
+      this.outputPath,
+    ], { stdio: ["pipe", "pipe", "pipe"] });
+    // Drain stderr but capture last line for errors
+    let lastStderr = "";
+    this.ffmpegProc.stderr?.on("data", (d: Buffer) => { lastStderr = d.toString().trim(); });
+    this.ffmpegProc.on("error", (e) => console.error(`[cdp-recorder] ffmpeg error:`, e.message));
+    this.ffmpegProc.on("close", (code) => {
+      if (code !== 0 && frameCount > 0) {
+        console.error(`[cdp-recorder] ffmpeg exited with code ${code}: ${lastStderr}`);
+      }
+    });
+
+    // Start CDP screencast
+    this.cdpSession = await this.page.context().newCDPSession(this.page);
+    this.cdpSession.on("Page.screencastFrame", (params: any) => {
+      if (this.stopped) return;
+      // Ack the frame so CDP sends the next one
+      this.cdpSession.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => { });
+      // Write JPEG data to ffmpeg stdin
+      const buf = Buffer.from(params.data, "base64");
+      try { this.ffmpegProc?.stdin?.write(buf); } catch { }
+      frameCount++;
+    });
+    await this.cdpSession.send("Page.startScreencast", {
+      format: "jpeg",
+      quality: 80,
+      maxWidth: this.width,
+      maxHeight: this.height,
+      everyNthFrame: 1,
+    });
+
+    // Save frame count for logging on stop
+    (this as any)._frameCount = () => frameCount;
+  }
+
+  async stop(): Promise<void> {
+    if (this.stopped) return;
+    this.stopped = true;
+    try {
+      await this.cdpSession?.send("Page.stopScreencast").catch(() => { });
+      await this.cdpSession?.detach().catch(() => { });
+    } catch { }
+    const fc = (this as any)._frameCount?.() ?? 0;
+    console.error(`[cdp-recorder] Stopped: ${fc} frames captured → ${this.outputPath}`);
+    // Close ffmpeg stdin to signal end-of-input and wait for it to finish
+    return new Promise((resolve) => {
+      if (!this.ffmpegProc) { resolve(); return; }
+      this.ffmpegProc.on("close", () => resolve());
+      try { this.ffmpegProc.stdin?.end(); } catch { }
+      // Timeout: kill ffmpeg if it doesn't finish in 10s
+      setTimeout(() => {
+        try { this.ffmpegProc?.kill("SIGKILL"); } catch { }
+        resolve();
+      }, 10_000);
+    });
+  }
+}
+
 interface PaneState {
   id: string;
   type: "browser" | "terminal";
@@ -162,6 +257,7 @@ interface PaneState {
   actor?: Actor;
   terminal?: TerminalHandle;
   rawVideoPath?: string;
+  cdpRecorder?: CdpScreencastRecorder;
   process?: ChildProcess;
   createdAtMs: number;
 }
@@ -199,7 +295,7 @@ export class Session {
   private lastGridConfig: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string } | null = null;
 
   // Resolved options
-  readonly mode: Mode;
+  readonly _modeRef: ModeRef;
   readonly record: boolean;
   readonly headed: boolean;
   readonly artifactDir: string;
@@ -208,16 +304,34 @@ export class Session {
   private readonly delays?: Partial<ActorDelays>;
   private readonly cdpPort: number;
   private narrationOpts?: NarrationOptions;
+  /** Custom cursor color for Actor instances. */
+  readonly cursorColor?: { fill: string; stroke: string };
   private audioDirector!: AudioDirectorAPI & { getEvents?: () => AudioEvent[] };
   /** Replay log for streaming cursor/click/step events to the player */
   readonly replayLog = new ReplayLog();
 
+  /** Current execution mode — reads from the shared ModeRef. */
+  get mode(): Mode { return this._modeRef.current; }
+
+  /**
+   * Switch execution mode mid-scenario.
+   * All actors created from this session will immediately see the new mode.
+   */
+  setMode(mode: Mode) { this._modeRef.current = mode; }
+
+  /**
+   * Shared mode reference. Pass this to standalone Actors so they
+   * share the session's mode and respond to setMode() calls.
+   */
+  get modeRef(): ModeRef { return this._modeRef; }
+
   constructor(opts: SessionOptions = {}) {
     const underPW = isUnderPlaywright();
 
-    this.mode = opts.mode
+    const resolvedMode: Mode = opts.mode
       ?? (process.env.B2V_MODE as Mode | undefined)
       ?? (underPW ? "fast" : "human");
+    this._modeRef = { current: resolvedMode };
 
     this.record = opts.record
       ?? (process.env.B2V_RECORD !== undefined ? process.env.B2V_RECORD !== "false" : !underPW);
@@ -239,6 +353,11 @@ export class Session {
     if (opts.narration) {
       this.narrationOpts = opts.narration;
     }
+
+    // Cursor color: from opts, env var, or default (white/black)
+    const envCursorColor = process.env.B2V_CURSOR_COLOR;
+    this.cursorColor = opts.cursorColor
+      ?? (envCursorColor ? (() => { const [fill, stroke] = envCursorColor.split(','); return fill && stroke ? { fill, stroke } : undefined; })() : undefined);
   }
 
   /** Launch the browser. Called automatically by createSession(). */
@@ -449,6 +568,11 @@ export class Session {
       page = found;
       context = page.context();
       console.error(`[session] Found Electron-managed page via CDP: ${page.url()}`);
+
+      // Start CDP screencast recording for Electron pages
+      if (this.record) {
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+      }
     } else {
       const ctxOpts: {
         viewport: { width: number; height: number };
@@ -471,15 +595,26 @@ export class Session {
       // Set dark background on the blank page immediately to avoid white flash in recordings
       await page.evaluate(() => { document.documentElement.style.background = "#1a1a2e"; });
 
+      // Init scripts — MUST be registered BEFORE navigation so they run on the initial page load.
+      // addInitScript only fires on subsequent navigations if added after goto.
+      if (this.mode === "human") {
+        await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+        // Register cursor overlay as init script so it persists across navigations
+        // (page.evaluate is lost on navigation; framenavigated re-inject races with page load)
+        await page.addInitScript(CURSOR_OVERLAY_SCRIPT);
+        // Pre-register custom cursor color if set (must run after CURSOR_OVERLAY_SCRIPT)
+        if (this.cursorColor) {
+          const { fill, stroke } = this.cursorColor;
+          await page.addInitScript(`window.__b2v_setCursorColor?.('default', '${fill}', '${stroke}')`);
+        }
+      }
+      if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
+
       // Navigate if URL provided
       if (opts.url) {
         await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30000 });
       }
     }
-
-    // Init scripts
-    if (this.mode === "human") await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
-    if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
 
     // Console/error listeners
     page.on("console", (msg) => {
@@ -489,14 +624,14 @@ export class Session {
       console.error(`  [${label} Error] ${(err as Error).message}`);
     });
 
-    const actor = new Actor(page, this.mode, { delays: this.delays });
+    const actor = new Actor(page, this._modeRef, { delays: this.delays, cursorColor: this.cursorColor });
     this._wireReplayEvents(actor);
 
-    // Auto-inject cursor overlay after every navigation (human mode)
+    // Also keep framenavigated fallback for cursor injection (belt & suspenders)
     if (this.mode === "human") {
       page.on("framenavigated", (frame) => {
         if (frame === page.mainFrame()) {
-          actor.injectCursor().catch(() => {});
+          actor.injectCursor().catch(() => { });
         }
       });
     }
@@ -504,6 +639,13 @@ export class Session {
     const pane: PaneState = { id, type: "browser", label, context, page, actor, rawVideoPath, createdAtMs: Date.now() };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
+
+    // Start CDP screencast recorder for Electron pages (Playwright's recordVideo is unavailable)
+    if (this.record && rawVideoPath && this._cdpEndpoint) {
+      const recorder = new CdpScreencastRecorder(page, rawVideoPath, this.ffmpeg, vpW, vpH);
+      await recorder.start();
+      pane.cdpRecorder = recorder;
+    }
 
     if (this.record) {
       console.error(`  Recording started: ${label} (${vpW}x${vpH})`);
@@ -592,7 +734,7 @@ export class Session {
       const pushOutput = (data: Buffer) => {
         const text = String(data);
         fs.appendFileSync(logPath, text, "utf-8");
-        page.evaluate((t: string) => (window as any).__b2v_appendOutput?.(t), text).catch(() => {});
+        page.evaluate((t: string) => (window as any).__b2v_appendOutput?.(t), text).catch(() => { });
       };
       proc.stdout?.on("data", pushOutput);
       proc.stderr?.on("data", pushOutput);
@@ -610,11 +752,11 @@ export class Session {
               ? pickMs(delays.keyDelayMs as [number, number])
               : pickMs(DEFAULT_DELAYS.human.keyDelayMs);
             for (const ch of text) {
-              page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), ch).catch(() => {});
+              page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), ch).catch(() => { });
               await sleep(keyDelay);
             }
             // Show newline visually
-            page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), "\n").catch(() => {});
+            page.evaluate((c: string) => (window as any).__b2v_appendOutput?.(c), "\n").catch(() => { });
             await sleep(50);
           }
 
@@ -627,7 +769,7 @@ export class Session {
 
       await sleep(300); // let process start
     } else {
-      termHandle = { send: async () => {}, page };
+      termHandle = { send: async () => { }, page };
     }
 
     const pane: PaneState = {
@@ -679,7 +821,7 @@ export class Session {
 
     // Lazy-start terminal WS server (singleton)
     if (!this.terminalServer) {
-      this.terminalServer = await startTerminalWsServer();
+      this.terminalServer = await startTerminalWsServer(0, this.artifactDir);
       this.cleanupFns.push(() => this.terminalServer!.close());
     }
 
@@ -763,7 +905,7 @@ export class Session {
 
     // Lazy-start terminal WS server (singleton)
     if (!this.terminalServer) {
-      this.terminalServer = await startTerminalWsServer();
+      this.terminalServer = await startTerminalWsServer(0, this.artifactDir);
       this.cleanupFns.push(() => this.terminalServer!.close());
     }
 
@@ -869,17 +1011,25 @@ export class Session {
       }
 
       if (pc.type === "terminal") {
-        // Wait for xterm content — jabterm always spawns a shell, so wait for prompt
+        // Command panes (mc, htop, etc.) render TUI — wait for any non-empty content.
+        // Shell panes (no command) show a prompt — wait for prompt characters.
+        const isCommandPane = !!pc.cmd;
         await page.waitForFunction(
-          (sel: string) => {
+          ([sel, waitForPrompt]: [string, boolean]) => {
             const root = document.querySelector(sel);
             if (!root) return false;
+            // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
+            const tree = root.querySelector(".xterm-accessibility-tree");
             const rows = root.querySelector(".xterm-rows");
-            if (!rows) return false;
-            const text = rows.textContent ?? "";
-            return text.includes("$") || text.includes("#") || text.includes("%");
+            if (!tree && !rows) return false;
+            const text = (tree ?? rows as any)?.textContent ?? "";
+            if (waitForPrompt) {
+              return text.includes("$") || text.includes("#") || text.includes("%");
+            }
+            // For command panes, any non-empty content means the TUI has rendered
+            return text.trim().length > 0;
           },
-          testIdSel,
+          [testIdSel, !isCommandPane] as [string, boolean],
           { timeout: 30000 },
         );
       } else {
@@ -928,22 +1078,26 @@ export class Session {
         iframeName = pc.testId;
       }
 
-      const actor = new TerminalActor(page, this.mode, selector, {
+      const actor = new TerminalActor(page, this._modeRef, selector, {
         delays: this.delays,
         frame: iframeFrame,
         iframeName,
       });
+      // Assign unique cursor identity from pane label — each actor gets its own colored cursor
+      actor.cursorId = (pc.title ?? pc.testId ?? `actor-${i}`).toLowerCase().replace(/\s+/g, '-');
       this._wireReplayEvents(actor);
       actors.push(actor);
+    }
 
-      if (this.mode === "human" && i === 0) {
-        page.on("framenavigated", (f) => {
-          if (f === page.mainFrame()) {
-            actors[0].injectCursor().catch(() => {});
-          }
-        });
-        await actors[0].injectCursor();
-      }
+    // Inject cursor overlay once for all actors — cursors are lazily created
+    // on first moveCursor call, so each actor's cursor appears when it starts interacting
+    if (this.mode === "human" && actors.length > 0) {
+      page.on("framenavigated", (f) => {
+        if (f === page.mainFrame()) {
+          actors[0].injectCursor().catch(() => { });
+        }
+      });
+      await actors[0].injectCursor();
     }
 
     // Auto-execute commands for terminal panes that have a command specified.
@@ -1105,6 +1259,49 @@ export class Session {
     this.steps.push({ index: idx, caption, startMs, endMs });
   };
 
+  // ---------------------------------------------------------------------------
+  //  Open/close step API (for Playwright fixture integration)
+  // ---------------------------------------------------------------------------
+
+  private _currentStepCaption: string | null = null;
+  private _currentStepStartMs: number = 0;
+
+  /**
+   * Begin a step boundary. Call `endStep()` when the step is done.
+   * This is the "open" half of `step()` — designed for Playwright fixtures
+   * where the test body runs between `beginStep` and `endStep`.
+   *
+   * ```ts
+   * session.beginStep("Create Todo");
+   * // ... test body ...
+   * await session.endStep();
+   * ```
+   */
+  beginStep(caption: string, narration?: string): void {
+    this.stepIndex++;
+    this._currentStepCaption = caption;
+    this._currentStepStartMs = Date.now() - this.startTime;
+    console.error(`  [Step ${this.stepIndex}] ${caption}`);
+    this.replayLog.emit({ type: "stepStart", index: this.stepIndex, caption, ts: this._currentStepStartMs });
+  }
+
+  /**
+   * End the current step boundary started by `beginStep()`.
+   * Emits `stepEnd`, records step metadata, and adds a breathing pause.
+   */
+  async endStep(): Promise<void> {
+    if (!this._currentStepCaption) return;
+    const endMs = Date.now() - this.startTime;
+    this.replayLog.emit({ type: "stepEnd", index: this.stepIndex, ts: endMs });
+    this.steps.push({ index: this.stepIndex, caption: this._currentStepCaption, startMs: this._currentStepStartMs, endMs });
+
+    // Breathing pause after each step (human mode)
+    const firstActor = [...this.panes.values()].find((p) => p.actor)?.actor;
+    if (firstActor) await firstActor.breathe();
+
+    this._currentStepCaption = null;
+  }
+
   /** Access the audio director for narration/sound effects. */
   get audio(): AudioDirectorAPI {
     return this.audioDirector;
@@ -1141,7 +1338,11 @@ export class Session {
       gridConfig: this.lastGridConfig ?? undefined,
       pageUrl,
       viewport: this.lastGridConfig?.viewport ?? { width: 1280, height: 720 },
-      electronView: !!(this._cdpEndpoint && this._onRequestPage),
+      // electronView uses Electron's WebContentsView overlay, which only works
+      // when the player IS the native Electron window. In embedded mode
+      // (B2V_EMBEDDED=1), the player is viewed through a browser iframe, so
+      // the WebContentsView would render on the hidden inner window = black screen.
+      electronView: !!(this._cdpEndpoint && this._onRequestPage) && process.env.B2V_EMBEDDED !== "1",
     };
   }
 
@@ -1189,6 +1390,14 @@ export class Session {
       // Small buffer for the screencast pipeline to capture the flushed frame
       // (Playwright records at ~25fps = 40ms/frame; 80ms covers 2 intervals)
       await sleep(80);
+    }
+
+    // Stop CDP screencast recorders (Electron mode) — must complete before
+    // compositing so the raw webm files are flushed and closed.
+    for (const pane of this.panes.values()) {
+      if (pane.cdpRecorder) {
+        try { await pane.cdpRecorder.stop(); } catch { }
+      }
     }
 
     // Close pages to flush screencast recordings (skip for CDP-connected
@@ -1263,6 +1472,7 @@ export class Session {
             try {
               execFileSync(this.ffmpeg, [
                 "-y", "-i", rawPaths[0],
+                "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                 videoPath,
@@ -1336,6 +1546,48 @@ export class Session {
       steps: this.steps,
       audioEvents: audioEvents.length > 0 ? audioEvents : undefined,
     };
+  }
+
+  /**
+   * Force-abort the session: close all pages and browser immediately.
+   * Unlike finish(), this skips video composition and renders nothing.
+   * Used when the user presses Stop during execution.
+   */
+  async abort(): Promise<void> {
+    if (this.finished) return;
+    this.finished = true;
+
+    // Force-close all pages — this interrupts any running Playwright operations
+    for (const pane of this.panes.values()) {
+      try { await pane.page.close(); } catch { /* already closed */ }
+    }
+
+    // Close browser contexts
+    if (this._ownsBrowser) {
+      for (const pane of this.panes.values()) {
+        try { await pane.context.close(); } catch { /* ignore */ }
+      }
+    }
+
+    // Disconnect/close browser
+    if (this.browser) {
+      try { await this.browser.close(); } catch { /* ignore */ }
+    }
+
+    // Kill terminal processes
+    for (const pane of this.panes.values()) {
+      if (pane.process) {
+        try { pane.process.kill("SIGTERM"); } catch { /* ignore */ }
+      }
+    }
+
+    // Run registered cleanup functions
+    for (const fn of this.cleanupFns) {
+      try { await fn(); } catch { /* ignore */ }
+    }
+    this.cleanupFns = [];
+
+    console.error("  Session aborted by user.");
   }
 }
 

@@ -153,10 +153,11 @@ export function composeVideos(opts: ComposeOptions): void {
 
 /** Re-encode a single WebM to MP4 at constant 60fps for smooth playback. */
 function reencodeToMp4(inputPath: string, outputPath: string, ffmpeg: string): void {
+  // pad filter: ensure even dimensions for libx264 (CDP screencast can produce odd sizes)
   const args = [
     "-y",
     "-i", inputPath,
-    "-vf", "fps=60,format=yuv420p",
+    "-vf", "fps=60,pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
     "-r", "60",
     "-fps_mode", "cfr",
     "-c:v", "libx264",

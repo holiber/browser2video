@@ -19,6 +19,9 @@ const PLAYER_DIR = path.resolve(import.meta.dirname, "..");
 const TEST_PORT = 9541;
 const TEST_CDP_PORT = 9345;
 
+/** xterm v6 uses .xterm-accessibility-tree, v5 uses .xterm-rows */
+const XTERM_TEXT_SELECTOR = ".xterm-accessibility-tree, .xterm-rows";
+
 let electronApp: ElectronApplication;
 let page: Page;
 
@@ -70,7 +73,7 @@ test.afterAll(async () => {
             await new Promise<void>((resolve) => {
                 proc.on("exit", () => resolve());
                 setTimeout(() => {
-                    try { process.kill(pid, "SIGKILL"); } catch {}
+                    try { process.kill(pid, "SIGKILL"); } catch { }
                     resolve();
                 }, 5_000);
             });
@@ -211,7 +214,7 @@ test("echo command works in terminal", async () => {
     const frame = terminalIframe.contentFrame();
 
     // Wait for xterm to render
-    await frame.locator(".xterm-rows").waitFor({ state: "visible", timeout: 30_000 });
+    await frame.locator(".xterm-accessibility-tree, .xterm-rows").waitFor({ state: "visible", timeout: 30_000 });
 
     // Click on the terminal to focus it
     await frame.locator("[data-testid='jabterm-container']").click();
@@ -222,7 +225,7 @@ test("echo command works in terminal", async () => {
     await page.keyboard.press("Enter");
 
     // Wait for the echo output to appear
-    await expect(frame.locator(".xterm-rows")).toContainText(sentinel, { timeout: 15_000 });
+    await expect(frame.locator(".xterm-accessibility-tree, .xterm-rows")).toContainText(sentinel, { timeout: 15_000 });
 });
 
 test("htop command works", async () => {
@@ -243,7 +246,7 @@ test("htop command works", async () => {
     await page.waitForTimeout(2000);
 
     // htop shows CPU/memory info — check for some typical content
-    const content = await frame.locator(".xterm-rows").textContent({ timeout: 10_000 });
+    const content = await frame.locator(XTERM_TEXT_SELECTOR).textContent({ timeout: 10_000 });
     // htop should show some process information — at minimum non-empty output
     expect((content ?? "").length).toBeGreaterThan(10);
 
@@ -268,7 +271,7 @@ test("open another terminal tab and type ls", async () => {
     const secondFrame = terminalIframes.nth(1).contentFrame();
 
     // Wait for xterm to render in the new tab
-    await secondFrame.locator(".xterm-rows").waitFor({ state: "visible", timeout: 30_000 });
+    await secondFrame.locator(XTERM_TEXT_SELECTOR).waitFor({ state: "visible", timeout: 30_000 });
 
     // Focus and type ls
     await secondFrame.locator("[data-testid='jabterm-container']").click();
@@ -277,7 +280,7 @@ test("open another terminal tab and type ls", async () => {
 
     // Wait for ls output
     await page.waitForTimeout(2000);
-    const content = await secondFrame.locator(".xterm-rows").textContent({ timeout: 10_000 });
+    const content = await secondFrame.locator(XTERM_TEXT_SELECTOR).textContent({ timeout: 10_000 });
     expect((content ?? "").length).toBeGreaterThan(0);
 });
 
@@ -292,7 +295,7 @@ test("switch between terminal tabs and verify text persists", async () => {
 
     // Get current active tab's content (should be the "ls" terminal)
     const secondFrame = terminalIframes.nth(1).contentFrame();
-    const lsContent = await secondFrame.locator(".xterm-rows").textContent({ timeout: 5_000 });
+    const lsContent = await secondFrame.locator(XTERM_TEXT_SELECTOR).textContent({ timeout: 5_000 });
     expect(lsContent ?? "").toContain("ls");
 
     // Click the first terminal's tab header to switch back
@@ -320,7 +323,7 @@ test("switch between terminal tabs and verify text persists", async () => {
     // After switching, the first terminal should now be visible
     // The echo sentinel text should still be present in the first terminal
     const firstFrame = terminalIframes.first().contentFrame();
-    const echoContent = await firstFrame.locator(".xterm-rows").textContent({ timeout: 10_000 });
+    const echoContent = await firstFrame.locator(XTERM_TEXT_SELECTOR).textContent({ timeout: 10_000 });
     // The echo command output should still be there
     expect((echoContent ?? "").length).toBeGreaterThan(10);
 });

@@ -52,6 +52,7 @@ export function StepGraph({
             ref={isActive ? activeRef : undefined}
             onClick={() => onStepClick(i)}
             className={`cursor-pointer rounded border transition-all ${stateStyles[state]} ${isActive ? "shadow-md shadow-blue-500/20" : "hover:border-zinc-500"}`}
+            data-testid={`step-card-${i}`}
           >
             {/* Widescreen 16:9 thumbnail with overlaid text */}
             <div className="relative" style={{ aspectRatio: "16 / 9" }}>

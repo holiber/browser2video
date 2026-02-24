@@ -66,7 +66,7 @@ Tier 1 - MVP
 
 The goal of this tier is to have a good looking compact player UI whit e2e test that checks:
 
-- when user launches player it started with 1x1 layout with a + button, that allows to select what shoul be in this pane - browser or terminal
+- when user launches player it started with 1x1 layout with a + button, that allows to select what should be in this pane - browser or terminal
 - user clicks browser, and see a prompt with url and confirmation button.
 - user also see a checkbox "open in dedicated browser window instead iframe (TODO)"
 - by default the user opens the github page of this project

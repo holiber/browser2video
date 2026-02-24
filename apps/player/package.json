@@ -14,7 +14,7 @@
     "@xterm/xterm": "^6.0.0",
     "browser2video": "workspace:*",
     "dockview": "^5.0.0",
-    "jabterm": "github:holiber/jabterm#v0.1.3",
+    "jabterm": "github:holiber/jabterm#v0.1.4",
     "lucide-react": "^0.469.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

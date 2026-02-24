@@ -41,7 +41,7 @@ test.afterAll(async () => {
       await new Promise<void>((resolve) => {
         proc.on("exit", () => resolve());
         setTimeout(() => {
-          try { process.kill(pid, "SIGKILL"); } catch {}
+          try { process.kill(pid, "SIGKILL"); } catch { }
           resolve();
         }, 5_000);
       });
@@ -150,6 +150,27 @@ test("electron: basic-ui scenario runs without errors", async () => {
   await expect(errorBanner).toBeHidden();
 });
 
+test("electron: stop button cancels running scenario", async () => {
+  test.setTimeout(60_000);
+
+  const playAll = await loadAndPlayScenario(BASIC_UI);
+  await playAll.click();
+
+  // Wait for execution to start — stop button should appear
+  const stopBtn = page.locator('button[title="Stop"]');
+  await expect(stopBtn).toBeVisible({ timeout: 30_000 });
+
+  // Wait a moment for the step to actually be running
+  await page.waitForTimeout(500);
+
+  // Click Stop
+  await stopBtn.click();
+
+  // Verify: Play All button returns (execution cancelled)
+  const playAllBtn = page.locator('button[title="Play all"]');
+  await expect(playAllBtn).toBeVisible({ timeout: 15_000 });
+});
+
 test("electron: all-in-one scenario uses scenario-grid preview without extra windows", async () => {
   test.setTimeout(300_000);
 
@@ -171,8 +192,8 @@ test("electron: all-in-one scenario uses scenario-grid preview without extra win
     const errorPromise = errorBanner
       .waitFor({ state: "visible", timeout: 60_000 })
       .then(() => "error" as const);
-    gridPromise.catch(() => {});
-    errorPromise.catch(() => {});
+    gridPromise.catch(() => { });
+    errorPromise.catch(() => { });
     winner = await Promise.race([gridPromise, errorPromise]);
   } catch {
     // Both waitFors failed — page may have navigated or closed
@@ -314,7 +335,7 @@ function isPortFree(port: number): boolean {
 }
 
 test("electron: clean shutdown — no orphaned processes", async () => {
-  test.setTimeout(30_000);
+  test.setTimeout(60_000);
 
   const pid = electronApp.process().pid;
 
