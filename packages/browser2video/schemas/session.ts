@@ -18,6 +18,10 @@ export const SessionOptionsSchema = z.object({
   displaySize: z.string().optional().describe("Linux display size, e.g. '2560x720'."),
   narration: NarrationOptionsSchema.optional().describe("TTS narration options."),
   cdpPort: z.number().int().optional().describe("Chrome DevTools Protocol port for external tool connections (0 = disabled). Default: B2V_CDP_PORT env or 0."),
+  cursorColor: z.object({
+    fill: z.string(),
+    stroke: z.string(),
+  }).optional().describe("Custom cursor color for Actor instances. Default: white/black."),
 });
 
 export type SessionOptions = z.infer<typeof SessionOptionsSchema>;

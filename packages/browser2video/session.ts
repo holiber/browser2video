@@ -304,6 +304,8 @@ export class Session {
   private readonly delays?: Partial<ActorDelays>;
   private readonly cdpPort: number;
   private narrationOpts?: NarrationOptions;
+  /** Custom cursor color for Actor instances. */
+  readonly cursorColor?: { fill: string; stroke: string };
   private audioDirector!: AudioDirectorAPI & { getEvents?: () => AudioEvent[] };
   /** Replay log for streaming cursor/click/step events to the player */
   readonly replayLog = new ReplayLog();
@@ -351,6 +353,11 @@ export class Session {
     if (opts.narration) {
       this.narrationOpts = opts.narration;
     }
+
+    // Cursor color: from opts, env var, or default (white/black)
+    const envCursorColor = process.env.B2V_CURSOR_COLOR;
+    this.cursorColor = opts.cursorColor
+      ?? (envCursorColor ? (() => { const [fill, stroke] = envCursorColor.split(','); return fill && stroke ? { fill, stroke } : undefined; })() : undefined);
   }
 
   /** Launch the browser. Called automatically by createSession(). */
@@ -600,6 +607,11 @@ export class Session {
       // Register cursor overlay as init script so it persists across navigations
       // (page.evaluate is lost on navigation; framenavigated re-inject races with page load)
       await page.addInitScript(CURSOR_OVERLAY_SCRIPT);
+      // Pre-register custom cursor color if set (must run after CURSOR_OVERLAY_SCRIPT)
+      if (this.cursorColor) {
+        const { fill, stroke } = this.cursorColor;
+        await page.addInitScript(`window.__b2v_setCursorColor?.('default', '${fill}', '${stroke}')`);
+      }
     }
     if (this.mode === "fast") await page.addInitScript(FAST_MODE_INIT_SCRIPT);
 
@@ -611,7 +623,7 @@ export class Session {
       console.error(`  [${label} Error] ${(err as Error).message}`);
     });
 
-    const actor = new Actor(page, this._modeRef, { delays: this.delays });
+    const actor = new Actor(page, this._modeRef, { delays: this.delays, cursorColor: this.cursorColor });
     this._wireReplayEvents(actor);
 
     // Also keep framenavigated fallback for cursor injection (belt & suspenders)

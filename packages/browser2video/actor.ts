@@ -396,6 +396,8 @@ export class Actor {
   _scenarioIframeSelector: string | null = null;
   /** Expected viewport size of the scenario iframe (for coordinate conversion) */
   _scenarioViewport: { width: number; height: number } | null = null;
+  /** Custom cursor color (fill + stroke). */
+  private _cursorColor?: { fill: string; stroke: string };
 
   /** Current execution mode — reads from the shared ModeRef. */
   get mode(): Mode { return this._modeRef.current; }
@@ -403,7 +405,7 @@ export class Actor {
   constructor(
     page: Page,
     modeOrRef: Mode | ModeRef,
-    opts?: { delays?: Partial<ActorDelays>; voice?: string; speed?: number },
+    opts?: { delays?: Partial<ActorDelays>; voice?: string; speed?: number; cursorColor?: { fill: string; stroke: string } },
   ) {
     this.page = page;
     this._context = page;
@@ -411,6 +413,7 @@ export class Actor {
     this.delays = mergeDelays(this.mode, opts?.delays);
     this.voice = opts?.voice;
     this.speed = opts?.speed;
+    this._cursorColor = opts?.cursorColor;
   }
 
   /** Actor identifier used for per-actor cursor overlay. */
@@ -498,6 +501,12 @@ export class Actor {
   async injectCursor() {
     if (this.mode !== "human" || this._embedded) return;
     await this.page.evaluate(CURSOR_OVERLAY_SCRIPT);
+    if (this._cursorColor) {
+      const { fill, stroke } = this._cursorColor;
+      await this.page.evaluate(
+        `window.__b2v_setCursorColor?.('${this.cursorId}', '${fill}', '${stroke}')`,
+      );
+    }
   }
 
   /**

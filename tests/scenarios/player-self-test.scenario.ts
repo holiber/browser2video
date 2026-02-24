@@ -113,6 +113,7 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
                     PORT: String(INNER_PORT),
                     B2V_CDP_PORT: String(INNER_CDP_PORT),
                     B2V_EMBEDDED: "1",
+                    B2V_CURSOR_COLOR: "#fb923c,#9a3412",  // orange cursor for scenario Actor
                 },
                 stdio: ["ignore", "pipe", "pipe"],
             },
@@ -172,10 +173,10 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         });
 
         // Create InjectedActor — shares session's mode ref
-        // Coral cursor to distinguish from scenario's white default cursor
+        // Pink cursor to distinguish from scenario's orange cursor
         const injected = new InjectedActor(page, "tester", {
             mode: session.modeRef,
-            cursorColor: { fill: "#fb923c", stroke: "#9a3412" },
+            cursorColor: { fill: "#f472b6", stroke: "#9d174d" },  // pink
         });
         await injected.init();
 
