@@ -176,7 +176,7 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         // Pink cursor to distinguish from scenario's orange cursor
         const injected = new InjectedActor(page, "tester", {
             mode: session.modeRef,
-            cursorColor: { fill: "#f472b6", stroke: "#9d174d" },  // pink
+            cursorColor: { fill: "#ff69b4", stroke: "#c2185b" },  // hot pink
         });
         await injected.init();
 

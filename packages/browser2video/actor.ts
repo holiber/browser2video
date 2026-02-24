@@ -222,16 +222,17 @@ export const CURSOR_OVERLAY_SCRIPT = `
     cursor.id = '__b2v_cursor_' + id;
     cursor.style.cssText = [
       'position:fixed', 'top:0', 'left:0', 'z-index:' + (999999 - Object.keys(window.__b2v_cursors).length),
-      'width:20px', 'height:20px', 'pointer-events:none',
-      'transform:translate(-2px,-2px)',
+      'width:32px', 'height:32px', 'pointer-events:none',
+      'transform:translate(-3px,-3px)',
       'transition:transform 40ms ease-in-out',
       'will-change:transform',
+      'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5))',
       'display:none',
     ].join(';');
     var svgNS = 'http://www.w3.org/2000/svg';
     var svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('width', '20');
-    svg.setAttribute('height', '20');
+    svg.setAttribute('width', '32');
+    svg.setAttribute('height', '32');
     svg.setAttribute('viewBox', '0 0 20 20');
     svg.setAttribute('fill', 'none');
     var pathEl = document.createElementNS(svgNS, 'path');
