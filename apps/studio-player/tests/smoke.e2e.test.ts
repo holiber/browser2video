@@ -42,7 +42,7 @@ test("player opens and closes without zombie processes", async () => {
     // Wait for the real page to load (splash page has no title)
     await page.waitForFunction(() => document.title.length > 0, { timeout: 30_000 });
     const title = await page.title();
-    expect(title.toLowerCase()).toContain("b2v");
+    expect(title.toLowerCase()).toContain("studio");
 
     // Close via SIGTERM (exercises the graceful shutdown path)
     const pid = electronApp.process().pid;

@@ -538,11 +538,13 @@ export class Session {
       // a WebContentsView and then locate it via CDP.
       const targetUrl = opts.url ?? "about:blank";
 
-      // Snapshot existing page URLs before creating the new view
-      const existingUrls = new Set<string>();
+      // Snapshot existing page REFERENCES before creating the new view.
+      // Using URLs doesn't work when the same URL is reused across sessions
+      // (e.g., the same demo app URL for a new WebContentsView).
+      const existingPages = new Set<Page>();
       for (const ctx of this.browser!.contexts()) {
         for (const p of ctx.pages()) {
-          existingUrls.add(p.url());
+          existingPages.add(p);
         }
       }
 
@@ -553,7 +555,7 @@ export class Session {
       for (let attempt = 0; attempt < 60; attempt++) {
         for (const ctx of this.browser!.contexts()) {
           for (const p of ctx.pages()) {
-            if (!existingUrls.has(p.url())) {
+            if (!existingPages.has(p) && !p.isClosed()) {
               found = p;
               break;
             }
@@ -568,6 +570,34 @@ export class Session {
       page = found;
       context = page.context();
       console.error(`[session] Found Electron-managed page via CDP: ${page.url()}`);
+
+      // Sync Playwright's viewport tracking with the requested viewport.
+      // Electron WebContentsViews may start at 0×0 and Playwright can keep
+      // stale metrics, causing locator actions to fail as "outside viewport".
+      try {
+        await page.setViewportSize({ width: vpW, height: vpH });
+      } catch { /* best-effort */ }
+
+      // Init scripts for Electron-managed pages (page is already navigated by Electron,
+      // so we must use evaluate() for the current page AND addInitScript for future navs)
+      if (this.mode === "human") {
+        await page.evaluate(HIDE_CURSOR_INIT_SCRIPT).catch((e: any) => console.error("[session] HIDE_CURSOR eval failed:", e.message));
+        await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+        await page.evaluate(CURSOR_OVERLAY_SCRIPT).catch((e: any) => console.error("[session] CURSOR_OVERLAY eval failed:", e.message));
+        await page.addInitScript(CURSOR_OVERLAY_SCRIPT);
+        if (this.cursorColor) {
+          const { fill, stroke } = this.cursorColor;
+          const colorScript = `window.__b2v_setCursorColor?.('default', '${fill}', '${stroke}')`;
+          await page.evaluate(colorScript).catch((e: any) => console.error("[session] cursor color eval failed:", e.message));
+          await page.addInitScript(colorScript);
+          console.error(`[session] Cursor color registered: fill=${fill} stroke=${stroke}`);
+        }
+        console.error("[session] Electron cursor overlay injected successfully");
+      }
+      if (this.mode === "fast") {
+        await page.evaluate(FAST_MODE_INIT_SCRIPT).catch((e: any) => console.error("[session] FAST_MODE eval failed:", e.message));
+        await page.addInitScript(FAST_MODE_INIT_SCRIPT);
+      }
 
       // Start CDP screencast recording for Electron pages
       if (this.record) {
@@ -692,6 +722,11 @@ export class Session {
       if (!found) throw new Error("Could not find terminal page via CDP");
       page = found;
       context = page.context();
+
+      // Best-effort: keep viewport metrics consistent for locator operations.
+      try {
+        await page.setViewportSize({ width: vpW, height: vpH });
+      } catch { /* best-effort */ }
     } else {
       const ctxOpts: {
         viewport: { width: number; height: number };

@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { usePlayer } from "./hooks/use-player";
 import { StepGraph } from "./components/step-graph";
 import { Preview } from "./components/preview";
@@ -33,6 +34,30 @@ export default function App() {
   const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
   const activeCaption = activeStep >= 0 && scenario ? scenario.steps[activeStep]?.caption : undefined;
 
+  const autoRunInitRef = useRef(false);
+  const autoRunRef = useRef<{ file: string; autoplay: boolean } | null>(null);
+  if (!autoRunInitRef.current) {
+    autoRunInitRef.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const file = params.get("scenario") ?? params.get("file");
+    if (file) {
+      const autoplay = params.get("autoplay") !== "0" && params.get("play") !== "0";
+      autoRunRef.current = { file, autoplay };
+    }
+  }
+
+  useEffect(() => {
+    const auto = autoRunRef.current;
+    if (!auto) return;
+    if (!connected) return;
+
+    loadScenario(auto.file);
+    if (auto.autoplay) runAll();
+
+    // Only do this once per app launch.
+    autoRunRef.current = null;
+  }, [connected, loadScenario, runAll]);
+
   return (
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-200">
       <ScenarioPicker
@@ -67,7 +92,7 @@ export default function App() {
           ) : (
             <div className="h-full flex items-center justify-center text-zinc-600 px-6">
               <div className="text-center">
-                <h1 className="text-xl font-semibold text-zinc-400 mb-3">b2v Player Studio</h1>
+                <h1 className="text-xl font-semibold text-zinc-400 mb-3">Studio Player</h1>
                 <p className="text-xs leading-relaxed">
                   Select a scenario to record and replay.
                   <br />

@@ -27,9 +27,12 @@
     "run:console-logs": "node tests/scenarios/console-logs.test.ts",
     "gen:docs": "node scripts/gen-docs.ts",
     "gen:video-page": "node scripts/gen-video-page.ts",
-    "player": "pnpm -C apps/player dev",
-    "self-test": "pnpm -C apps/player exec playwright test player-self-test",
-    "self-test:human": "B2V_HUMAN=1 pnpm -C apps/player exec playwright test player-self-test --headed"
+    "studio-player": "pnpm -C apps/studio-player dev",
+    "player": "pnpm -C apps/studio-player dev",
+    "self-test": "pnpm -C apps/studio-player exec playwright test player-self-test",
+    "self-test:human": "B2V_HUMAN=1 pnpm -C apps/studio-player exec playwright test player-self-test --headed",
+    "cursor-proof": "pnpm -C apps/studio-player exec playwright test cursor-proof",
+    "cursor-proof:human": "B2V_HUMAN=1 pnpm -C apps/studio-player exec playwright test cursor-proof --headed"
   },
   "devDependencies": {
     "@playwright/test": "^1.50.0",

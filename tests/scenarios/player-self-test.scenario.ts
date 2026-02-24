@@ -21,7 +21,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { defineScenario, type Actor, type Page } from "browser2video";
 import { InjectedActor } from "browser2video/injected-actor";
 
-const PLAYER_DIR = path.resolve(import.meta.dirname, "../../apps/player");
+const PLAYER_DIR = path.resolve(import.meta.dirname, "../../apps/studio-player");
 const INNER_PORT = 9591;
 const INNER_CDP_PORT = 9395;
 const DEMO_VITE_PORT = 5199;

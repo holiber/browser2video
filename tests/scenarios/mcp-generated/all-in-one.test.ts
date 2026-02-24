@@ -7,5 +7,5 @@ if (isDirectRun) {
   runScenario(descriptor).then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
 } else {
   const { test } = await import("@playwright/test");
-  test.skip("all-in-one (requires Electron — run via apps/player E2E)", async () => { test.setTimeout(300_000); await runScenario(descriptor); });
+  test.skip("all-in-one (requires Electron — run via apps/studio-player E2E)", async () => { test.setTimeout(300_000); await runScenario(descriptor); });
 }

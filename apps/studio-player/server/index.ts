@@ -155,6 +155,13 @@ function findScenarioFiles(dir: string, base: string): string[] {
   return results.sort();
 }
 
+function listPlayerScenarioFiles(): string[] {
+  // Only include player-compatible scenarios.
+  // We intentionally do NOT scan the entire repo because some `*.scenario.ts`
+  // files are standalone scripts (top-level await) rather than defineScenario().
+  return findScenarioFiles(path.join(PROJECT_ROOT, "tests", "scenarios"), PROJECT_ROOT);
+}
+
 // ---------------------------------------------------------------------------
 //  Vite dev proxy
 // ---------------------------------------------------------------------------
@@ -430,7 +437,7 @@ httpServer.on("upgrade", (req, socket, head) => {
 wss.on("connection", (ws) => {
   console.error("[player] Client connected");
 
-  const files = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+  const files = listPlayerScenarioFiles();
   send(ws, { type: "scenarioFiles", files });
   send(ws, { type: "viewMode", mode: currentViewMode });
   if (terminalServer) {
@@ -590,7 +597,7 @@ wss.on("connection", (ws) => {
         }
 
         case "listScenarios": {
-          send(ws, { type: "scenarioFiles", files: findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT) });
+          send(ws, { type: "scenarioFiles", files: listPlayerScenarioFiles() });
           break;
         }
 
@@ -632,7 +639,7 @@ wss.on("connection", (ws) => {
 
         case "importArtifacts": {
           const artifactsDir = path.isAbsolute(msg.dir) ? msg.dir : path.resolve(PROJECT_ROOT, msg.dir);
-          const scenarioFiles = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+          const scenarioFiles = listPlayerScenarioFiles();
           const imported = cache.importAllFromDir(artifactsDir, scenarioFiles);
           const scenarios = [...imported.keys()];
           console.error(`[player] Imported artifacts for ${imported.size} scenario(s): ${scenarios.join(", ")}`);
@@ -655,7 +662,7 @@ wss.on("connection", (ws) => {
         }
 
         case "downloadArtifacts": {
-          const scenarioFiles = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+          const scenarioFiles = listPlayerScenarioFiles();
           console.error(`[player] Downloading CI artifacts from GitHub...`);
           send(ws, { type: "status", loaded: !!executor, executedUpTo: executor?.lastExecutedIndex ?? -1 });
           try {
