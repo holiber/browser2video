@@ -55,6 +55,9 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
     s.options({ layout: "row" });
 
     s.setup(async (session) => {
+        const t0 = Date.now();
+        const elapsed = () => `${((Date.now() - t0) / 1000).toFixed(1)}s`;
+
         // Resolve the electron binary.
         // Inside Electron's runtime `require("electron")` returns the module
         // object rather than the binary path.  We resolve the package then read
@@ -79,6 +82,7 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
                 electronPath = process.execPath;
             }
         }
+        console.error(`[self-test setup ${elapsed()}] Electron path resolved`);
 
         // Kill any stale processes on the inner player's ports from previous runs
         const { execSync } = await import("node:child_process");
@@ -89,14 +93,15 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
                     for (const pid of pids.split("\n").filter(Boolean)) {
                         if (pid === String(process.pid)) continue;
                         try { execSync(`kill -9 ${pid} 2>/dev/null`); } catch { }
-                        console.error(`[self-test] Killed stale process ${pid} on port ${port}`);
+                        console.error(`[self-test setup] Killed stale process ${pid} on port ${port}`);
                     }
                     await new Promise((r) => setTimeout(r, 300));
                 }
             } catch { }
         }
+        console.error(`[self-test setup ${elapsed()}] Port cleanup done`);
 
-        console.error(`[self-test] Spawning inner player on port ${INNER_PORT}...`);
+        console.error(`[self-test setup ${elapsed()}] Spawning inner player on port ${INNER_PORT}...`);
         const innerProcess = spawn(
             electronPath,
             [PLAYER_DIR],
@@ -126,34 +131,34 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         });
 
         // Wait for inner player to be FULLY ready (HTTP + WS + Vite)
-        console.error("[self-test] Waiting for inner player server...");
+        console.error(`[self-test setup ${elapsed()}] Waiting for inner player HTTP...`);
         await waitForPort(INNER_PORT, 60_000);
-        console.error("[self-test] Inner player HTTP is up, waiting for full server ready...");
+        console.error(`[self-test setup ${elapsed()}] Inner player HTTP is up, opening page...`);
 
-        // Brief wait for WS + Vite proxy to finish loading after HTTP is up
-        await new Promise((r) => setTimeout(r, 1000));
-
-        // Open inner player's web UI in session browser
+        // Open inner player's web UI in session browser (no fixed delay needed —
+        // the studio-react selector below is the real readiness check)
         const { page } = await session.openPage({
             url: `http://localhost:${INNER_PORT}`,
             viewport: { width: 1280, height: 720 },
         });
+        console.error(`[self-test setup ${elapsed()}] Page created`);
 
-        await page.waitForLoadState("networkidle");
+        await page.waitForLoadState("domcontentloaded");
+        console.error(`[self-test setup ${elapsed()}] domcontentloaded`);
 
         // Wait for the studio-react mode which only appears after WS connects
         // and the terminal server URL is received from the backend
-        for (let attempt = 0; attempt < 5; attempt++) {
+        for (let attempt = 0; attempt < 3; attempt++) {
             try {
-                await page.waitForSelector("[data-preview-mode='studio-react']", { timeout: 10_000 });
+                await page.waitForSelector("[data-preview-mode='studio-react']", { timeout: 15_000 });
                 break;
             } catch {
-                console.error(`[self-test] Attempt ${attempt + 1}: studio not ready, reloading...`);
+                console.error(`[self-test setup ${elapsed()}] Attempt ${attempt + 1}: studio not ready, reloading...`);
                 await page.reload();
-                await page.waitForLoadState("networkidle");
+                await page.waitForLoadState("domcontentloaded");
             }
         }
-        console.error("[self-test] Inner player UI is loaded and ready!");
+        console.error(`[self-test setup ${elapsed()}] Inner player UI ready!`);
 
         // Collect console errors for Phase 6
         const consoleErrors: string[] = [];
