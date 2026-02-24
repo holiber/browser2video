@@ -278,7 +278,7 @@ export class Executor<T = any> {
     onStepComplete?: (result: StepResult) => void,
   ): Promise<StepResult> {
     if (targetIndex < 0 || targetIndex >= this.descriptor.steps.length) {
-      throw new Error(`Step index ${targetIndex} out of range (0-${this.descriptor.steps.length - 1})`);
+      throw new Error(`Step index ${targetIndex} out of range(0 - ${this.descriptor.steps.length - 1})`);
     }
 
     // Ensure session is initialised in the target mode before fast-forwarding
