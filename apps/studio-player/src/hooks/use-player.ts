@@ -88,6 +88,7 @@ type Action =
   | { type: "importStart" }
   | { type: "artifactsImported"; count: number; scenarios: string[] }
   | { type: "audioSettings"; settings: AudioSettings; detected: string }
+  | { type: "cacheSize"; size: number }
   ;
 
 const initial: PlayerState = {
@@ -205,6 +206,8 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, importing: false, importResult: { count: action.count, scenarios: action.scenarios } };
     case "audioSettings":
       return { ...state, audioSettings: action.settings, detectedProvider: action.detected };
+    case "cacheSize":
+      return { ...state, cacheSize: action.size };
     case "reset":
       return {
         ...state,
@@ -344,6 +347,9 @@ export function usePlayer(wsUrl: string) {
               break;
             case "audioSettings":
               dispatch({ type: "audioSettings", settings: msg.settings, detected: msg.detected });
+              break;
+            case "cacheSize":
+              dispatch({ type: "cacheSize", size: msg.size });
               break;
             case "error":
               dispatch({ type: "error", message: msg.message });

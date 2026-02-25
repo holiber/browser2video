@@ -3,6 +3,13 @@ import { Play, Square, SkipForward, SkipBack, RotateCcw, Trash2, Download, Folde
 import type { StepState, AudioSettings } from "../hooks/use-player";
 import { AudioSettingsPanel } from "./audio-settings";
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
 interface ControlsProps {
   stepCount: number;
   activeStep: number;
@@ -12,6 +19,7 @@ interface ControlsProps {
   importResult: { count: number; scenarios: string[] } | null;
   audioSettings: AudioSettings;
   detectedProvider: string;
+  cacheSize: number;
   onRunStep: (index: number) => void;
   onRunAll: () => void;
   onReset: () => void;
@@ -31,6 +39,7 @@ export function Controls({
   importResult,
   audioSettings,
   detectedProvider,
+  cacheSize,
   onRunStep,
   onRunAll,
   onReset,
@@ -172,7 +181,9 @@ export function Controls({
           data-testid="ctrl-clear-cache"
         >
           <Trash2 size={14} />
-          <span className="text-xs">Clear cache</span>
+          <span className="text-xs">
+            {cacheSize > 0 ? `Clear Cache ${formatBytes(cacheSize)}` : "Clear Cache"}
+          </span>
         </button>
       </div>
     </div>

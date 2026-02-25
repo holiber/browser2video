@@ -103,6 +103,7 @@ type ServerMsg =
   | { type: "paneLayout"; layout: PaneLayoutInfo }
   | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared"; cacheSize?: number }
+  | { type: "cacheSize"; size: number }
   | { type: "cancelled" }
   | { type: "viewMode"; mode: ViewMode }
   | { type: "replayEvent"; event: ReplayEvent }
@@ -136,8 +137,16 @@ function persistStepCache(index: number, screenshot: string, durationMs: number,
       contentHash: currentContentHash,
       steps: currentStepMetas,
     });
+    broadcastCacheSize();
   } catch (err) {
     console.error("[player] Cache write error:", err);
+  }
+}
+
+function broadcastCacheSize() {
+  const size = cache.getCacheSize();
+  for (const client of wss.clients) {
+    send(client as WebSocket, { type: "cacheSize", size });
   }
 }
 
@@ -466,6 +475,7 @@ wss.on("connection", (ws) => {
 
   const files = listPlayerScenarioFiles();
   send(ws, { type: "scenarioFiles", files });
+  send(ws, { type: "cacheSize", size: cache.getCacheSize() });
   send(ws, { type: "viewMode", mode: currentViewMode });
   send(ws, {
     type: "audioSettings",
@@ -616,6 +626,7 @@ wss.on("connection", (ws) => {
                 console.error("[player] Failed to save video to cache:", err);
               }
             }
+            broadcastCacheSize();
             send(ws, { type: "finished", videoPath: videoPath ?? (currentCacheDir ? cache.getVideoPath(currentCacheDir) : null) ?? undefined });
             if (process.env.B2V_HEADLESS === "1") {
               console.error("[player] Headless run complete, exiting.");

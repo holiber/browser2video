@@ -138,6 +138,7 @@ export default function App() {
           onRunAll={runAll}
           onReset={reset}
           onCancel={cancel}
+          cacheSize={cacheSize}
           onClearCache={clearCache}
           onImportArtifacts={importArtifacts}
           onDownloadArtifacts={downloadArtifacts}

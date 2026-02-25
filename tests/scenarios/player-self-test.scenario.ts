@@ -538,6 +538,25 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         }
     });
 
+    s.step("Cache button shows size", async ({ page }) => {
+        const btn = page.locator("[data-testid='ctrl-clear-cache']");
+        await btn.waitFor({ timeout: 5_000 });
+
+        await page.waitForFunction(
+            () => /Clear Cache \d/.test(
+                document.querySelector('[data-testid="ctrl-clear-cache"]')?.textContent ?? "",
+            ),
+            undefined,
+            { timeout: 5_000 },
+        );
+
+        const text = await btn.textContent();
+        if (!text || !(/Clear Cache \d/.test(text))) {
+            throw new Error(`Cache button should show size after steps ran, got: "${text}"`);
+        }
+        console.error(`[self-test] Cache button text: "${text}"`);
+    });
+
     // ═══════════════════════════════════════════════════════════════════
     //  Phase 6 — Cleanup & verification
     // ═══════════════════════════════════════════════════════════════════
