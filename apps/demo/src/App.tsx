@@ -12,6 +12,7 @@ import ChatPage from "@/pages/chat";
 import CalendarPage from "@/pages/calendar";
 import MoviePage from "@/pages/movie";
 import WikiPage from "@/pages/wiki";
+import SlidesPage from "@/pages/slides";
 import IPhoneChrome from "@/components/iphone-chrome";
 import PixelChrome from "@/components/pixel-chrome";
 import { RepoContext } from "@/lib/use-automerge";
@@ -81,6 +82,7 @@ function PageRoutes() {
       <Route path="/kanban" element={<KanbanPage />} />
       <Route path="/movie" element={<MoviePage />} />
       <Route path="/wiki" element={<WikiPage />} />
+      <Route path="/slides" element={<SlidesPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
