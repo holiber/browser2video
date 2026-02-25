@@ -173,7 +173,7 @@ export class TerminalActor extends Actor {
       // use direct focus on the xterm textarea to avoid mouse event interference
       const textarea = await this._dom.$(`${this.selector} .xterm-helper-textarea`);
       if (textarea) {
-        await textarea.click();
+        await textarea.click({ force: true });
       }
     }
     _focusedPane.set(this.page, paneId);
@@ -218,6 +218,13 @@ export class TerminalActor extends Actor {
    * @param timeout  Timeout in ms (default 30s)
    */
   async waitForPrompt(timeout = 30000) {
+    // Some shells don't render a prompt until the terminal is focused and a
+    // newline is received (especially in fresh PTY sessions).
+    try {
+      await this._ensureFocus();
+      await this.page.keyboard.press("Enter");
+    } catch { /* best-effort */ }
+
     await this._dom.waitForFunction(
       (sel: string) => {
         const root = document.querySelector(sel);
@@ -231,7 +238,24 @@ export class TerminalActor extends Actor {
         for (let i = lines.length - 1; i >= 0; i--) {
           const line = lines[i].trim();
           if (!line) continue;
-          return line.endsWith("$") || line.endsWith("#") || line.includes("$ ");
+          // Common prompts:
+          // - bash/sh: "$", "#"
+          // - zsh (macOS default): "%"
+          // - starship/oh-my-zsh: "❯"
+          // - oh-my-zsh: "➜"
+          // - powershell/cmd (sometimes used in CI): ">"
+          // Also accept the prompt char followed by a space.
+          return (
+            /([#$%]|❯|➜|>)$/.test(line) ||
+            line.startsWith("➜") ||
+            line.startsWith("❯") ||
+            line.includes("$ ") ||
+            line.includes("# ") ||
+            line.includes("% ") ||
+            line.includes("❯ ") ||
+            line.includes("➜ ") ||
+            line.includes("> ")
+          );
         }
         return false;
       },
@@ -256,7 +280,17 @@ export class TerminalActor extends Actor {
       for (let i = lines.length - 1; i >= 0; i--) {
         const line = lines[i].trim();
         if (!line) continue;
-        if (line.endsWith("$") || line.endsWith("#") || line.includes("$ ")) {
+        if (
+          /([#$%]|❯|➜|>)$/.test(line) ||
+          line.startsWith("➜") ||
+          line.startsWith("❯") ||
+          line.includes("$ ") ||
+          line.includes("# ") ||
+          line.includes("% ") ||
+          line.includes("❯ ") ||
+          line.includes("➜ ") ||
+          line.includes("> ")
+        ) {
           return false;
         }
         return true;

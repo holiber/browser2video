@@ -3,12 +3,17 @@
  */
 import { z } from "zod";
 
+export const TtsProviderSchema = z.enum(["auto", "openai", "google", "system", "piper"]);
+export type TtsProvider = z.infer<typeof TtsProviderSchema>;
+
 export const NarrationOptionsSchema = z.object({
   enabled: z.boolean().describe("Whether TTS narration is active."),
-  voice: z.string().optional().describe("OpenAI TTS voice: alloy | ash | coral | echo | fable | nova | onyx | sage | shimmer."),
+  provider: TtsProviderSchema.optional().describe("TTS provider. 'auto' (default) picks the best available."),
+  voice: z.string().optional().describe("TTS voice. Provider-specific."),
   speed: z.number().min(0.25).max(4).optional().describe("Speech speed 0.25–4.0 (default: 1.0)."),
   model: z.string().optional().describe("OpenAI TTS model: tts-1 | tts-1-hd."),
   apiKey: z.string().optional().describe("OpenAI API key (defaults to OPENAI_API_KEY env var)."),
+  googleApiKey: z.string().optional().describe("Google Cloud TTS API key (defaults to GOOGLE_TTS_API_KEY env var)."),
   cacheDir: z.string().optional().describe("Cache directory for TTS audio files (default: .cache/tts)."),
   realtime: z.boolean().optional().describe("Play audio through speakers in realtime while the scenario runs."),
   language: z.string().optional().describe("Auto-translate narration text to this language before TTS (e.g. 'ru', 'es', 'de')."),

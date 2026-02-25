@@ -81,18 +81,25 @@ let scenarioView: WebContentsView | null = null;
 const SERVER_PORT = parseInt(process.env.PORT ?? "9521", 10);
 
 const isEmbedded = process.env.B2V_EMBEDDED === "1";
+const cliArgs = (() => { // parse early so createMainWindow can use headless flag
+  return parseAutoScenarioFromCli(process.argv);
+})();
+const isHeadless = cliArgs.headless;
+const isHidden = isEmbedded || isHeadless;
 
-function parseAutoScenarioFromCli(argv: string[]): { file: string | null; autoplay: boolean } {
+function parseAutoScenarioFromCli(argv: string[]): { file: string | null; autoplay: boolean; headless: boolean } {
   // Electron argv usually looks like:
   //   [electronExe, appPath, ...userArgs]
   // We support both explicit `--scenario` and positional `*.scenario.ts`.
   let file: string | null = null;
   let autoplay = false;
+  let headless = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--no-play" || a === "--no-autoplay") autoplay = false;
     if (a === "--play" || a === "--autoplay") autoplay = true;
+    if (a === "--headless") headless = true;
 
     if (a === "--scenario" && argv[i + 1]) {
       file = argv[i + 1];
@@ -111,7 +118,7 @@ function parseAutoScenarioFromCli(argv: string[]): { file: string | null; autopl
     }
   }
 
-  return { file, autoplay };
+  return { file, autoplay, headless };
 }
 
 function createMainWindow() {
@@ -122,12 +129,13 @@ function createMainWindow() {
     // we also use off-screen position and minimal size.
     // Embedded instances need a real surface for CDP capture/screencast.
     // Keep the window off-screen and transparent instead of tiny/minimized.
+    // --headless also hides the window but keeps normal sizing for video output.
     width: isEmbedded ? 1280 : 1440,
     height: isEmbedded ? 720 : 900,
     x: isEmbedded ? -10000 : undefined,
     y: isEmbedded ? -10000 : undefined,
-    show: !isEmbedded,
-    skipTaskbar: isEmbedded,
+    show: !isHidden,
+    skipTaskbar: isHidden,
     // Prevent embedded window from appearing in Mission Control / Expose
     ...(isEmbedded ? { type: "toolbar" as any, focusable: false, hasShadow: false } : {}),
     title: "Studio Player",
@@ -138,13 +146,13 @@ function createMainWindow() {
       nodeIntegration: false,
       // Nested StudioPlayer runs hidden/offscreen; keep timers/rendering alive
       // so CDP screencasts still produce frames.
-      backgroundThrottling: !isEmbedded,
+      backgroundThrottling: !isHidden,
     },
   });
 
-  // For embedded instances: aggressively hide the window.
+  // For headless / embedded instances: aggressively hide the window.
   // macOS can show windows during loadURL or other async operations.
-  if (isEmbedded) {
+  if (isHidden) {
     // Keep it effectively invisible, but still "shown" so Chromium paints frames.
     try { mainWindow.setOpacity(0); } catch { }
     try { mainWindow.setIgnoreMouseEvents(true); } catch { }
@@ -215,7 +223,7 @@ export async function createScenarioView(
       backgroundThrottling: false,
     },
   });
-  if (isEmbedded) {
+  if (isHidden) {
     try { scenarioView.webContents.setBackgroundThrottling(false); } catch { }
   }
 
@@ -284,18 +292,19 @@ app.whenReady().then(async () => {
     app.dock.setIcon(iconPath);
   }
 
+  if (isHeadless) console.error(`[electron ${elt()}] Running in headless mode`);
   console.error(`[electron ${elt()}] Creating main window...`);
   createMainWindow();
   console.error(`[electron ${elt()}] Main window created`);
 
   process.env.PORT = String(SERVER_PORT);
   process.env.B2V_CDP_PORT = String(CDP_PORT);
+  if (isHeadless) process.env.B2V_HEADLESS = "1";
 
   // Load a minimal splash page immediately. This unblocks Playwright's
   // firstWindow() which otherwise waits ~15s for the first navigation.
   mainWindow!.loadURL("data:text/html,<html><body style='background:%230d1117;color:%23888;display:flex;align-items:center;justify-content:center;height:100vh;font-family:system-ui'><div>Starting…</div></body></html>");
-  // Re-hide after loadURL for embedded instances (macOS can show the window)
-  if (isEmbedded) mainWindow!.hide();
+  if (isHidden) mainWindow!.hide();
 
   // Import and start the server in-process (~0.5s)
   console.error(`[electron ${elt()}] Importing server module...`);
@@ -307,17 +316,15 @@ app.whenReady().then(async () => {
   }
 
   // Now navigate to the real player URL
-  const { file: autoScenarioFile, autoplay } = parseAutoScenarioFromCli(process.argv);
   const params = new URLSearchParams();
-  if (autoScenarioFile) {
-    params.set("scenario", autoScenarioFile);
-    if (autoplay) params.set("autoplay", "1");
+  if (cliArgs.file) {
+    params.set("scenario", cliArgs.file);
+    if (cliArgs.autoplay) params.set("autoplay", "1");
   }
   const playerUrl = `http://localhost:${SERVER_PORT}${params.size ? `/?${params.toString()}` : ""}`;
   console.error(`[electron ${elt()}] Loading player UI: ${playerUrl}`);
   mainWindow!.loadURL(playerUrl);
-  // Re-hide after loadURL for embedded instances
-  if (isEmbedded) mainWindow!.hide();
+  if (isHidden) mainWindow!.hide();
 
   // Verify CDP port is actually listening
   const http = await import("node:http");

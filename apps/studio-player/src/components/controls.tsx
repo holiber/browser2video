@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Play, Square, SkipForward, SkipBack, RotateCcw, Trash2, Download, FolderInput } from "lucide-react";
-import type { StepState } from "../hooks/use-player";
+import type { StepState, AudioSettings } from "../hooks/use-player";
+import { AudioSettingsPanel } from "./audio-settings";
 
 interface ControlsProps {
   stepCount: number;
@@ -9,6 +10,8 @@ interface ControlsProps {
   connected: boolean;
   importing: boolean;
   importResult: { count: number; scenarios: string[] } | null;
+  audioSettings: AudioSettings;
+  detectedProvider: string;
   onRunStep: (index: number) => void;
   onRunAll: () => void;
   onReset: () => void;
@@ -16,6 +19,7 @@ interface ControlsProps {
   onClearCache: () => void;
   onImportArtifacts: (dir: string) => void;
   onDownloadArtifacts: (runId?: string) => void;
+  onAudioSettingsChange: (settings: AudioSettings) => void;
 }
 
 export function Controls({
@@ -25,6 +29,8 @@ export function Controls({
   connected,
   importing,
   importResult,
+  audioSettings,
+  detectedProvider,
   onRunStep,
   onRunAll,
   onReset,
@@ -32,6 +38,7 @@ export function Controls({
   onClearCache,
   onImportArtifacts,
   onDownloadArtifacts,
+  onAudioSettingsChange,
 }: ControlsProps) {
   const isRunning = stepStates.some((s) => s === "running" || s === "fast-forwarding");
   const allDone = stepStates.every((s) => s === "done");
@@ -140,6 +147,12 @@ export function Controls({
             </div>
           )}
         </div>
+
+        <AudioSettingsPanel
+          settings={audioSettings}
+          detectedProvider={detectedProvider}
+          onUpdate={onAudioSettingsChange}
+        />
 
         <button
           onClick={onReset}

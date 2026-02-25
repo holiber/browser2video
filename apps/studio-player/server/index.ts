@@ -67,6 +67,15 @@ const PROJECT_ROOT = findProjectRoot();
 //  Message types
 // ---------------------------------------------------------------------------
 
+interface AudioSettings {
+  provider?: string;
+  voice?: string;
+  speed?: number;
+  model?: string;
+  language?: string;
+  realtime?: boolean;
+}
+
 type ClientMsg =
   | { type: "load"; file: string }
   | { type: "runStep"; index: number }
@@ -76,6 +85,8 @@ type ClientMsg =
   | { type: "listScenarios" }
   | { type: "clearCache" }
   | { type: "setViewMode"; mode: ViewMode }
+  | { type: "setAudioSettings"; settings: AudioSettings }
+  | { type: "getAudioSettings" }
   | { type: "importArtifacts"; dir: string }
   | { type: "downloadArtifacts"; runId?: string; artifactName?: string };
 
@@ -95,7 +106,17 @@ type ServerMsg =
   | { type: "cancelled" }
   | { type: "viewMode"; mode: ViewMode }
   | { type: "replayEvent"; event: ReplayEvent }
-  | { type: "artifactsImported"; count: number; scenarios: string[] };
+  | { type: "artifactsImported"; count: number; scenarios: string[] }
+  | { type: "audioSettings"; settings: AudioSettings; detected: string };
+
+function detectTtsProvider(): string {
+  if (process.env.B2V_TTS_PROVIDER && process.env.B2V_TTS_PROVIDER !== "auto") return process.env.B2V_TTS_PROVIDER;
+  if (process.env.GOOGLE_TTS_API_KEY) return "google";
+  if (process.env.OPENAI_API_KEY) return "openai";
+  if (process.platform === "darwin") return "system";
+  if (process.platform === "win32") return "system";
+  return "none";
+}
 
 function send(ws: WebSocket, msg: ServerMsg) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -201,6 +222,12 @@ let executor: Executor | null = null;
 let viteProcess: ChildProcess | null = null;
 let terminalServer: TerminalServer | null = null;
 let currentViewMode: ViewMode = "live";
+
+function getRunMode(): "human" | "fast" {
+  const raw = (process.env.B2V_MODE ?? "").toLowerCase();
+  if (raw === "fast") return "fast";
+  return "human";
+}
 
 // Electron mode: when B2V_CDP_PORT is set, Playwright connects via CDP
 const electronCdpPort = process.env.B2V_CDP_PORT ? parseInt(process.env.B2V_CDP_PORT, 10) : 0;
@@ -440,6 +467,18 @@ wss.on("connection", (ws) => {
   const files = listPlayerScenarioFiles();
   send(ws, { type: "scenarioFiles", files });
   send(ws, { type: "viewMode", mode: currentViewMode });
+  send(ws, {
+    type: "audioSettings",
+    settings: {
+      provider: process.env.B2V_TTS_PROVIDER,
+      voice: process.env.B2V_NARRATION_VOICE ?? process.env.B2V_VOICE,
+      speed: process.env.B2V_NARRATION_SPEED ? parseFloat(process.env.B2V_NARRATION_SPEED) : undefined,
+      model: process.env.B2V_NARRATION_MODEL,
+      language: process.env.B2V_NARRATION_LANGUAGE,
+      realtime: process.env.B2V_REALTIME_AUDIO === "true" ? true : undefined,
+    },
+    detected: detectTtsProvider(),
+  });
   if (terminalServer) {
     // Send the player's own /terminal URL as the base for terminal iframes
     const terminalPageUrl = `http://localhost:${PORT}`;
@@ -536,7 +575,7 @@ wss.on("connection", (ws) => {
           }
           await executor.runTo(
             msg.index,
-            "human",
+            getRunMode(),
             (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
             (result) => {
               send(ws, { type: "stepComplete", ...result });
@@ -555,7 +594,7 @@ wss.on("connection", (ws) => {
             for (let i = 0; i < executor.stepCount; i++) {
               await executor.runTo(
                 i,
-                "human",
+                getRunMode(),
                 (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
                 (result) => {
                   send(ws, { type: "stepComplete", ...result });
@@ -578,6 +617,10 @@ wss.on("connection", (ws) => {
               }
             }
             send(ws, { type: "finished", videoPath: videoPath ?? (currentCacheDir ? cache.getVideoPath(currentCacheDir) : null) ?? undefined });
+            if (process.env.B2V_HEADLESS === "1") {
+              console.error("[player] Headless run complete, exiting.");
+              setTimeout(() => process.exit(0), 500);
+            }
           } catch (err) {
             if ((err as Error).message?.includes("aborted")) {
               console.error("[player] Execution aborted by user");
@@ -610,6 +653,44 @@ wss.on("connection", (ws) => {
             cache.clearAll();
           }
           send(ws, { type: "cacheCleared", cacheSize: cache.getCacheSize() });
+          break;
+        }
+
+        case "setAudioSettings": {
+          const s = msg.settings;
+          if (s.provider) process.env.B2V_TTS_PROVIDER = s.provider;
+          else delete process.env.B2V_TTS_PROVIDER;
+
+          if (s.voice) process.env.B2V_NARRATION_VOICE = s.voice;
+          else delete process.env.B2V_NARRATION_VOICE;
+
+          if (s.speed != null) process.env.B2V_NARRATION_SPEED = String(s.speed);
+          else delete process.env.B2V_NARRATION_SPEED;
+
+          if (s.model) process.env.B2V_NARRATION_MODEL = s.model;
+          else delete process.env.B2V_NARRATION_MODEL;
+
+          if (s.language) process.env.B2V_NARRATION_LANGUAGE = s.language;
+          else delete process.env.B2V_NARRATION_LANGUAGE;
+
+          if (s.realtime != null) process.env.B2V_REALTIME_AUDIO = s.realtime ? "true" : "false";
+          else delete process.env.B2V_REALTIME_AUDIO;
+
+          console.error(`[player] Audio settings updated: provider=${s.provider ?? "auto"}`);
+          send(ws, { type: "audioSettings", settings: s, detected: detectTtsProvider() });
+          break;
+        }
+
+        case "getAudioSettings": {
+          const settings: AudioSettings = {
+            provider: process.env.B2V_TTS_PROVIDER,
+            voice: process.env.B2V_NARRATION_VOICE ?? process.env.B2V_VOICE,
+            speed: process.env.B2V_NARRATION_SPEED ? parseFloat(process.env.B2V_NARRATION_SPEED) : undefined,
+            model: process.env.B2V_NARRATION_MODEL,
+            language: process.env.B2V_NARRATION_LANGUAGE,
+            realtime: process.env.B2V_REALTIME_AUDIO === "true" ? true : undefined,
+          };
+          send(ws, { type: "audioSettings", settings, detected: detectTtsProvider() });
           break;
         }
 

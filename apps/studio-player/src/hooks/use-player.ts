@@ -35,6 +35,15 @@ export interface PaneLayoutInfo {
   electronView?: boolean;
 }
 
+export interface AudioSettings {
+  provider?: string;
+  voice?: string;
+  speed?: number;
+  model?: string;
+  language?: string;
+  realtime?: boolean;
+}
+
 export interface PlayerState {
   connected: boolean;
   terminalServerUrl: string | null;
@@ -55,6 +64,8 @@ export interface PlayerState {
   importing: boolean;
   importResult: { count: number; scenarios: string[] } | null;
   cacheSize: number;
+  audioSettings: AudioSettings;
+  detectedProvider: string;
 }
 
 type Action =
@@ -76,6 +87,7 @@ type Action =
   | { type: "viewMode"; mode: ViewMode }
   | { type: "importStart" }
   | { type: "artifactsImported"; count: number; scenarios: string[] }
+  | { type: "audioSettings"; settings: AudioSettings; detected: string }
   ;
 
 const initial: PlayerState = {
@@ -98,6 +110,8 @@ const initial: PlayerState = {
   importing: false,
   importResult: null,
   cacheSize: 0,
+  audioSettings: {},
+  detectedProvider: "none",
 };
 
 function reducer(state: PlayerState, action: Action): PlayerState {
@@ -189,6 +203,8 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, importing: true, importResult: null };
     case "artifactsImported":
       return { ...state, importing: false, importResult: { count: action.count, scenarios: action.scenarios } };
+    case "audioSettings":
+      return { ...state, audioSettings: action.settings, detectedProvider: action.detected };
     case "reset":
       return {
         ...state,
@@ -326,6 +342,9 @@ export function usePlayer(wsUrl: string) {
             case "artifactsImported":
               dispatch({ type: "artifactsImported", count: msg.count, scenarios: msg.scenarios });
               break;
+            case "audioSettings":
+              dispatch({ type: "audioSettings", settings: msg.settings, detected: msg.detected });
+              break;
             case "error":
               dispatch({ type: "error", message: msg.message });
               break;
@@ -397,5 +416,9 @@ export function usePlayer(wsUrl: string) {
     sendMsg(msg);
   }, [sendMsg]);
 
-  return { state, cursor, loadScenario, runStep, runAll, reset, cancel, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent };
+  const setAudioSettings = useCallback((settings: AudioSettings) => {
+    sendMsg({ type: "setAudioSettings", settings });
+  }, [sendMsg]);
+
+  return { state, cursor, loadScenario, runStep, runAll, reset, cancel, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent, setAudioSettings };
 }

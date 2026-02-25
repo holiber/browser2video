@@ -80,7 +80,8 @@ export type {
 } from "./types.ts";
 
 // Narration
-export type { NarrationOptions, AudioDirectorAPI, AudioEvent } from "./narrator.ts";
+export type { NarrationOptions, AudioDirectorAPI, AudioEvent, ResolvedNarrator } from "./narrator.ts";
+export { translateText, resolveNarrator } from "./narrator.ts";
 
 // Shared utilities (less common, but available)
 export { composeVideos } from "./video-compositor.ts";

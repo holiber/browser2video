@@ -751,7 +751,7 @@ export class Actor {
 
         this.cursorX = target.x;
         this.cursorY = target.y;
-        await option.click();
+        await option.click({ force: true });
         await sleep(pickMs(this.delays.afterClickMs));
         return;
       }

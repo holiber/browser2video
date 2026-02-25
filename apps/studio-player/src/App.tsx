@@ -8,7 +8,7 @@ import { ScenarioPicker } from "./components/scenario-picker";
 const WS_URL = `ws://${window.location.host}/ws`;
 
 export default function App() {
-  const { state, cursor, loadScenario, runStep, runAll, reset, cancel, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent } = usePlayer(WS_URL);
+  const { state, cursor, loadScenario, runStep, runAll, reset, cancel, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent, setAudioSettings } = usePlayer(WS_URL);
   const {
     scenario,
     scenarioFiles,
@@ -29,6 +29,8 @@ export default function App() {
     importing,
     importResult,
     cacheSize,
+    audioSettings,
+    detectedProvider,
   } = state;
 
   const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
@@ -130,6 +132,8 @@ export default function App() {
           connected={connected}
           importing={importing}
           importResult={importResult}
+          audioSettings={audioSettings}
+          detectedProvider={detectedProvider}
           onRunStep={runStep}
           onRunAll={runAll}
           onReset={reset}
@@ -137,6 +141,7 @@ export default function App() {
           onClearCache={clearCache}
           onImportArtifacts={importArtifacts}
           onDownloadArtifacts={downloadArtifacts}
+          onAudioSettingsChange={setAudioSettings}
         />
       )}
     </div>

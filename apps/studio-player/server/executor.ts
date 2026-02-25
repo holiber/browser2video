@@ -68,9 +68,10 @@ export class Executor<T = any> {
     this.onRequestPage = opts?.onRequestPage ?? null;
 
     const hasNarration = descriptor.steps.some((s) => !!s.narration || !!s.narrationFn);
-    if (hasNarration && !process.env.OPENAI_API_KEY) {
-      console.warn("\n  WARNING: Scenario has narrated steps but OPENAI_API_KEY is not set.");
-      console.warn("  Set the env var to enable text-to-speech narration.\n");
+    if (hasNarration && !process.env.OPENAI_API_KEY && !process.env.GOOGLE_TTS_API_KEY) {
+      console.warn("\n  WARNING: Scenario has narrated steps but no cloud TTS key is set.");
+      console.warn("  Will try system TTS (macOS say / Windows SAPI) or Piper as fallback.");
+      console.warn("  For best quality, set OPENAI_API_KEY or GOOGLE_TTS_API_KEY.\n");
     }
   }
 
@@ -109,7 +110,7 @@ export class Executor<T = any> {
           // Session recording in Electron mode also uses CDP screencast internally,
           // so enabling both would conflict and produce 0 live frames.
           record: mode === "human" && !isEmbedded,
-          narration: { enabled: true, realtime: true },
+          narration: { enabled: true, realtime: process.env.B2V_HEADLESS !== "1" },
           ...this.descriptor.sessionOpts,
           ...this.sessionOpts,
           headed: false,

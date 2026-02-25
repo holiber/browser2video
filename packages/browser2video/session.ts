@@ -365,15 +365,26 @@ export class Session {
     // Lightweight inline .env loader — sets missing env vars from .env file
     loadDotenv();
 
-    // Auto-enable narration when OPENAI_API_KEY is present and not explicitly configured
-    // Only auto-enable in human mode — fast mode skips narration unless explicitly requested
-    if (!this.narrationOpts && this.mode === "human" && (process.env.B2V_NARRATE === "true" || process.env.OPENAI_API_KEY)) {
+    // Auto-enable narration in human mode when any TTS source is available
+    if (!this.narrationOpts && this.mode === "human" && (
+      process.env.B2V_NARRATE === "true" ||
+      process.env.OPENAI_API_KEY ||
+      process.env.GOOGLE_TTS_API_KEY ||
+      process.env.B2V_TTS_PROVIDER === "system" ||
+      process.env.B2V_TTS_PROVIDER === "piper"
+    )) {
       this.narrationOpts = { enabled: true };
     }
 
     // Apply B2V_* env var overrides for narration settings
     if (this.narrationOpts) {
-      if (process.env.B2V_VOICE) this.narrationOpts.voice = process.env.B2V_VOICE;
+      if (process.env.B2V_TTS_PROVIDER) {
+        this.narrationOpts.provider = process.env.B2V_TTS_PROVIDER as any;
+      }
+      if (process.env.B2V_VOICE || process.env.B2V_NARRATION_VOICE) {
+        this.narrationOpts.voice = process.env.B2V_NARRATION_VOICE ?? process.env.B2V_VOICE;
+      }
+      if (process.env.B2V_NARRATION_MODEL) this.narrationOpts.model = process.env.B2V_NARRATION_MODEL;
       if (process.env.B2V_NARRATION_SPEED) this.narrationOpts.speed = parseFloat(process.env.B2V_NARRATION_SPEED);
       if (process.env.B2V_REALTIME_AUDIO) this.narrationOpts.realtime = process.env.B2V_REALTIME_AUDIO === "true";
       if (process.env.B2V_NARRATION_LANGUAGE) this.narrationOpts.language = process.env.B2V_NARRATION_LANGUAGE;
@@ -1591,6 +1602,9 @@ export class Session {
   async abort(): Promise<void> {
     if (this.finished) return;
     this.finished = true;
+
+    // Kill audio playback immediately
+    this.audioDirector.stop();
 
     // Force-close all pages — this interrupts any running Playwright operations
     for (const pane of this.panes.values()) {

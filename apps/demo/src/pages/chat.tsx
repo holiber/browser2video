@@ -1,10 +1,10 @@
 /**
  * @description Chat page synced between two users via Automerge.
- * URL params: ?role=alice|bob&ws=... + #automerge:docHash
+ * URL params: ?role=veronica|bob&ws=... + #automerge:docHash
  */
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, Wifi, MessageCircle } from "lucide-react";
+import { Send, Wifi, MessageCircle, Pencil } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,8 +20,9 @@ import {
 
 interface ChatMessage {
     id: string;
-    sender: "alice" | "bob";
+    sender: "veronica" | "bob";
     text: string;
+    image?: string;
     ts: number;
 }
 
@@ -33,11 +34,11 @@ interface ChatDoc {
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function getRoleFromURL(): "alice" | "bob" {
+function getRoleFromURL(): "veronica" | "bob" {
     const params = new URLSearchParams(window.location.search);
     const role = params.get("role");
-    if (role === "alice" || role === "bob") return role;
-    return "alice";
+    if (role === "veronica" || role === "bob") return role;
+    return "veronica";
 }
 
 let msgCounter = 0;
@@ -47,7 +48,7 @@ function nextMsgId(): string {
 }
 
 const ROLE_COLORS = {
-    alice: {
+    veronica: {
         bg: "bg-violet-500/20",
         border: "border-violet-500/30",
         name: "text-violet-400",
@@ -63,7 +64,7 @@ const ROLE_COLORS = {
     },
 } as const;
 
-const ROLE_LABELS = { alice: "Alice 👩", bob: "Bob 👨‍💻" } as const;
+const ROLE_LABELS = { veronica: "Veronica 👩", bob: "Bob 👨‍💻" } as const;
 
 /* ------------------------------------------------------------------ */
 /*  Hook: find or create the shared Automerge document via URL hash    */
@@ -96,10 +97,14 @@ function MessageBubble({
     msg,
     isMine,
     index,
+    liked,
+    onLike,
 }: {
     msg: ChatMessage;
     isMine: boolean;
     index: number;
+    liked: boolean;
+    onLike: (id: string) => void;
 }) {
     const colors = ROLE_COLORS[msg.sender];
     const time = new Date(msg.ts).toLocaleTimeString([], {
@@ -120,13 +125,46 @@ function MessageBubble({
                 <div
                     className={`h-7 w-7 shrink-0 rounded-full ${colors.avatar} flex items-center justify-center text-[11px] font-bold text-white`}
                 >
-                    {msg.sender === "alice" ? "A" : "B"}
+                    {msg.sender === "veronica" ? "V" : "B"}
                 </div>
 
-                {/* Bubble */}
-                <div className={`rounded-2xl border px-3.5 py-2 ${colors.bubble}`}>
-                    <p className="text-sm leading-relaxed text-foreground">{msg.text}</p>
-                    <p className="mt-0.5 text-[10px] text-muted-foreground text-right">{time}</p>
+                {/* Bubble + reaction */}
+                <div className="flex flex-col gap-0.5">
+                    <div className={`group relative rounded-2xl border px-3.5 py-2 ${colors.bubble}`}>
+                        {msg.image && (
+                            <img
+                                src={msg.image}
+                                alt="sketch"
+                                className="rounded-lg mb-1 max-w-full"
+                                data-testid={`chat-img-${index}`}
+                            />
+                        )}
+                        <p className="text-sm leading-relaxed text-foreground">{msg.text}</p>
+                        <div className="flex items-center justify-between mt-0.5 gap-2">
+                            <p className="text-[10px] text-muted-foreground">{time}</p>
+                            {!isMine && (
+                                <button
+                                    onClick={() => onLike(msg.id)}
+                                    data-testid={`chat-react-${index}`}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity text-xs hover:scale-125 active:scale-95"
+                                >
+                                    {liked ? "❤️" : "🤍"}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+                    <AnimatePresence>
+                        {liked && (
+                            <motion.div
+                                className={`text-xs ${isMine ? "text-right" : "text-left"} px-1`}
+                                initial={{ scale: 0, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                exit={{ scale: 0, opacity: 0 }}
+                            >
+                                ❤️
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
             </div>
         </motion.div>
@@ -154,6 +192,89 @@ function NotificationBadge({ count }: { count: number }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Sketchpad                                                          */
+/* ------------------------------------------------------------------ */
+
+function Sketchpad({ onSend }: { onSend?: (dataUrl: string) => void }) {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const drawing = useRef(false);
+    const lastPt = useRef<{ x: number; y: number } | null>(null);
+
+    function getPos(e: React.PointerEvent<HTMLCanvasElement>) {
+        const c = canvasRef.current!;
+        const r = c.getBoundingClientRect();
+        return {
+            x: (e.clientX - r.left) * (c.width / r.width),
+            y: (e.clientY - r.top) * (c.height / r.height),
+        };
+    }
+
+    function onDown(e: React.PointerEvent<HTMLCanvasElement>) {
+        drawing.current = true;
+        lastPt.current = getPos(e);
+        (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
+    }
+
+    function onMove(e: React.PointerEvent<HTMLCanvasElement>) {
+        if (!drawing.current) return;
+        const ctx = canvasRef.current?.getContext("2d");
+        if (!ctx || !lastPt.current) return;
+        const pt = getPos(e);
+        ctx.strokeStyle = "#c084fc";
+        ctx.lineWidth = 3;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(lastPt.current.x, lastPt.current.y);
+        ctx.lineTo(pt.x, pt.y);
+        ctx.stroke();
+        lastPt.current = pt;
+    }
+
+    function onUp() {
+        drawing.current = false;
+        lastPt.current = null;
+    }
+
+    function handleSend() {
+        const c = canvasRef.current;
+        if (!c || !onSend) return;
+        onSend(c.toDataURL("image/png"));
+    }
+
+    return (
+        <div className="border border-zinc-700 rounded-lg overflow-hidden" data-testid="chat-sketchpad">
+            <canvas
+                ref={canvasRef}
+                width={400}
+                height={200}
+                className="w-full bg-zinc-900/60 cursor-crosshair"
+                style={{ touchAction: "none" }}
+                data-testid="chat-sketch"
+                onPointerDown={onDown}
+                onPointerMove={onMove}
+                onPointerUp={onUp}
+                onPointerLeave={onUp}
+            />
+            {onSend && (
+                <div className="flex justify-end px-2 py-1.5 bg-zinc-900/40">
+                    <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleSend}
+                        data-testid="chat-sketch-send"
+                        className="text-xs"
+                    >
+                        <Send className="h-3 w-3 mr-1" />
+                        Send sketch
+                    </Button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Chat view (needs docUrl)                                           */
 /* ------------------------------------------------------------------ */
 
@@ -162,6 +283,8 @@ function ChatView({ docUrl }: { docUrl: AutomergeUrl }) {
     const [doc, changeDoc] = useDocument<ChatDoc>(docUrl, { suspense: true });
     const [inputValue, setInputValue] = useState("");
     const [lastSeenCount, setLastSeenCount] = useState(0);
+    const [sketchOpen, setSketchOpen] = useState(false);
+    const [likedMessages, setLikedMessages] = useState<Set<string>>(new Set());
     const scrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
 
@@ -199,6 +322,19 @@ function ChatView({ docUrl }: { docUrl: AutomergeUrl }) {
         inputRef.current?.focus();
     }, [inputValue, changeDoc, role]);
 
+    const sendSketch = useCallback((dataUrl: string) => {
+        changeDoc((d) => {
+            d.messages.push({
+                id: nextMsgId(),
+                sender: role,
+                text: "",
+                image: dataUrl,
+                ts: Date.now(),
+            });
+        });
+        setSketchOpen(false);
+    }, [changeDoc, role]);
+
     const handleKeyDown = useCallback(
         (e: KeyboardEvent<HTMLInputElement>) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -209,10 +345,19 @@ function ChatView({ docUrl }: { docUrl: AutomergeUrl }) {
         [sendMessage],
     );
 
+    const toggleLike = useCallback((msgId: string) => {
+        setLikedMessages((prev) => {
+            const next = new Set(prev);
+            if (next.has(msgId)) next.delete(msgId);
+            else next.add(msgId);
+            return next;
+        });
+    }, []);
+
     const colors = ROLE_COLORS[role];
 
     return (
-        <div className="flex flex-col h-[calc(100vh-3rem)]" data-testid="chat-page">
+        <div className="flex flex-col h-full" data-testid="chat-page">
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800">
                 <div className="flex items-center gap-2.5">
@@ -249,15 +394,40 @@ function ChatView({ docUrl }: { docUrl: AutomergeUrl }) {
                                 msg={msg}
                                 isMine={msg.sender === role}
                                 index={idx}
+                                liked={likedMessages.has(msg.id)}
+                                onLike={toggleLike}
                             />
                         ))}
                     </AnimatePresence>
                 )}
             </div>
 
+            {/* Sketchpad */}
+            <AnimatePresence>
+                {sketchOpen && (
+                    <motion.div
+                        className="px-4 pt-2"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                    >
+                        <Sketchpad onSend={sendSketch} />
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
             {/* Input bar */}
             <div className="border-t border-zinc-800 px-4 py-3">
                 <div className="flex items-center gap-2">
+                    <Button
+                        variant={sketchOpen ? "secondary" : "ghost"}
+                        size="icon"
+                        onClick={() => setSketchOpen((v) => !v)}
+                        data-testid="chat-sketch-toggle"
+                    >
+                        <Pencil className="h-4 w-4" />
+                    </Button>
                     <Input
                         ref={inputRef}
                         placeholder="Type a message…"
