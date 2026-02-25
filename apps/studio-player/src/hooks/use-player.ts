@@ -52,8 +52,11 @@ export interface PlayerState {
   stepStates: StepState[];
   screenshots: (string | null)[];
   stepDurations: (number | null)[];
+  stepDurationsFast: (number | null)[];
+  stepDurationsHuman: (number | null)[];
   stepHasAudio: boolean[];
   activeStep: number;
+  runMode: "human" | "fast";
   liveFrame: string | null;
   liveFrames: Record<string, string>;
   studioFrames: Record<string, string>;
@@ -63,6 +66,7 @@ export interface PlayerState {
   error: string | null;
   importing: boolean;
   importResult: { count: number; scenarios: string[] } | null;
+  loading: boolean;
   cacheSize: number;
   audioSettings: AudioSettings;
   detectedProvider: string;
@@ -71,17 +75,18 @@ export interface PlayerState {
 type Action =
   | { type: "connected" }
   | { type: "disconnected" }
+  | { type: "loading" }
   | { type: "studioReady"; terminalServerUrl: string }
   | { type: "scenarioFiles"; files: string[] }
   | { type: "scenario"; name: string; steps: StepInfo[] }
   | { type: "stepStart"; index: number; fastForward: boolean }
-  | { type: "stepComplete"; index: number; screenshot: string; mode: string; durationMs: number }
+  | { type: "stepComplete"; index: number; screenshot: string; mode: "human" | "fast"; durationMs: number }
   | { type: "liveFrame"; data: string; paneId?: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
   | { type: "finished"; videoPath?: string }
   | { type: "error"; message: string }
   | { type: "reset" }
-  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
+  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepDurationsFast: (number | null)[]; stepDurationsHuman: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared"; cacheSize?: number }
   | { type: "cancelled" }
   | { type: "viewMode"; mode: ViewMode }
@@ -89,6 +94,7 @@ type Action =
   | { type: "artifactsImported"; count: number; scenarios: string[] }
   | { type: "audioSettings"; settings: AudioSettings; detected: string }
   | { type: "cacheSize"; size: number }
+  | { type: "status"; runMode?: "human" | "fast" }
   ;
 
 const initial: PlayerState = {
@@ -99,8 +105,11 @@ const initial: PlayerState = {
   stepStates: [],
   screenshots: [],
   stepDurations: [],
+  stepDurationsFast: [],
+  stepDurationsHuman: [],
   stepHasAudio: [],
   activeStep: -1,
+  runMode: "human",
   liveFrame: null,
   liveFrames: {},
   studioFrames: {},
@@ -110,6 +119,7 @@ const initial: PlayerState = {
   error: null,
   importing: false,
   importResult: null,
+  loading: false,
   cacheSize: 0,
   audioSettings: {},
   detectedProvider: "none",
@@ -121,6 +131,8 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, connected: true, error: null };
     case "disconnected":
       return { ...state, connected: false, terminalServerUrl: null };
+    case "loading":
+      return { ...state, loading: true };
     case "studioReady":
       return { ...state, terminalServerUrl: action.terminalServerUrl };
     case "scenarioFiles":
@@ -128,10 +140,13 @@ function reducer(state: PlayerState, action: Action): PlayerState {
     case "scenario":
       return {
         ...state,
+        loading: false,
         scenario: { name: action.name, steps: action.steps },
         stepStates: action.steps.map(() => "pending" as StepState),
         screenshots: action.steps.map(() => null),
         stepDurations: action.steps.map(() => null),
+        stepDurationsFast: action.steps.map(() => null),
+        stepDurationsHuman: action.steps.map(() => null),
         stepHasAudio: action.steps.map(() => false),
         activeStep: -1,
         liveFrame: null,
@@ -145,16 +160,22 @@ function reducer(state: PlayerState, action: Action): PlayerState {
         ...state,
         screenshots: action.screenshots.map((s, i) => s ?? state.screenshots[i] ?? null),
         stepDurations: action.stepDurations,
+        stepDurationsFast: action.stepDurationsFast,
+        stepDurationsHuman: action.stepDurationsHuman,
         stepHasAudio: action.stepHasAudio,
         videoPath: action.videoPath ?? state.videoPath,
       };
-    case "cacheCleared":
+    case "cacheCleared": {
+      const empty = state.scenario?.steps.map(() => null) ?? [];
       return {
         ...state,
-        screenshots: state.scenario?.steps.map(() => null) ?? [],
-        stepDurations: state.scenario?.steps.map(() => null) ?? [],
+        screenshots: empty,
+        stepDurations: [...empty],
+        stepDurationsFast: [...empty],
+        stepDurationsHuman: [...empty],
         cacheSize: action.cacheSize ?? 0,
       };
+    }
     case "cancelled":
       return {
         ...state,
@@ -182,7 +203,13 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       if (action.screenshot) screenshots[action.index] = action.screenshot;
       const stepDurations = [...state.stepDurations];
       if (action.durationMs) stepDurations[action.index] = action.durationMs;
-      return { ...state, stepStates, screenshots, stepDurations, activeStep: action.index, liveFrame: null, liveFrames: {} };
+      const stepDurationsFast = [...state.stepDurationsFast];
+      const stepDurationsHuman = [...state.stepDurationsHuman];
+      if (action.durationMs) {
+        if (action.mode === "fast") stepDurationsFast[action.index] = action.durationMs;
+        else stepDurationsHuman[action.index] = action.durationMs;
+      }
+      return { ...state, stepStates, screenshots, stepDurations, stepDurationsFast, stepDurationsHuman, runMode: action.mode, activeStep: action.index, liveFrame: null, liveFrames: {} };
     }
     case "liveFrame": {
       const paneId = action.paneId ?? "pane-0";
@@ -197,7 +224,7 @@ function reducer(state: PlayerState, action: Action): PlayerState {
     case "finished":
       return { ...state, liveFrame: null, liveFrames: {}, videoPath: action.videoPath ?? null, error: null };
     case "error":
-      return { ...state, error: action.message };
+      return { ...state, loading: false, error: action.message };
     case "viewMode":
       return { ...state, viewMode: action.mode };
     case "importStart":
@@ -208,6 +235,8 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, audioSettings: action.settings, detectedProvider: action.detected };
     case "cacheSize":
       return { ...state, cacheSize: action.size };
+    case "status":
+      return { ...state, runMode: action.runMode ?? state.runMode };
     case "reset":
       return {
         ...state,
@@ -294,7 +323,15 @@ export function usePlayer(wsUrl: string) {
               setCursor({ x: 0, y: 0, clickEffect: false, visible: false });
               break;
             case "cachedData":
-              dispatch({ type: "cachedData", screenshots: msg.screenshots, stepDurations: msg.stepDurations, stepHasAudio: msg.stepHasAudio, videoPath: msg.videoPath });
+              dispatch({
+                type: "cachedData",
+                screenshots: msg.screenshots,
+                stepDurations: msg.stepDurations,
+                stepDurationsFast: msg.stepDurationsFast ?? msg.stepDurations.map(() => null),
+                stepDurationsHuman: msg.stepDurationsHuman ?? msg.stepDurations.map(() => null),
+                stepHasAudio: msg.stepHasAudio,
+                videoPath: msg.videoPath,
+              });
               break;
             case "cacheCleared":
               dispatch({ type: "cacheCleared", cacheSize: msg.cacheSize });
@@ -306,7 +343,7 @@ export function usePlayer(wsUrl: string) {
               dispatch({ type: "stepStart", index: msg.index, fastForward: msg.fastForward });
               break;
             case "stepComplete":
-              dispatch({ type: "stepComplete", index: msg.index, screenshot: msg.screenshot, mode: msg.mode, durationMs: msg.durationMs ?? 0 });
+              dispatch({ type: "stepComplete", index: msg.index, screenshot: msg.screenshot, mode: msg.mode === "fast" ? "fast" : "human", durationMs: msg.durationMs ?? 0 });
               setCursor((c) => ({ ...c, clickEffect: false }));
               break;
             case "liveFrame":
@@ -355,6 +392,7 @@ export function usePlayer(wsUrl: string) {
               dispatch({ type: "error", message: msg.message });
               break;
             case "status":
+              dispatch({ type: "status", runMode: msg.runMode });
               break;
           }
         } catch { /* ignore parse errors */ }
@@ -379,6 +417,7 @@ export function usePlayer(wsUrl: string) {
   }, []);
 
   const loadScenario = useCallback((file: string) => {
+    dispatch({ type: "loading" });
     sendMsg({ type: "load", file });
   }, [sendMsg]);
 

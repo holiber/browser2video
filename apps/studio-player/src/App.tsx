@@ -20,8 +20,11 @@ export default function App() {
     studioFrames,
     connected,
     error,
-    stepDurations,
+    loading,
+    stepDurationsFast,
+    stepDurationsHuman,
     stepHasAudio,
+    runMode,
     viewMode,
     paneLayout,
     terminalServerUrl,
@@ -32,6 +35,10 @@ export default function App() {
     audioSettings,
     detectedProvider,
   } = state;
+
+  const isFastForwarding = stepStates.some((s) => s === "fast-forwarding");
+  const showOverlay = loading || isFastForwarding;
+  const overlayLabel = loading ? "Loading..." : "Replaying slides...";
 
   const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
   const activeCaption = activeStep >= 0 && scenario ? scenario.steps[activeStep]?.caption : undefined;
@@ -87,8 +94,10 @@ export default function App() {
               stepStates={stepStates}
               screenshots={screenshots}
               activeStep={activeStep}
-              stepDurations={stepDurations}
+              stepDurationsFast={stepDurationsFast}
+              stepDurationsHuman={stepDurationsHuman}
               stepHasAudio={stepHasAudio}
+              runMode={runMode}
               onStepClick={runStep}
             />
           ) : (
@@ -104,7 +113,7 @@ export default function App() {
             </div>
           )}
         </div>
-        <div className="flex-1">
+        <div className="flex-1 relative">
           <Preview
             screenshot={activeScreenshot}
             liveFrame={liveFrame}
@@ -121,6 +130,14 @@ export default function App() {
             cursor={cursor}
             sendStudioEvent={sendStudioEvent}
           />
+          {showOverlay && (
+            <div className="absolute inset-0 z-30 bg-black/60 backdrop-blur-sm flex items-center justify-center">
+              <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
+                <span className="text-sm text-zinc-300 font-medium">{overlayLabel}</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

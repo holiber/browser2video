@@ -97,11 +97,11 @@ type ServerMsg =
   | { type: "stepComplete"; index: number; screenshot: string; mode: "human" | "fast"; durationMs: number }
   | { type: "finished"; videoPath?: string }
   | { type: "error"; message: string }
-  | { type: "status"; loaded: boolean; executedUpTo: number }
+  | { type: "status"; loaded: boolean; executedUpTo: number; runMode?: "human" | "fast" }
   | { type: "scenarioFiles"; files: string[] }
   | { type: "liveFrame"; data: string; paneId?: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
-  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
+  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepDurationsFast: (number | null)[]; stepDurationsHuman: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared"; cacheSize?: number }
   | { type: "cacheSize"; size: number }
   | { type: "cancelled" }
@@ -125,13 +125,21 @@ function send(ws: WebSocket, msg: ServerMsg) {
   }
 }
 
-function persistStepCache(index: number, screenshot: string, durationMs: number, exec: Executor) {
+function persistStepCache(index: number, screenshot: string, durationMs: number, mode: "human" | "fast", exec: Executor) {
   if (!currentCacheDir || !currentContentHash || !currentScenarioFile) return;
   try {
     if (screenshot) cache.saveScreenshot(currentCacheDir, index, screenshot);
     const hasAudio = !!exec.steps[index]?.narration;
+    const existing = currentStepMetas.find((m) => m.index === index);
     currentStepMetas = currentStepMetas.filter((m) => m.index !== index);
-    currentStepMetas.push({ index, durationMs, hasAudio });
+    const meta: StepMeta = {
+      index,
+      durationMs,
+      durationMsFast: mode === "fast" ? durationMs : (existing?.durationMsFast),
+      durationMsHuman: mode === "human" ? durationMs : (existing?.durationMsHuman),
+      hasAudio,
+    };
+    currentStepMetas.push(meta);
     cache.saveMeta(currentCacheDir, {
       scenarioFile: currentScenarioFile,
       contentHash: currentContentHash,
@@ -496,7 +504,7 @@ wss.on("connection", (ws) => {
   }
 
   if (executor) {
-    send(ws, { type: "status", loaded: true, executedUpTo: -1 });
+    send(ws, { type: "status", loaded: true, executedUpTo: -1, runMode: getRunMode() });
   }
 
   // Serialize message processing: async handlers fired by WebSocket
@@ -524,7 +532,6 @@ wss.on("connection", (ws) => {
           if (electronMain) electronMain.destroyScenarioView();
 
           currentScenarioFile = msg.file;
-          currentStepMetas = [];
           const descriptor = await loadScenarioDescriptor(msg.file);
           executor = new Executor(descriptor, {
             projectRoot: PROJECT_ROOT,
@@ -540,6 +547,8 @@ wss.on("connection", (ws) => {
 
           const absPath = path.isAbsolute(msg.file) ? msg.file : path.resolve(PROJECT_ROOT, msg.file);
           const { dir, hash } = cache.getDir(absPath, msg.file);
+          const existingMeta = cache.loadMeta(dir);
+          currentStepMetas = (existingMeta && existingMeta.contentHash === hash) ? existingMeta.steps : [];
           currentCacheDir = dir;
           currentContentHash = hash;
 
@@ -555,15 +564,20 @@ wss.on("connection", (ws) => {
               type: "cachedData",
               screenshots: cached.screenshots,
               stepDurations: cached.stepDurations,
+              stepDurationsFast: cached.stepDurationsFast,
+              stepDurationsHuman: cached.stepDurationsHuman,
               stepHasAudio: cached.stepHasAudio,
               videoPath: cached.videoPath,
             });
           } else {
             const hasAudio = executor.steps.map((s) => !!s.narration);
+            const empty = executor.steps.map(() => null);
             send(ws, {
               type: "cachedData",
               screenshots: executor.steps.map(() => null),
-              stepDurations: executor.steps.map(() => null),
+              stepDurations: empty,
+              stepDurationsFast: empty,
+              stepDurationsHuman: empty,
               stepHasAudio: hasAudio,
             });
           }
@@ -581,15 +595,21 @@ wss.on("connection", (ws) => {
             executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
             executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
-            currentStepMetas = [];
+            if (currentCacheDir && currentContentHash) {
+              const meta = cache.loadMeta(currentCacheDir);
+              currentStepMetas = (meta && meta.contentHash === currentContentHash) ? meta.steps : [];
+            } else {
+              currentStepMetas = [];
+            }
           }
+          const runMode = getRunMode();
           await executor.runTo(
             msg.index,
-            getRunMode(),
+            runMode,
             (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
             (result) => {
               send(ws, { type: "stepComplete", ...result });
-              persistStepCache(result.index, result.screenshot, result.durationMs, executor!);
+              persistStepCache(result.index, result.screenshot, result.durationMs, runMode, executor!);
             },
           );
           break;
@@ -601,14 +621,15 @@ wss.on("connection", (ws) => {
             break;
           }
           try {
+            const runAllMode = getRunMode();
             for (let i = 0; i < executor.stepCount; i++) {
               await executor.runTo(
                 i,
-                getRunMode(),
+                runAllMode,
                 (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
                 (result) => {
                   send(ws, { type: "stepComplete", ...result });
-                  persistStepCache(result.index, result.screenshot, result.durationMs, executor!);
+                  persistStepCache(result.index, result.screenshot, result.durationMs, runAllMode, executor!);
                 },
               );
             }
@@ -646,7 +667,7 @@ wss.on("connection", (ws) => {
         case "reset": {
           if (executor) await executor.reset();
           if (electronMain) electronMain.destroyScenarioView();
-          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1 });
+          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1, runMode: getRunMode() });
           break;
         }
 
@@ -722,10 +743,15 @@ wss.on("connection", (ws) => {
             executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
             executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
-            currentStepMetas = [];
+            if (currentCacheDir && currentContentHash) {
+              const meta = cache.loadMeta(currentCacheDir);
+              currentStepMetas = (meta && meta.contentHash === currentContentHash) ? meta.steps : [];
+            } else {
+              currentStepMetas = [];
+            }
           }
           send(ws, { type: "viewMode", mode: currentViewMode });
-          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1 });
+          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1, runMode: getRunMode() });
           break;
         }
 
@@ -745,6 +771,8 @@ wss.on("connection", (ws) => {
                 type: "cachedData",
                 screenshots: cached.screenshots,
                 stepDurations: cached.stepDurations,
+                stepDurationsFast: cached.stepDurationsFast,
+                stepDurationsHuman: cached.stepDurationsHuman,
                 stepHasAudio: cached.stepHasAudio,
                 videoPath: cached.videoPath,
               });
@@ -756,7 +784,7 @@ wss.on("connection", (ws) => {
         case "downloadArtifacts": {
           const scenarioFiles = listPlayerScenarioFiles();
           console.error(`[player] Downloading CI artifacts from GitHub...`);
-          send(ws, { type: "status", loaded: !!executor, executedUpTo: executor?.lastExecutedIndex ?? -1 });
+          send(ws, { type: "status", loaded: !!executor, executedUpTo: executor?.lastExecutedIndex ?? -1, runMode: getRunMode() });
           try {
             const { imported } = await cache.downloadFromGitHub(scenarioFiles, {
               runId: msg.runId,
@@ -774,6 +802,8 @@ wss.on("connection", (ws) => {
                   type: "cachedData",
                   screenshots: cached.screenshots,
                   stepDurations: cached.stepDurations,
+                  stepDurationsFast: cached.stepDurationsFast,
+                  stepDurationsHuman: cached.stepDurationsHuman,
                   stepHasAudio: cached.stepHasAudio,
                   videoPath: cached.videoPath,
                 });

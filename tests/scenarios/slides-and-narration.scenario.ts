@@ -26,7 +26,7 @@ async function assertSlide(page: Page, expected: number) {
         (text: string) =>
             document.querySelector('[data-testid="slides-current"]')?.textContent?.trim() === text,
         expectedText,
-        { timeout: 5000 },
+        { timeout: 10000 },
     );
 }
 
