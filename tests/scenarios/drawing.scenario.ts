@@ -10,8 +10,7 @@ interface Ctx {
 }
 
 const narrations = {
-    intro: "This scenario demonstrates the laser pointer and drawing overlay features.",
-    highlight: "First, let's highlight the slide title using the laser pointer.",
+    intro: "This scenario demonstrates the drawing overlay feature.",
     drawing: "Now let's draw some annotations right on the page.",
     outro: "And that's it!",
 };
@@ -69,10 +68,6 @@ export default defineScenario<Ctx>("Drawing", (s) => {
     s.step("Introduction", narrations.intro, async ({ actor }) => {
         await actor.waitFor('[data-testid="slides-page"]');
         await assertSlide(actor.page, 1);
-    });
-
-    s.step("Highlight slide title", narrations.highlight, async ({ actor }) => {
-        await actor.highlight('[data-testid="slides-title-0"]');
     });
 
     s.step("Draw annotation", narrations.drawing, async ({ actor }) => {

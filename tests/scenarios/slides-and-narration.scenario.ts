@@ -14,6 +14,7 @@ const narrations = {
     intro: "This scenario tests narration and simple mouse interactions with a slide carousel.",
     buttons: "First, let's navigate through the slides using the forward and back buttons.",
     swipe: "Now let's try swiping left and right to change slides, just like on a touchscreen.",
+    highlight: "Let me highlight the title of this slide using the laser pointer.",
     outro: "And that's it!",
 };
 
@@ -82,6 +83,10 @@ export default defineScenario<Ctx>("Slides and Narration", (s) => {
     s.step("Swipe backward", async ({ actor }) => {
         await actor.dragByOffset(DRAG_SELECTOR, 300, 0);
         await assertSlide(actor.page, 3);
+    });
+
+    s.step("Highlight slide title", narrations.highlight, async ({ actor }) => {
+        await actor.highlight('[data-testid="slides-title-2"]');
     });
 
     s.step("Outro", narrations.outro, async () => {});
