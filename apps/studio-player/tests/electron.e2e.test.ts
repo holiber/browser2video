@@ -8,6 +8,7 @@ const BASIC_UI = "tests/scenarios/basic-ui.scenario.ts";
 const ALL_IN_ONE = "tests/scenarios/mcp-generated/all-in-one.scenario.ts";
 const COLLAB = "tests/scenarios/collab.scenario.ts";
 const TUI_TERMINALS = "tests/scenarios/tui-terminals.scenario.ts";
+const CSS_BUTTONS = "tests/scenarios/css-buttons-tutorial.scenario.ts";
 const TEST_PORT = 9531;
 const TEST_CDP_PORT = 9335;
 
@@ -169,6 +170,44 @@ test("electron: stop button cancels running scenario", async () => {
   // Verify: Play All button returns (execution cancelled)
   const playAllBtn = page.locator('button[title="Play all"]');
   await expect(playAllBtn).toBeVisible({ timeout: 15_000 });
+});
+
+test("electron: stop button kills audio playback immediately", async () => {
+  test.setTimeout(120_000);
+
+  const getAudioPids = (): Set<string> => {
+    try {
+      const out = execSync("pgrep -x afplay 2>/dev/null || true", { encoding: "utf-8" }).trim();
+      return new Set(out.split("\n").filter(Boolean));
+    } catch {
+      return new Set();
+    }
+  };
+
+  const pidsBefore = getAudioPids();
+
+  const playAll = await loadAndPlayScenario(CSS_BUTTONS);
+  await playAll.click();
+
+  const stopBtn = page.locator('button[title="Stop"]');
+  await expect(stopBtn).toBeVisible({ timeout: 30_000 });
+
+  // Let the scenario reach a narrated step and start audio playback
+  await page.waitForTimeout(5_000);
+
+  await stopBtn.click();
+
+  // Play button must return promptly — not after the full narration timer expires.
+  // Before the fix, the sleep timer in speak() would block abort for the
+  // remaining narration duration (potentially 10+ seconds).
+  const playAllBtn = page.locator('button[title="Play all"]');
+  await expect(playAllBtn).toBeVisible({ timeout: 10_000 });
+
+  await page.waitForTimeout(500);
+
+  const pidsAfter = getAudioPids();
+  const newPids = [...pidsAfter].filter((p) => !pidsBefore.has(p));
+  expect(newPids).toEqual([]);
 });
 
 test("electron: all-in-one scenario uses scenario-grid preview without extra windows", async () => {

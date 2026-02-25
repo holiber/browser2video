@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Page</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #ffffff;
+            font-family: system-ui, sans-serif;
+        }
+        .card {
+            background: #f8f9fa;
+            border: 2px solid #dee2e6;
+            border-radius: 12px;
+            padding: 40px;
+            text-align: center;
+            width: 400px;
+        }
+        h1 {
+            font-size: 24px;
+            color: #212529;
+            margin-bottom: 24px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px 16px;
+            font-size: 16px;
+            border: 2px solid #ced4da;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            outline: none;
+        }
+        input[type="text"]:focus {
+            border-color: #4dabf7;
+        }
+        button {
+            width: 200px;
+            height: 50px;
+            font-size: 18px;
+            font-weight: 600;
+            color: #fff;
+            background: #228be6;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        button:hover { background: #1c7ed6; }
+        button:active { background: #1971c2; }
+        .done { display: none; color: #2f9e44; font-size: 20px; margin-top: 16px; }
+        .done.show { display: block; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Simple Form</h1>
+        <input type="text" data-testid="input-name" placeholder="Enter your name">
+        <br>
+        <button data-testid="btn-confirm" onclick="document.querySelector('.done').classList.add('show')">Confirm</button>
+        <div class="done" data-testid="done-msg">✓ Done!</div>
+    </div>
+</body>
+</html>

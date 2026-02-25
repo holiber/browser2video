@@ -268,20 +268,23 @@ export const CURSOR_OVERLAY_SCRIPT = `
     document.documentElement.style.scrollBehavior = 'smooth';
   }
 
+  window.__b2v_laserTrails = {};
+
   window.__b2v_moveCursor = function(x, y, actorId) {
-    var el = getCursorEl(actorId || 'default');
+    var id = actorId || 'default';
+    var el = getCursorEl(id);
     if (!el) return;  // body not ready
     var wasHidden = el.style.display === 'none';
     if (wasHidden) {
-      // First appearance: teleport without transition to avoid sliding from corner
       el.style.transition = 'none';
       el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
       el.style.display = '';
-      // Re-enable transition after a frame
       requestAnimationFrame(function() { el.style.transition = 'transform 40ms ease-in-out'; });
     } else {
       el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
     }
+    var trail = window.__b2v_laserTrails[id];
+    if (trail) trail.points.push({ x: x, y: y, t: performance.now() });
   };
 
   // Pre-register a custom color for an actor ID (call before first moveCursor)
@@ -315,6 +318,96 @@ export const CURSOR_OVERLAY_SCRIPT = `
     setTimeout(() => ring.remove(), 700);
   };
 
+  window.__b2v_cursorDown = function(actorId) {
+    var id = actorId || 'default';
+    var el = getCursorEl(id);
+    if (!el) return;
+    el.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.5)) drop-shadow(0 0 6px rgba(96,165,250,0.7))';
+    var svg = el.querySelector('svg');
+    if (svg) svg.style.transform = 'scale(0.78)';
+    var dot = document.createElement('div');
+    dot.className = '__b2v_hold_dot';
+    dot.id = '__b2v_hold_dot_' + id;
+    dot.style.cssText = 'position:absolute;left:3px;top:3px;width:10px;height:10px;border-radius:50%;background:rgba(96,165,250,0.7);animation:__b2v_hold_pulse 0.8s ease-in-out infinite;pointer-events:none;';
+    el.appendChild(dot);
+  };
+
+  window.__b2v_cursorUp = function(actorId) {
+    var id = actorId || 'default';
+    var el = getCursorEl(id);
+    if (!el) return;
+    el.style.filter = 'drop-shadow(0 1px 2px rgba(0,0,0,0.5))';
+    var svg = el.querySelector('svg');
+    if (svg) svg.style.transform = '';
+    var dot = document.getElementById('__b2v_hold_dot_' + id);
+    if (dot) dot.remove();
+  };
+
+  window.__b2v_laserOn = function(actorId) {
+    var id = actorId || 'default';
+    if (window.__b2v_laserTrails[id]) return;
+    var canvas = document.createElement('canvas');
+    canvas.id = '__b2v_laser_' + id;
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:999996;pointer-events:none;';
+    document.body.appendChild(canvas);
+    var ctx = canvas.getContext('2d');
+    var trail = { points: [], canvas: canvas, ctx: ctx, raf: 0 };
+    window.__b2v_laserTrails[id] = trail;
+    var TRAIL_MS = 400;
+    function draw() {
+      var now = performance.now();
+      var w = canvas.width; var h = canvas.height;
+      if (w !== window.innerWidth || h !== window.innerHeight) {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        w = canvas.width; h = canvas.height;
+      }
+      ctx.clearRect(0, 0, w, h);
+      while (trail.points.length > 0 && now - trail.points[0].t > TRAIL_MS) trail.points.shift();
+      var pts = trail.points;
+      if (pts.length >= 2) {
+        for (var i = 1; i < pts.length; i++) {
+          var prev = pts[i - 1];
+          var cur = pts[i];
+          var ageStart = (now - prev.t) / TRAIL_MS;
+          var ageEnd = (now - cur.t) / TRAIL_MS;
+          var alpha = 0.85 * (1 - (ageStart + ageEnd) / 2);
+          var lw = 6 * (1 - (ageStart + ageEnd) / 2 * 0.5);
+          if (alpha <= 0 || lw <= 0) continue;
+          ctx.beginPath();
+          ctx.moveTo(prev.x, prev.y);
+          ctx.lineTo(cur.x, cur.y);
+          ctx.strokeStyle = 'rgba(239, 68, 68, ' + alpha + ')';
+          ctx.lineWidth = lw;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(prev.x, prev.y);
+          ctx.lineTo(cur.x, cur.y);
+          ctx.strokeStyle = 'rgba(239, 68, 68, ' + (alpha * 0.25) + ')';
+          ctx.lineWidth = lw + 6;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.stroke();
+        }
+      }
+      trail.raf = requestAnimationFrame(draw);
+    }
+    trail.raf = requestAnimationFrame(draw);
+  };
+
+  window.__b2v_laserOff = function(actorId) {
+    var id = actorId || 'default';
+    var trail = window.__b2v_laserTrails[id];
+    if (!trail) return;
+    cancelAnimationFrame(trail.raf);
+    if (trail.canvas.parentNode) trail.canvas.parentNode.removeChild(trail.canvas);
+    delete window.__b2v_laserTrails[id];
+  };
+
   if (!document.getElementById('__b2v_style')) {
     var ensureStyle = function() {
       if (!document.head) return;
@@ -324,6 +417,10 @@ export const CURSOR_OVERLAY_SCRIPT = `
         @keyframes __b2v_ripple {
           0%   { width: 0;   height: 0;   opacity: 1; }
           100% { width: 80px; height: 80px; opacity: 0; }
+        }
+        @keyframes __b2v_hold_pulse {
+          0%, 100% { transform: scale(1);   opacity: 0.7; }
+          50%      { transform: scale(1.4); opacity: 0.4; }
         }
       \`;
       document.head.appendChild(style);
@@ -639,7 +736,9 @@ export class Actor {
 
     if (this.mode === "human") {
       await this.page.mouse.down();
+      await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
       await sleep(pickMs(this.delays.clickHoldMs));
+      await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
       await this.page.mouse.up();
     } else {
       await this.page.mouse.click(x, y);
@@ -751,7 +850,7 @@ export class Actor {
 
         this.cursorX = target.x;
         this.cursorY = target.y;
-        await option.click();
+        await option.click({ force: true });
         await sleep(pickMs(this.delays.afterClickMs));
         return;
       }
@@ -834,6 +933,7 @@ export class Actor {
 
     await this.page.mouse.move(from.x, from.y);
     await this.page.mouse.down();
+    await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
     this._emitClick(from.x, from.y);
     await sleep(pickMs(this.delays.clickHoldMs));
 
@@ -850,6 +950,7 @@ export class Actor {
     }
 
     await sleep(pickMs(this.delays.afterClickMs));
+    await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
     await this.page.mouse.up();
 
     this.cursorX = to.x;
@@ -955,6 +1056,7 @@ export class Actor {
 
     await this.page.mouse.move(absPoints[0].x, absPoints[0].y);
     await this.page.mouse.down();
+    await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
 
     for (let i = 1; i < absPoints.length; i++) {
       const segSteps = this.mode === "human" ? 12 : 1;
@@ -972,6 +1074,7 @@ export class Actor {
       }
     }
 
+    await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
     await this.page.mouse.up();
     this.cursorX = absPoints[absPoints.length - 1].x;
     this.cursorY = absPoints[absPoints.length - 1].y;
@@ -1054,6 +1157,113 @@ export class Actor {
   }
 
   /**
+   * Highlight an element with a laser-pointer trail spiraling around it.
+   * Enables the laser trail, performs circleAround, then disables the trail.
+   * Fast mode: no-op (same as circleAround).
+   */
+  async highlight(selector: string, opts?: { durationMs?: number }) {
+    if (this.mode !== "human") return;
+    await this.page.evaluate(`window.__b2v_laserOn?.('${this.cursorId}')`);
+    await this.circleAround(selector, opts);
+    await this.page.evaluate(`window.__b2v_laserOff?.('${this.cursorId}')`);
+  }
+
+  /**
+   * Draw on a transparent full-page overlay without dispatching real pointer
+   * events (so underlying page elements are not affected). Injects a canvas,
+   * draws strokes via JS evaluate, and animates the cursor visually.
+   * Points use 0-1 normalized coordinates relative to the viewport.
+   */
+  async drawOnPage(
+    points: Array<{ x: number; y: number }>,
+    opts?: { color?: string; lineWidth?: number; clear?: boolean },
+  ) {
+    if (points.length < 2) return;
+    const color = opts?.color ?? "rgba(239, 68, 68, 0.85)";
+    const lineWidth = opts?.lineWidth ?? 3;
+
+    const vp = this.page.viewportSize()!;
+    const absPoints = points.map((p) => ({
+      x: Math.round(p.x * vp.width),
+      y: Math.round(p.y * vp.height),
+    }));
+
+    await this.page.evaluate(
+      ({ color, lineWidth }) => {
+        let c = document.getElementById("__b2v_draw_overlay") as HTMLCanvasElement | null;
+        if (!c) {
+          c = document.createElement("canvas");
+          c.id = "__b2v_draw_overlay";
+          c.width = window.innerWidth;
+          c.height = window.innerHeight;
+          c.style.cssText =
+            "position:fixed;top:0;left:0;width:100%;height:100%;z-index:999997;pointer-events:none;";
+          document.body.appendChild(c);
+        }
+        const ctx = c.getContext("2d")!;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+      },
+      { color, lineWidth },
+    );
+
+    if (this.mode === "human") {
+      const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, absPoints[0]);
+      for (let i = 0; i < movePoints.length; i++) {
+        const p = movePoints[i]!;
+        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
+        this._emitCursorMove(p.x, p.y);
+        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
+      }
+    }
+
+    await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
+
+    for (let i = 1; i < absPoints.length; i++) {
+      const prev = absPoints[i - 1];
+      const cur = absPoints[i];
+      const segSteps = this.mode === "human" ? 12 : 1;
+      const segPoints = linearPath(prev, cur, segSteps);
+
+      for (let j = 0; j < segPoints.length; j++) {
+        const p = segPoints[j]!;
+        await this.page.evaluate(
+          ({ x, y }) => {
+            const c = document.getElementById("__b2v_draw_overlay") as HTMLCanvasElement | null;
+            if (!c) return;
+            const ctx = c.getContext("2d")!;
+            ctx.lineTo(x, y);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+          },
+          { x: p.x, y: p.y },
+        );
+        if (this.mode === "human") {
+          await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
+          this._emitCursorMove(p.x, p.y);
+          await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), j, segPoints.length, 2));
+        }
+      }
+    }
+
+    await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
+    this.cursorX = absPoints[absPoints.length - 1].x;
+    this.cursorY = absPoints[absPoints.length - 1].y;
+    await sleep(pickMs(this.delays.afterDragMs));
+
+    if (opts?.clear) {
+      await sleep(1500);
+      await this.page.evaluate(() => {
+        const c = document.getElementById("__b2v_draw_overlay");
+        if (c) c.remove();
+      });
+    }
+  }
+
+  /**
    * Press a keyboard key with a human-like pause afterwards.
    * Useful for TUI / terminal interactions where raw key presses are needed.
    */
@@ -1078,7 +1288,9 @@ export class Actor {
       this._emitClick(x, y);
       await sleep(pickMs(this.delays.clickEffectMs));
       await this.page.mouse.down();
+      await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
       await sleep(pickMs(this.delays.clickHoldMs));
+      await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
       await this.page.mouse.up();
       await sleep(pickMs(this.delays.afterClickMs));
     } else {

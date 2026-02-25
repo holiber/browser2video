@@ -365,15 +365,26 @@ export class Session {
     // Lightweight inline .env loader — sets missing env vars from .env file
     loadDotenv();
 
-    // Auto-enable narration when OPENAI_API_KEY is present and not explicitly configured
-    // Only auto-enable in human mode — fast mode skips narration unless explicitly requested
-    if (!this.narrationOpts && this.mode === "human" && (process.env.B2V_NARRATE === "true" || process.env.OPENAI_API_KEY)) {
+    // Auto-enable narration in human mode when any TTS source is available
+    if (!this.narrationOpts && this.mode === "human" && (
+      process.env.B2V_NARRATE === "true" ||
+      process.env.OPENAI_API_KEY ||
+      process.env.GOOGLE_TTS_API_KEY ||
+      process.env.B2V_TTS_PROVIDER === "system" ||
+      process.env.B2V_TTS_PROVIDER === "piper"
+    )) {
       this.narrationOpts = { enabled: true };
     }
 
     // Apply B2V_* env var overrides for narration settings
     if (this.narrationOpts) {
-      if (process.env.B2V_VOICE) this.narrationOpts.voice = process.env.B2V_VOICE;
+      if (process.env.B2V_TTS_PROVIDER) {
+        this.narrationOpts.provider = process.env.B2V_TTS_PROVIDER as any;
+      }
+      if (process.env.B2V_VOICE || process.env.B2V_NARRATION_VOICE) {
+        this.narrationOpts.voice = process.env.B2V_NARRATION_VOICE ?? process.env.B2V_VOICE;
+      }
+      if (process.env.B2V_NARRATION_MODEL) this.narrationOpts.model = process.env.B2V_NARRATION_MODEL;
       if (process.env.B2V_NARRATION_SPEED) this.narrationOpts.speed = parseFloat(process.env.B2V_NARRATION_SPEED);
       if (process.env.B2V_REALTIME_AUDIO) this.narrationOpts.realtime = process.env.B2V_REALTIME_AUDIO === "true";
       if (process.env.B2V_NARRATION_LANGUAGE) this.narrationOpts.language = process.env.B2V_NARRATION_LANGUAGE;
@@ -538,11 +549,13 @@ export class Session {
       // a WebContentsView and then locate it via CDP.
       const targetUrl = opts.url ?? "about:blank";
 
-      // Snapshot existing page URLs before creating the new view
-      const existingUrls = new Set<string>();
+      // Snapshot existing page REFERENCES before creating the new view.
+      // Using URLs doesn't work when the same URL is reused across sessions
+      // (e.g., the same demo app URL for a new WebContentsView).
+      const existingPages = new Set<Page>();
       for (const ctx of this.browser!.contexts()) {
         for (const p of ctx.pages()) {
-          existingUrls.add(p.url());
+          existingPages.add(p);
         }
       }
 
@@ -553,7 +566,7 @@ export class Session {
       for (let attempt = 0; attempt < 60; attempt++) {
         for (const ctx of this.browser!.contexts()) {
           for (const p of ctx.pages()) {
-            if (!existingUrls.has(p.url())) {
+            if (!existingPages.has(p) && !p.isClosed()) {
               found = p;
               break;
             }
@@ -568,6 +581,34 @@ export class Session {
       page = found;
       context = page.context();
       console.error(`[session] Found Electron-managed page via CDP: ${page.url()}`);
+
+      // Sync Playwright's viewport tracking with the requested viewport.
+      // Electron WebContentsViews may start at 0×0 and Playwright can keep
+      // stale metrics, causing locator actions to fail as "outside viewport".
+      try {
+        await page.setViewportSize({ width: vpW, height: vpH });
+      } catch { /* best-effort */ }
+
+      // Init scripts for Electron-managed pages (page is already navigated by Electron,
+      // so we must use evaluate() for the current page AND addInitScript for future navs)
+      if (this.mode === "human") {
+        await page.evaluate(HIDE_CURSOR_INIT_SCRIPT).catch((e: any) => console.error("[session] HIDE_CURSOR eval failed:", e.message));
+        await page.addInitScript(HIDE_CURSOR_INIT_SCRIPT);
+        await page.evaluate(CURSOR_OVERLAY_SCRIPT).catch((e: any) => console.error("[session] CURSOR_OVERLAY eval failed:", e.message));
+        await page.addInitScript(CURSOR_OVERLAY_SCRIPT);
+        if (this.cursorColor) {
+          const { fill, stroke } = this.cursorColor;
+          const colorScript = `window.__b2v_setCursorColor?.('default', '${fill}', '${stroke}')`;
+          await page.evaluate(colorScript).catch((e: any) => console.error("[session] cursor color eval failed:", e.message));
+          await page.addInitScript(colorScript);
+          console.error(`[session] Cursor color registered: fill=${fill} stroke=${stroke}`);
+        }
+        console.error("[session] Electron cursor overlay injected successfully");
+      }
+      if (this.mode === "fast") {
+        await page.evaluate(FAST_MODE_INIT_SCRIPT).catch((e: any) => console.error("[session] FAST_MODE eval failed:", e.message));
+        await page.addInitScript(FAST_MODE_INIT_SCRIPT);
+      }
 
       // Start CDP screencast recording for Electron pages
       if (this.record) {
@@ -692,6 +733,11 @@ export class Session {
       if (!found) throw new Error("Could not find terminal page via CDP");
       page = found;
       context = page.context();
+
+      // Best-effort: keep viewport metrics consistent for locator operations.
+      try {
+        await page.setViewportSize({ width: vpW, height: vpH });
+      } catch { /* best-effort */ }
     } else {
       const ctxOpts: {
         viewport: { width: number; height: number };
@@ -1556,6 +1602,9 @@ export class Session {
   async abort(): Promise<void> {
     if (this.finished) return;
     this.finished = true;
+
+    // Kill audio playback immediately
+    this.audioDirector.stop();
 
     // Force-close all pages — this interrupts any running Playwright operations
     for (const pane of this.panes.values()) {

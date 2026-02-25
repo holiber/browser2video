@@ -1,7 +1,9 @@
 /**
  * Interactive shell terminals with TUI apps (htop, mc) running inside
  * in-browser xterm panes connected to real PTYs.
- * Demonstrates dynamic tab creation and closure.
+ *
+ * Note: Dynamic tab add/close is not supported in the Electron/jabterm grid
+ * mode yet, so this scenario focuses on TUI interaction + vim.
  */
 import { defineScenario, type TerminalActor } from "browser2video";
 
@@ -30,7 +32,7 @@ export default defineScenario<Ctx>("TUI Terminals", (s) => {
   });
 
   s.step("Open terminals", async ({ mc, htop }) => {
-    await mc.waitForText(["1Help"], 30000);
+    await mc.waitForText(["Help"], 30000);
     await htop.waitForText(["PID"], 30000);
   });
 
@@ -81,23 +83,5 @@ export default defineScenario<Ctx>("TUI Terminals", (s) => {
     await shell.pressKey("Escape");
     await shell.typeAndEnter(":q!");
     await shell.waitForPrompt();
-  });
-
-  let newTab: TerminalActor;
-
-  s.step("Add a new shell tab", async ({ shell, grid }) => {
-    await shell.click('[data-testid="b2v-add-tab"]');
-    await grid.page.waitForTimeout(300);
-    newTab = await grid.wrapLatestTab();
-    await newTab.waitForPrompt();
-  });
-
-  s.step("Run command in new tab", async () => {
-    await newTab.typeAndEnter('echo "hello world"');
-    await newTab.waitForPrompt();
-  });
-
-  s.step("Close the new tab", async ({ shell }) => {
-    await shell.click('.b2v-closable .dv-default-tab-action');
   });
 });

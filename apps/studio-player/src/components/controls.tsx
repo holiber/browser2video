@@ -1,6 +1,14 @@
 import { useState } from "react";
 import { Play, Square, SkipForward, SkipBack, RotateCcw, Trash2, Download, FolderInput } from "lucide-react";
-import type { StepState } from "../hooks/use-player";
+import type { StepState, AudioSettings } from "../hooks/use-player";
+import { AudioSettingsPanel } from "./audio-settings";
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
 
 interface ControlsProps {
   stepCount: number;
@@ -9,6 +17,9 @@ interface ControlsProps {
   connected: boolean;
   importing: boolean;
   importResult: { count: number; scenarios: string[] } | null;
+  audioSettings: AudioSettings;
+  detectedProvider: string;
+  cacheSize: number;
   onRunStep: (index: number) => void;
   onRunAll: () => void;
   onReset: () => void;
@@ -16,6 +27,7 @@ interface ControlsProps {
   onClearCache: () => void;
   onImportArtifacts: (dir: string) => void;
   onDownloadArtifacts: (runId?: string) => void;
+  onAudioSettingsChange: (settings: AudioSettings) => void;
 }
 
 export function Controls({
@@ -25,6 +37,9 @@ export function Controls({
   connected,
   importing,
   importResult,
+  audioSettings,
+  detectedProvider,
+  cacheSize,
   onRunStep,
   onRunAll,
   onReset,
@@ -32,6 +47,7 @@ export function Controls({
   onClearCache,
   onImportArtifacts,
   onDownloadArtifacts,
+  onAudioSettingsChange,
 }: ControlsProps) {
   const isRunning = stepStates.some((s) => s === "running" || s === "fast-forwarding");
   const allDone = stepStates.every((s) => s === "done");
@@ -141,6 +157,12 @@ export function Controls({
           )}
         </div>
 
+        <AudioSettingsPanel
+          settings={audioSettings}
+          detectedProvider={detectedProvider}
+          onUpdate={onAudioSettingsChange}
+        />
+
         <button
           onClick={onReset}
           disabled={isRunning}
@@ -159,7 +181,9 @@ export function Controls({
           data-testid="ctrl-clear-cache"
         >
           <Trash2 size={14} />
-          <span className="text-xs">Clear cache</span>
+          <span className="text-xs">
+            {cacheSize > 0 ? `Clear Cache ${formatBytes(cacheSize)}` : "Clear Cache"}
+          </span>
         </button>
       </div>
     </div>

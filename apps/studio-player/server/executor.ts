@@ -68,9 +68,10 @@ export class Executor<T = any> {
     this.onRequestPage = opts?.onRequestPage ?? null;
 
     const hasNarration = descriptor.steps.some((s) => !!s.narration || !!s.narrationFn);
-    if (hasNarration && !process.env.OPENAI_API_KEY) {
-      console.warn("\n  WARNING: Scenario has narrated steps but OPENAI_API_KEY is not set.");
-      console.warn("  Set the env var to enable text-to-speech narration.\n");
+    if (hasNarration && !process.env.OPENAI_API_KEY && !process.env.GOOGLE_TTS_API_KEY) {
+      console.warn("\n  WARNING: Scenario has narrated steps but no cloud TTS key is set.");
+      console.warn("  Will try system TTS (macOS say / Windows SAPI) or Piper as fallback.");
+      console.warn("  For best quality, set OPENAI_API_KEY or GOOGLE_TTS_API_KEY.\n");
     }
   }
 
@@ -95,14 +96,21 @@ export class Executor<T = any> {
 
   private async ensureSession(mode: "human" | "fast"): Promise<Session> {
     if (!this.session) {
+      // Starting fresh — clear any stale abort flag from a previous session.
+      // This prevents late-arriving cancel messages from blocking new executions.
+      this._aborted = false;
+      const isEmbedded = process.env.B2V_EMBEDDED === "1";
       const prevCwd = process.cwd();
       if (this.projectRoot) process.chdir(this.projectRoot);
       let newSession: Session | null = null;
       try {
         newSession = await createSession({
           mode,
-          record: mode === "human",
-          narration: { enabled: true, realtime: true },
+          // Embedded (nested StudioPlayer) needs live frames via CDP screencast.
+          // Session recording in Electron mode also uses CDP screencast internally,
+          // so enabling both would conflict and produce 0 live frames.
+          record: mode === "human" && !isEmbedded,
+          narration: { enabled: true, realtime: process.env.B2V_HEADLESS !== "1" },
           ...this.descriptor.sessionOpts,
           ...this.sessionOpts,
           headed: false,
@@ -147,7 +155,6 @@ export class Executor<T = any> {
         }
 
         // Start screencasting for video mode, or when embedded (no ElectronView overlay)
-        const isEmbedded = process.env.B2V_EMBEDDED === "1";
         if (this.onLiveFrame && (this.viewMode === "video" || isEmbedded)) {
           await this.startScreencast();
         }
@@ -263,10 +270,38 @@ export class Executor<T = any> {
       const panes: Map<string, any> = (this.session as any).panes;
       const firstPane = panes?.values().next().value;
       if (firstPane?.page) {
-        const buf = await firstPane.page.screenshot({ type: "png" });
-        screenshot = buf.toString("base64");
+        const isEmbedded = process.env.B2V_EMBEDDED === "1";
+
+        // Embedded Electron pages can hang on Playwright's screenshot pipeline
+        // ("waiting for fonts to load..."). In that case, use a raw CDP capture
+        // which is fast and doesn't depend on window visibility.
+        if (isEmbedded && this.cdpEndpoint) {
+          try {
+            const cdp = await firstPane.page.context().newCDPSession(firstPane.page);
+            const timeoutMs = 5000;
+            const res = await Promise.race([
+              cdp.send("Page.captureScreenshot", { format: "png", fromSurface: true }),
+              new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`timeout ${timeoutMs}ms`)), timeoutMs)),
+            ]);
+            await cdp.detach().catch(() => { });
+            if (res?.data) {
+              screenshot = String(res.data);
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.error(`[executor] CDP screenshot failed (falling back): ${message}`);
+          }
+        }
+
+        if (!screenshot) {
+          const buf = await firstPane.page.screenshot({ type: "png", timeout: 10_000 });
+          screenshot = buf.toString("base64");
+        }
       }
-    } catch { /* page may be closed */ }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[executor] Screenshot capture failed: ${message}`);
+    }
 
     return { screenshot, durationMs };
   }

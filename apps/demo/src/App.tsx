@@ -1,5 +1,5 @@
 import { Suspense, useMemo } from "react";
-import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { LayoutDashboard, ListTodo, TerminalSquare, Columns3, MessageCircle, CalendarDays } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,11 @@ import TerminalsPage from "@/pages/terminals";
 import KanbanPage from "@/pages/kanban";
 import ChatPage from "@/pages/chat";
 import CalendarPage from "@/pages/calendar";
+import MoviePage from "@/pages/movie";
+import WikiPage from "@/pages/wiki";
+import SlidesPage from "@/pages/slides";
+import IPhoneChrome from "@/components/iphone-chrome";
+import PixelChrome from "@/components/pixel-chrome";
 import { RepoContext } from "@/lib/use-automerge";
 import { createRepo } from "@/lib/use-automerge";
 
@@ -51,23 +56,44 @@ function NavMenu({ onNavigate }: { onNavigate: (path: string) => void }) {
   );
 }
 
-function AppLayout({ children }: { children: React.ReactNode }) {
+function PlainLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col">
-      <main className="flex-1 overflow-y-auto">
-        {children}
-      </main>
+      <main className="flex-1 overflow-y-auto">{children}</main>
     </div>
+  );
+}
+
+function DeviceLayout({ role, children }: { role: string | null; children: React.ReactNode }) {
+  if (role === "veronica") return <IPhoneChrome>{children}</IPhoneChrome>;
+  if (role === "bob") return <PixelChrome>{children}</PixelChrome>;
+  return <PlainLayout>{children}</PlainLayout>;
+}
+
+function PageRoutes() {
+  const location = useLocation();
+  return (
+    <Routes location={location}>
+      <Route path="/" element={<AppPage />} />
+      <Route path="/notes" element={<NotesPage />} />
+      <Route path="/chat" element={<ChatPage />} />
+      <Route path="/calendar" element={<CalendarPage />} />
+      <Route path="/terminals" element={<TerminalsPage />} />
+      <Route path="/kanban" element={<KanbanPage />} />
+      <Route path="/movie" element={<MoviePage />} />
+      <Route path="/wiki" element={<WikiPage />} />
+      <Route path="/slides" element={<SlidesPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
   );
 }
 
 export default function App() {
   const location = useLocation();
-  const wsUrl = useMemo(() => {
-    const params = new URLSearchParams(location.search);
-    return params.get("ws") ?? undefined;
-  }, [location.search]);
+  const [params] = useSearchParams();
+  const role = params.get("role");
 
+  const wsUrl = useMemo(() => params.get("ws") ?? undefined, [params]);
   const repo = useMemo(() => createRepo({ wsUrl }), [wsUrl]);
 
   return (
@@ -81,17 +107,9 @@ export default function App() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.2 }}
           >
-            <AppLayout>
-              <Routes location={location}>
-                <Route path="/" element={<AppPage />} />
-                <Route path="/notes" element={<NotesPage />} />
-                <Route path="/chat" element={<ChatPage />} />
-                <Route path="/calendar" element={<CalendarPage />} />
-                <Route path="/terminals" element={<TerminalsPage />} />
-                <Route path="/kanban" element={<KanbanPage />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </AppLayout>
+            <DeviceLayout role={role}>
+              <PageRoutes />
+            </DeviceLayout>
           </motion.div>
         </AnimatePresence>
       </Suspense>

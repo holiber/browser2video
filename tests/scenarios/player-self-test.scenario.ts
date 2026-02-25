@@ -21,7 +21,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { defineScenario, type Actor, type Page } from "browser2video";
 import { InjectedActor } from "browser2video/injected-actor";
 
-const PLAYER_DIR = path.resolve(import.meta.dirname, "../../apps/player");
+const PLAYER_DIR = path.resolve(import.meta.dirname, "../../apps/studio-player");
 const INNER_PORT = 9591;
 const INNER_CDP_PORT = 9395;
 const DEMO_VITE_PORT = 5199;
@@ -536,6 +536,25 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
                 "The BasicUI scenario should produce visible screenshots after each step."
             );
         }
+    });
+
+    s.step("Cache button shows size", async ({ page }) => {
+        const btn = page.locator("[data-testid='ctrl-clear-cache']");
+        await btn.waitFor({ timeout: 5_000 });
+
+        await page.waitForFunction(
+            () => /Clear Cache \d/.test(
+                document.querySelector('[data-testid="ctrl-clear-cache"]')?.textContent ?? "",
+            ),
+            undefined,
+            { timeout: 5_000 },
+        );
+
+        const text = await btn.textContent();
+        if (!text || !(/Clear Cache \d/.test(text))) {
+            throw new Error(`Cache button should show size after steps ran, got: "${text}"`);
+        }
+        console.error(`[self-test] Cache button text: "${text}"`);
     });
 
     // ═══════════════════════════════════════════════════════════════════

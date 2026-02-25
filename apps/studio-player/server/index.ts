@@ -67,6 +67,15 @@ const PROJECT_ROOT = findProjectRoot();
 //  Message types
 // ---------------------------------------------------------------------------
 
+interface AudioSettings {
+  provider?: string;
+  voice?: string;
+  speed?: number;
+  model?: string;
+  language?: string;
+  realtime?: boolean;
+}
+
 type ClientMsg =
   | { type: "load"; file: string }
   | { type: "runStep"; index: number }
@@ -76,6 +85,8 @@ type ClientMsg =
   | { type: "listScenarios" }
   | { type: "clearCache" }
   | { type: "setViewMode"; mode: ViewMode }
+  | { type: "setAudioSettings"; settings: AudioSettings }
+  | { type: "getAudioSettings" }
   | { type: "importArtifacts"; dir: string }
   | { type: "downloadArtifacts"; runId?: string; artifactName?: string };
 
@@ -86,16 +97,27 @@ type ServerMsg =
   | { type: "stepComplete"; index: number; screenshot: string; mode: "human" | "fast"; durationMs: number }
   | { type: "finished"; videoPath?: string }
   | { type: "error"; message: string }
-  | { type: "status"; loaded: boolean; executedUpTo: number }
+  | { type: "status"; loaded: boolean; executedUpTo: number; runMode?: "human" | "fast" }
   | { type: "scenarioFiles"; files: string[] }
   | { type: "liveFrame"; data: string; paneId?: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
-  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
+  | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepDurationsFast: (number | null)[]; stepDurationsHuman: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
   | { type: "cacheCleared"; cacheSize?: number }
+  | { type: "cacheSize"; size: number }
   | { type: "cancelled" }
   | { type: "viewMode"; mode: ViewMode }
   | { type: "replayEvent"; event: ReplayEvent }
-  | { type: "artifactsImported"; count: number; scenarios: string[] };
+  | { type: "artifactsImported"; count: number; scenarios: string[] }
+  | { type: "audioSettings"; settings: AudioSettings; detected: string };
+
+function detectTtsProvider(): string {
+  if (process.env.B2V_TTS_PROVIDER && process.env.B2V_TTS_PROVIDER !== "auto") return process.env.B2V_TTS_PROVIDER;
+  if (process.env.GOOGLE_TTS_API_KEY) return "google";
+  if (process.env.OPENAI_API_KEY) return "openai";
+  if (process.platform === "darwin") return "system";
+  if (process.platform === "win32") return "system";
+  return "none";
+}
 
 function send(ws: WebSocket, msg: ServerMsg) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -103,20 +125,36 @@ function send(ws: WebSocket, msg: ServerMsg) {
   }
 }
 
-function persistStepCache(index: number, screenshot: string, durationMs: number, exec: Executor) {
+function persistStepCache(index: number, screenshot: string, durationMs: number, mode: "human" | "fast", exec: Executor) {
   if (!currentCacheDir || !currentContentHash || !currentScenarioFile) return;
   try {
     if (screenshot) cache.saveScreenshot(currentCacheDir, index, screenshot);
     const hasAudio = !!exec.steps[index]?.narration;
+    const existing = currentStepMetas.find((m) => m.index === index);
     currentStepMetas = currentStepMetas.filter((m) => m.index !== index);
-    currentStepMetas.push({ index, durationMs, hasAudio });
+    const meta: StepMeta = {
+      index,
+      durationMs,
+      durationMsFast: mode === "fast" ? durationMs : (existing?.durationMsFast),
+      durationMsHuman: mode === "human" ? durationMs : (existing?.durationMsHuman),
+      hasAudio,
+    };
+    currentStepMetas.push(meta);
     cache.saveMeta(currentCacheDir, {
       scenarioFile: currentScenarioFile,
       contentHash: currentContentHash,
       steps: currentStepMetas,
     });
+    broadcastCacheSize();
   } catch (err) {
     console.error("[player] Cache write error:", err);
+  }
+}
+
+function broadcastCacheSize() {
+  const size = cache.getCacheSize();
+  for (const client of wss.clients) {
+    send(client as WebSocket, { type: "cacheSize", size });
   }
 }
 
@@ -153,6 +191,13 @@ function findScenarioFiles(dir: string, base: string): string[] {
     }
   }
   return results.sort();
+}
+
+function listPlayerScenarioFiles(): string[] {
+  // Only include player-compatible scenarios.
+  // We intentionally do NOT scan the entire repo because some `*.scenario.ts`
+  // files are standalone scripts (top-level await) rather than defineScenario().
+  return findScenarioFiles(path.join(PROJECT_ROOT, "tests", "scenarios"), PROJECT_ROOT);
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +239,12 @@ let executor: Executor | null = null;
 let viteProcess: ChildProcess | null = null;
 let terminalServer: TerminalServer | null = null;
 let currentViewMode: ViewMode = "live";
+
+function getRunMode(): "human" | "fast" {
+  const raw = (process.env.B2V_MODE ?? "").toLowerCase();
+  if (raw === "fast") return "fast";
+  return "human";
+}
 
 // Electron mode: when B2V_CDP_PORT is set, Playwright connects via CDP
 const electronCdpPort = process.env.B2V_CDP_PORT ? parseInt(process.env.B2V_CDP_PORT, 10) : 0;
@@ -430,9 +481,22 @@ httpServer.on("upgrade", (req, socket, head) => {
 wss.on("connection", (ws) => {
   console.error("[player] Client connected");
 
-  const files = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+  const files = listPlayerScenarioFiles();
   send(ws, { type: "scenarioFiles", files });
+  send(ws, { type: "cacheSize", size: cache.getCacheSize() });
   send(ws, { type: "viewMode", mode: currentViewMode });
+  send(ws, {
+    type: "audioSettings",
+    settings: {
+      provider: process.env.B2V_TTS_PROVIDER,
+      voice: process.env.B2V_NARRATION_VOICE ?? process.env.B2V_VOICE,
+      speed: process.env.B2V_NARRATION_SPEED ? parseFloat(process.env.B2V_NARRATION_SPEED) : undefined,
+      model: process.env.B2V_NARRATION_MODEL,
+      language: process.env.B2V_NARRATION_LANGUAGE,
+      realtime: process.env.B2V_REALTIME_AUDIO === "true" ? true : undefined,
+    },
+    detected: detectTtsProvider(),
+  });
   if (terminalServer) {
     // Send the player's own /terminal URL as the base for terminal iframes
     const terminalPageUrl = `http://localhost:${PORT}`;
@@ -440,7 +504,7 @@ wss.on("connection", (ws) => {
   }
 
   if (executor) {
-    send(ws, { type: "status", loaded: true, executedUpTo: -1 });
+    send(ws, { type: "status", loaded: true, executedUpTo: -1, runMode: getRunMode() });
   }
 
   // Serialize message processing: async handlers fired by WebSocket
@@ -468,7 +532,6 @@ wss.on("connection", (ws) => {
           if (electronMain) electronMain.destroyScenarioView();
 
           currentScenarioFile = msg.file;
-          currentStepMetas = [];
           const descriptor = await loadScenarioDescriptor(msg.file);
           executor = new Executor(descriptor, {
             projectRoot: PROJECT_ROOT,
@@ -484,6 +547,8 @@ wss.on("connection", (ws) => {
 
           const absPath = path.isAbsolute(msg.file) ? msg.file : path.resolve(PROJECT_ROOT, msg.file);
           const { dir, hash } = cache.getDir(absPath, msg.file);
+          const existingMeta = cache.loadMeta(dir);
+          currentStepMetas = (existingMeta && existingMeta.contentHash === hash) ? existingMeta.steps : [];
           currentCacheDir = dir;
           currentContentHash = hash;
 
@@ -499,15 +564,20 @@ wss.on("connection", (ws) => {
               type: "cachedData",
               screenshots: cached.screenshots,
               stepDurations: cached.stepDurations,
+              stepDurationsFast: cached.stepDurationsFast,
+              stepDurationsHuman: cached.stepDurationsHuman,
               stepHasAudio: cached.stepHasAudio,
               videoPath: cached.videoPath,
             });
           } else {
             const hasAudio = executor.steps.map((s) => !!s.narration);
+            const empty = executor.steps.map(() => null);
             send(ws, {
               type: "cachedData",
               screenshots: executor.steps.map(() => null),
-              stepDurations: executor.steps.map(() => null),
+              stepDurations: empty,
+              stepDurationsFast: empty,
+              stepDurationsHuman: empty,
               stepHasAudio: hasAudio,
             });
           }
@@ -525,15 +595,21 @@ wss.on("connection", (ws) => {
             executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
             executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
-            currentStepMetas = [];
+            if (currentCacheDir && currentContentHash) {
+              const meta = cache.loadMeta(currentCacheDir);
+              currentStepMetas = (meta && meta.contentHash === currentContentHash) ? meta.steps : [];
+            } else {
+              currentStepMetas = [];
+            }
           }
+          const runMode = getRunMode();
           await executor.runTo(
             msg.index,
-            "human",
+            runMode,
             (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
             (result) => {
               send(ws, { type: "stepComplete", ...result });
-              persistStepCache(result.index, result.screenshot, result.durationMs, executor!);
+              persistStepCache(result.index, result.screenshot, result.durationMs, runMode, executor!);
             },
           );
           break;
@@ -545,14 +621,15 @@ wss.on("connection", (ws) => {
             break;
           }
           try {
+            const runAllMode = getRunMode();
             for (let i = 0; i < executor.stepCount; i++) {
               await executor.runTo(
                 i,
-                "human",
+                runAllMode,
                 (index, fastForward) => send(ws, { type: "stepStart", index, fastForward }),
                 (result) => {
                   send(ws, { type: "stepComplete", ...result });
-                  persistStepCache(result.index, result.screenshot, result.durationMs, executor!);
+                  persistStepCache(result.index, result.screenshot, result.durationMs, runAllMode, executor!);
                 },
               );
             }
@@ -570,7 +647,12 @@ wss.on("connection", (ws) => {
                 console.error("[player] Failed to save video to cache:", err);
               }
             }
+            broadcastCacheSize();
             send(ws, { type: "finished", videoPath: videoPath ?? (currentCacheDir ? cache.getVideoPath(currentCacheDir) : null) ?? undefined });
+            if (process.env.B2V_HEADLESS === "1") {
+              console.error("[player] Headless run complete, exiting.");
+              setTimeout(() => process.exit(0), 500);
+            }
           } catch (err) {
             if ((err as Error).message?.includes("aborted")) {
               console.error("[player] Execution aborted by user");
@@ -585,12 +667,12 @@ wss.on("connection", (ws) => {
         case "reset": {
           if (executor) await executor.reset();
           if (electronMain) electronMain.destroyScenarioView();
-          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1 });
+          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1, runMode: getRunMode() });
           break;
         }
 
         case "listScenarios": {
-          send(ws, { type: "scenarioFiles", files: findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT) });
+          send(ws, { type: "scenarioFiles", files: listPlayerScenarioFiles() });
           break;
         }
 
@@ -603,6 +685,44 @@ wss.on("connection", (ws) => {
             cache.clearAll();
           }
           send(ws, { type: "cacheCleared", cacheSize: cache.getCacheSize() });
+          break;
+        }
+
+        case "setAudioSettings": {
+          const s = msg.settings;
+          if (s.provider) process.env.B2V_TTS_PROVIDER = s.provider;
+          else delete process.env.B2V_TTS_PROVIDER;
+
+          if (s.voice) process.env.B2V_NARRATION_VOICE = s.voice;
+          else delete process.env.B2V_NARRATION_VOICE;
+
+          if (s.speed != null) process.env.B2V_NARRATION_SPEED = String(s.speed);
+          else delete process.env.B2V_NARRATION_SPEED;
+
+          if (s.model) process.env.B2V_NARRATION_MODEL = s.model;
+          else delete process.env.B2V_NARRATION_MODEL;
+
+          if (s.language) process.env.B2V_NARRATION_LANGUAGE = s.language;
+          else delete process.env.B2V_NARRATION_LANGUAGE;
+
+          if (s.realtime != null) process.env.B2V_REALTIME_AUDIO = s.realtime ? "true" : "false";
+          else delete process.env.B2V_REALTIME_AUDIO;
+
+          console.error(`[player] Audio settings updated: provider=${s.provider ?? "auto"}`);
+          send(ws, { type: "audioSettings", settings: s, detected: detectTtsProvider() });
+          break;
+        }
+
+        case "getAudioSettings": {
+          const settings: AudioSettings = {
+            provider: process.env.B2V_TTS_PROVIDER,
+            voice: process.env.B2V_NARRATION_VOICE ?? process.env.B2V_VOICE,
+            speed: process.env.B2V_NARRATION_SPEED ? parseFloat(process.env.B2V_NARRATION_SPEED) : undefined,
+            model: process.env.B2V_NARRATION_MODEL,
+            language: process.env.B2V_NARRATION_LANGUAGE,
+            realtime: process.env.B2V_REALTIME_AUDIO === "true" ? true : undefined,
+          };
+          send(ws, { type: "audioSettings", settings, detected: detectTtsProvider() });
           break;
         }
 
@@ -623,16 +743,21 @@ wss.on("connection", (ws) => {
             executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
             executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
-            currentStepMetas = [];
+            if (currentCacheDir && currentContentHash) {
+              const meta = cache.loadMeta(currentCacheDir);
+              currentStepMetas = (meta && meta.contentHash === currentContentHash) ? meta.steps : [];
+            } else {
+              currentStepMetas = [];
+            }
           }
           send(ws, { type: "viewMode", mode: currentViewMode });
-          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1 });
+          send(ws, { type: "status", loaded: !!executor, executedUpTo: -1, runMode: getRunMode() });
           break;
         }
 
         case "importArtifacts": {
           const artifactsDir = path.isAbsolute(msg.dir) ? msg.dir : path.resolve(PROJECT_ROOT, msg.dir);
-          const scenarioFiles = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+          const scenarioFiles = listPlayerScenarioFiles();
           const imported = cache.importAllFromDir(artifactsDir, scenarioFiles);
           const scenarios = [...imported.keys()];
           console.error(`[player] Imported artifacts for ${imported.size} scenario(s): ${scenarios.join(", ")}`);
@@ -646,6 +771,8 @@ wss.on("connection", (ws) => {
                 type: "cachedData",
                 screenshots: cached.screenshots,
                 stepDurations: cached.stepDurations,
+                stepDurationsFast: cached.stepDurationsFast,
+                stepDurationsHuman: cached.stepDurationsHuman,
                 stepHasAudio: cached.stepHasAudio,
                 videoPath: cached.videoPath,
               });
@@ -655,9 +782,9 @@ wss.on("connection", (ws) => {
         }
 
         case "downloadArtifacts": {
-          const scenarioFiles = findScenarioFiles(PROJECT_ROOT, PROJECT_ROOT);
+          const scenarioFiles = listPlayerScenarioFiles();
           console.error(`[player] Downloading CI artifacts from GitHub...`);
-          send(ws, { type: "status", loaded: !!executor, executedUpTo: executor?.lastExecutedIndex ?? -1 });
+          send(ws, { type: "status", loaded: !!executor, executedUpTo: executor?.lastExecutedIndex ?? -1, runMode: getRunMode() });
           try {
             const { imported } = await cache.downloadFromGitHub(scenarioFiles, {
               runId: msg.runId,
@@ -675,6 +802,8 @@ wss.on("connection", (ws) => {
                   type: "cachedData",
                   screenshots: cached.screenshots,
                   stepDurations: cached.stepDurations,
+                  stepDurationsFast: cached.stepDurationsFast,
+                  stepDurationsHuman: cached.stepDurationsHuman,
                   stepHasAudio: cached.stepHasAudio,
                   videoPath: cached.videoPath,
                 });

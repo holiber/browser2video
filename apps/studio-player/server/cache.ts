@@ -6,6 +6,8 @@ import { execFileSync } from "node:child_process";
 export interface StepMeta {
   index: number;
   durationMs: number;
+  durationMsFast?: number;
+  durationMsHuman?: number;
   hasAudio: boolean;
 }
 
@@ -110,6 +112,8 @@ export class PlayerCache {
   loadCachedData(scenarioAbsPath: string, scenarioRelPath: string, stepCount: number): {
     screenshots: (string | null)[];
     stepDurations: (number | null)[];
+    stepDurationsFast: (number | null)[];
+    stepDurationsHuman: (number | null)[];
     stepHasAudio: boolean[];
     cacheDir: string;
     contentHash: string;
@@ -121,18 +125,22 @@ export class PlayerCache {
 
     const screenshots: (string | null)[] = [];
     const stepDurations: (number | null)[] = [];
+    const stepDurationsFast: (number | null)[] = [];
+    const stepDurationsHuman: (number | null)[] = [];
     const stepHasAudio: boolean[] = [];
 
     for (let i = 0; i < stepCount; i++) {
       screenshots.push(this.loadScreenshot(dir, i));
       const stepMeta = meta.steps.find((s) => s.index === i);
       stepDurations.push(stepMeta?.durationMs ?? null);
+      stepDurationsFast.push(stepMeta?.durationMsFast ?? null);
+      stepDurationsHuman.push(stepMeta?.durationMsHuman ?? null);
       stepHasAudio.push(stepMeta?.hasAudio ?? false);
     }
 
     const videoPath = this.getVideoPath(dir);
 
-    return { screenshots, stepDurations, stepHasAudio, cacheDir: dir, contentHash: hash, videoPath };
+    return { screenshots, stepDurations, stepDurationsFast, stepDurationsHuman, stepHasAudio, cacheDir: dir, contentHash: hash, videoPath };
   }
 
   /**
@@ -153,11 +161,17 @@ export class PlayerCache {
     const { dir, hash } = this.getDir(scenarioAbsPath, scenarioRelPath);
     fs.mkdirSync(dir, { recursive: true });
 
-    const steps: StepMeta[] = runJson.steps.map((s) => ({
-      index: s.index - 1,
-      durationMs: s.endMs - s.startMs,
-      hasAudio: !!(runJson.audioEvents && runJson.audioEvents.length > 0),
-    }));
+    const isFast = runJson.mode === "fast";
+    const steps: StepMeta[] = runJson.steps.map((s) => {
+      const dur = s.endMs - s.startMs;
+      return {
+        index: s.index - 1,
+        durationMs: dur,
+        durationMsFast: isFast ? dur : undefined,
+        durationMsHuman: isFast ? undefined : dur,
+        hasAudio: !!(runJson.audioEvents && runJson.audioEvents.length > 0),
+      };
+    });
 
     const videoSrc = path.join(artifactDir, "run.mp4");
     if (fs.existsSync(videoSrc)) {
