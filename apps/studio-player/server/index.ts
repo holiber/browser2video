@@ -108,7 +108,10 @@ type ServerMsg =
   | { type: "viewMode"; mode: ViewMode }
   | { type: "replayEvent"; event: ReplayEvent }
   | { type: "artifactsImported"; count: number; scenarios: string[] }
-  | { type: "audioSettings"; settings: AudioSettings; detected: string };
+  | { type: "audioSettings"; settings: AudioSettings; detected: string }
+  | { type: "buildProgress"; step: number; total: number; message: string }
+  | { type: "buildComplete" }
+  | { type: "playAudio"; url: string; durationMs: number };
 
 function detectTtsProvider(): string {
   if (process.env.B2V_TTS_PROVIDER && process.env.B2V_TTS_PROVIDER !== "auto") return process.env.B2V_TTS_PROVIDER;
@@ -431,6 +434,28 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  if (u.pathname.startsWith("/api/audio/")) {
+    const audioFile = decodeURIComponent(u.pathname.slice("/api/audio/".length));
+    if (!audioFile || !fs.existsSync(audioFile)) {
+      res.writeHead(404);
+      res.end("Audio not found");
+      return;
+    }
+    const stat = fs.statSync(audioFile);
+    const ext = path.extname(audioFile).toLowerCase();
+    const mime = ext === ".mp3" ? "audio/mpeg" : ext === ".wav" ? "audio/wav" : "audio/mpeg";
+    res.writeHead(200, {
+      "content-type": mime,
+      "content-length": stat.size,
+      "cache-control": "no-cache",
+    });
+    const stream = fs.createReadStream(audioFile);
+    stream.on("error", () => { try { res.end(); } catch { } });
+    res.on("close", () => { stream.destroy(); });
+    stream.pipe(res);
+    return;
+  }
+
   // Serve terminal HTML page — renders an xterm.js terminal connecting to jabterm WS
   if (u.pathname === "/terminal") {
     const testId = u.searchParams.get("testId") ?? "term-0";
@@ -544,6 +569,10 @@ wss.on("connection", (ws) => {
           executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
           executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
           executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
+          executor.onPlayAudio = (audioPath, durationMs) => {
+            const url = `/api/audio/${encodeURIComponent(audioPath)}`;
+            send(ws, { type: "playAudio", url, durationMs });
+          };
 
           const absPath = path.isAbsolute(msg.file) ? msg.file : path.resolve(PROJECT_ROOT, msg.file);
           const { dir, hash } = cache.getDir(absPath, msg.file);
@@ -595,6 +624,10 @@ wss.on("connection", (ws) => {
             executor.onLiveFrame = (data, paneId) => send(ws, { type: "liveFrame", data, paneId });
             executor.onPaneLayout = (layout) => send(ws, { type: "paneLayout", layout });
             executor.onReplayEvent = (event) => send(ws, { type: "replayEvent", event });
+            executor.onPlayAudio = (audioPath, durationMs) => {
+              const url = `/api/audio/${encodeURIComponent(audioPath)}`;
+              send(ws, { type: "playAudio", url, durationMs });
+            };
             if (currentCacheDir && currentContentHash) {
               const meta = cache.loadMeta(currentCacheDir);
               currentStepMetas = (meta && meta.contentHash === currentContentHash) ? meta.steps : [];
@@ -622,6 +655,14 @@ wss.on("connection", (ws) => {
           }
           try {
             const runAllMode = getRunMode();
+
+            if (runAllMode === "human") {
+              await executor.prebuildCache(runAllMode, (step, total, message) => {
+                send(ws, { type: "buildProgress", step, total, message });
+              });
+              send(ws, { type: "buildComplete" });
+            }
+
             for (let i = 0; i < executor.stepCount; i++) {
               await executor.runTo(
                 i,

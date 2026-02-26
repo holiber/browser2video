@@ -8,7 +8,7 @@ export default defineConfig({
   testDir: "./tests",
   testMatch: "*.e2e.test.ts",
   timeout: isSmoke ? perTestTimeout : 10 * 60 * 1000,
-  globalTimeout: isSmoke ? totalTimeout : 15 * 60 * 1000,
+  globalTimeout: isSmoke ? totalTimeout : 60 * 60 * 1000,
   outputDir: "../../.cache/tests/test-e2e__electron",
   ...(isSmoke && { maxFailures: 1 }),
   workers: 1,

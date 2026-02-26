@@ -34,11 +34,14 @@ export default function App() {
     cacheSize,
     audioSettings,
     detectedProvider,
+    buildProgress,
   } = state;
 
   const isFastForwarding = stepStates.some((s) => s === "fast-forwarding");
-  const showOverlay = loading || isFastForwarding;
-  const overlayLabel = loading ? "Loading..." : "Replaying slides...";
+  const showOverlay = loading || isFastForwarding || !!buildProgress;
+  const overlayLabel = buildProgress
+    ? "Building the cache..."
+    : loading ? "Loading..." : "Replaying slides...";
 
   const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
   const activeCaption = activeStep >= 0 && scenario ? scenario.steps[activeStep]?.caption : undefined;
@@ -131,10 +134,21 @@ export default function App() {
             sendStudioEvent={sendStudioEvent}
           />
           {showOverlay && (
-            <div className="absolute inset-0 z-30 bg-black/60 backdrop-blur-sm flex items-center justify-center">
-              <div className="flex flex-col items-center gap-3">
+            <div
+              className="absolute inset-0 z-30 bg-black/60 backdrop-blur-sm flex items-center justify-center"
+              data-testid={buildProgress ? "build-overlay" : undefined}
+            >
+              <div className="flex flex-col items-center gap-3 max-w-md px-4">
                 <div className="w-8 h-8 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
                 <span className="text-sm text-zinc-300 font-medium">{overlayLabel}</span>
+                {buildProgress && (
+                  <>
+                    <span className="text-xs text-zinc-400">{buildProgress.step} / {buildProgress.total}</span>
+                    <span className="text-xs text-zinc-500 text-center truncate w-full" data-testid="build-progress-msg">
+                      {buildProgress.message}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -155,8 +169,6 @@ export default function App() {
           onRunAll={runAll}
           onReset={reset}
           onCancel={cancel}
-          cacheSize={cacheSize}
-          onClearCache={clearCache}
           onImportArtifacts={importArtifacts}
           onDownloadArtifacts={downloadArtifacts}
           onAudioSettingsChange={setAudioSettings}

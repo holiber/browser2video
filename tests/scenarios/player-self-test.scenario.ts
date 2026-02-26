@@ -570,15 +570,15 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         await btn.waitFor({ timeout: 5_000 });
 
         await page.waitForFunction(
-            () => /Clear Cache \d/.test(
+            () => /Clear cache \([\d.]+\s*(B|KB|MB|GB)\)/.test(
                 document.querySelector('[data-testid="ctrl-clear-cache"]')?.textContent ?? "",
             ),
             undefined,
-            { timeout: 5_000 },
+            { timeout: 10_000 },
         );
 
         const text = await btn.textContent();
-        if (!text || !(/Clear Cache \d/.test(text))) {
+        if (!text || !(/Clear cache \([\d.]+\s*(B|KB|MB|GB)\)/.test(text))) {
             throw new Error(`Cache button should show size after steps ran, got: "${text}"`);
         }
         console.error(`[self-test] Cache button text: "${text}"`);

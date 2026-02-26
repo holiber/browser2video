@@ -1,14 +1,8 @@
 import { useState } from "react";
-import { Play, Square, SkipForward, SkipBack, RotateCcw, Trash2, Download, FolderInput } from "lucide-react";
+import { Play, Square, SkipForward, SkipBack, RotateCcw, Download, FolderInput } from "lucide-react";
 import type { StepState, AudioSettings } from "../hooks/use-player";
 import { AudioSettingsPanel } from "./audio-settings";
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
 
 interface ControlsProps {
   stepCount: number;
@@ -19,12 +13,10 @@ interface ControlsProps {
   importResult: { count: number; scenarios: string[] } | null;
   audioSettings: AudioSettings;
   detectedProvider: string;
-  cacheSize: number;
   onRunStep: (index: number) => void;
   onRunAll: () => void;
   onReset: () => void;
   onCancel: () => void;
-  onClearCache: () => void;
   onImportArtifacts: (dir: string) => void;
   onDownloadArtifacts: (runId?: string) => void;
   onAudioSettingsChange: (settings: AudioSettings) => void;
@@ -39,12 +31,10 @@ export function Controls({
   importResult,
   audioSettings,
   detectedProvider,
-  cacheSize,
   onRunStep,
   onRunAll,
   onReset,
   onCancel,
-  onClearCache,
   onImportArtifacts,
   onDownloadArtifacts,
   onAudioSettingsChange,
@@ -173,18 +163,6 @@ export function Controls({
           <RotateCcw size={14} />
         </button>
 
-        <button
-          onClick={onClearCache}
-          disabled={isRunning}
-          className="p-1.5 px-2.5 rounded-lg hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-400 hover:text-zinc-200 transition-colors flex items-center gap-1.5"
-          title="Clear cache"
-          data-testid="ctrl-clear-cache"
-        >
-          <Trash2 size={14} />
-          <span className="text-xs">
-            {cacheSize > 0 ? `Clear Cache ${formatBytes(cacheSize)}` : "Clear Cache"}
-          </span>
-        </button>
       </div>
     </div>
   );

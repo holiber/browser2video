@@ -112,6 +112,7 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
           onClick={onClearCache}
           className="flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors flex-shrink-0"
           title="Clear cache"
+          data-testid="ctrl-clear-cache"
         >
           <Trash2 size={12} />
           {cacheSize && cacheSize > 0

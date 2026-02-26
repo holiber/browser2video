@@ -54,6 +54,7 @@ export class Executor<T = any> {
   onLiveFrame: ((data: string, paneId?: string) => void) | null = null;
   onPaneLayout: ((layout: PaneLayoutInfo) => void) | null = null;
   onReplayEvent: ((event: ReplayEvent) => void) | null = null;
+  onPlayAudio: ((audioPath: string, durationMs: number) => void) | null = null;
 
   constructor(descriptor: ScenarioDescriptor<T>, opts?: {
     sessionOpts?: Partial<SessionOptions>;
@@ -131,6 +132,26 @@ export class Executor<T = any> {
             console.error("[executor] Failed to push grid config:", err);
           }
         };
+
+        if (this.onPlayAudio) {
+          const playAudioCb = this.onPlayAudio;
+          newSession.audio.setPlayFn?.((audioPath, durationMs) => {
+            playAudioCb(audioPath, durationMs);
+          });
+        }
+
+        // Pre-generate TTS cache before setupFn so the overlay shows real progress
+        if (this._prebuildProgress) {
+          const narrated = this.descriptor.steps.filter((s) => !!s.narration);
+          const providerName = newSession.audio.providerName ?? "TTS";
+          for (let i = 0; i < narrated.length; i++) {
+            if (this._aborted) break;
+            const text = narrated[i].narration!;
+            const preview = text.length > 60 ? text.slice(0, 57) + "..." : text;
+            this._prebuildProgress(i + 1, narrated.length, `Generating narration via ${providerName} for "${preview}"`);
+            await newSession.audio.warmup(text);
+          }
+        }
 
         this.ctx = await this.descriptor.setupFn(newSession);
         this.session = newSession;
@@ -343,6 +364,27 @@ export class Executor<T = any> {
 
     return { index: targetIndex, screenshot: "", mode, durationMs: 0 };
   }
+
+  /**
+   * Pre-generate TTS audio for all narrated steps so playback is instant.
+   * Must be called before the first runTo() — it initialises the session,
+   * warms up all narrated steps (with progress), then runs setupFn.
+   */
+  async prebuildCache(
+    mode: "human" | "fast",
+    onProgress: (step: number, total: number, message: string) => void,
+  ): Promise<void> {
+    const narrated = this.descriptor.steps
+      .filter((s) => !!s.narration);
+    if (narrated.length === 0) return;
+
+    // ensureSession internally calls _prebuildProgress if set
+    this._prebuildProgress = onProgress;
+    await this.ensureSession(mode);
+    this._prebuildProgress = null;
+  }
+
+  private _prebuildProgress: ((step: number, total: number, message: string) => void) | null = null;
 
   async reset(): Promise<void> {
     const wasAborted = this._aborted;

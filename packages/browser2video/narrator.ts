@@ -37,6 +37,10 @@ export interface AudioDirectorAPI {
   warmup(text: string, opts?: SpeakOptions): Promise<void>;
   /** Kill all playing audio processes and cancel pending timers. */
   stop(): void;
+  /** The resolved TTS provider name (e.g. "openai", "system"). */
+  readonly providerName?: string;
+  /** Replace the default system audio player with a custom callback. */
+  setPlayFn?(fn: ((audioPath: string, durationMs: number) => void) | null): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -769,13 +773,14 @@ export class AudioDirector implements AudioDirectorAPI {
   private videoStartTime: number;
   private ffmpegPath?: string;
   private realtime: boolean;
-  private provider: string;
+  readonly providerName: string;
   private language?: string;
   private sessionGender?: "male" | "female";
   private _activeProcs = new Set<ChildProcess>();
   private _sleepTimer: ReturnType<typeof setTimeout> | null = null;
   private _sleepResolve: (() => void) | null = null;
   private _stopped = false;
+  private _playFn: ((audioPath: string, durationMs: number) => void) | null = null;
 
   constructor(opts: {
     tts: ITTSEngine;
@@ -785,14 +790,21 @@ export class AudioDirector implements AudioDirectorAPI {
     provider?: string;
     language?: string;
     gender?: "male" | "female";
+    playFn?: (audioPath: string, durationMs: number) => void;
   }) {
     this.tts = opts.tts;
     this.videoStartTime = opts.videoStartTime;
     this.ffmpegPath = opts.ffmpegPath;
     this.realtime = opts.realtime ?? false;
-    this.provider = opts.provider ?? "openai";
+    this.providerName = opts.provider ?? "openai";
     this.language = opts.language;
     this.sessionGender = opts.gender;
+    this._playFn = opts.playFn ?? null;
+  }
+
+  /** Set a custom play function at runtime (used by the player to route audio to the browser). */
+  setPlayFn(fn: ((audioPath: string, durationMs: number) => void) | null): void {
+    this._playFn = fn;
   }
 
   /** Pre-generate TTS audio so a subsequent speak() starts instantly. */
@@ -808,7 +820,7 @@ export class AudioDirector implements AudioDirectorAPI {
     const gender = effectiveOpts.gender ?? this.sessionGender;
     if (gender && !effectiveOpts.voice) {
       const genderVoice = resolveVoiceForGender(
-        this.provider as any,
+        this.providerName as any,
         this.language,
         gender,
       );
@@ -832,9 +844,13 @@ export class AudioDirector implements AudioDirectorAPI {
     });
 
     if (this.realtime) {
-      const proc = playAudioFile(audioPath, this.ffmpegPath);
-      this._activeProcs.add(proc);
-      proc.on("exit", () => this._activeProcs.delete(proc));
+      if (this._playFn) {
+        this._playFn(audioPath, durationMs);
+      } else {
+        const proc = playAudioFile(audioPath, this.ffmpegPath);
+        this._activeProcs.add(proc);
+        proc.on("exit", () => this._activeProcs.delete(proc));
+      }
     }
 
     await new Promise<void>((resolve) => {

@@ -3,7 +3,14 @@
  *
  * Verifies that B2V_TTS_PROVIDER=system forces the macOS built-in TTS
  * (or falls back to Piper on systems without native TTS).
- * Runs the slides-and-narration scenario which has narration steps.
+ *
+ * Flow:
+ *  1. Launch Electron player with slides-and-narration scenario
+ *  2. Clear cache and verify size shows "0"
+ *  3. Click Play — verify "Building the cache..." overlay with progress
+ *  4. Verify cache files are created after prebuild
+ *  5. Verify audio plays via browser API during scenario execution
+ *  6. Scenario completes without errors
  */
 import { test, expect, _electron, type ElectronApplication, type Page } from "@playwright/test";
 import { execSync } from "node:child_process";
@@ -54,63 +61,162 @@ function hasSystemTts(): boolean {
 
 test.describe.configure({ mode: "serial" });
 
-test("forced system TTS provider runs scenario without errors", async () => {
-  test.setTimeout(180_000);
+let electronApp: ElectronApplication;
+let page: Page;
+
+test.beforeAll(async () => {
   killPort(TEST_PORT);
   killPort(TEST_CDP_PORT);
 
-  let electronApp: ElectronApplication | null = null;
-  try {
-    electronApp = await _electron.launch({
-      args: [PLAYER_DIR, SCENARIO],
-      cwd: PROJECT_ROOT,
-      env: {
-        ...process.env,
-        NODE_OPTIONS: "--experimental-strip-types --no-warnings",
-        PORT: String(TEST_PORT),
-        B2V_CDP_PORT: String(TEST_CDP_PORT),
-        B2V_MODE: "human",
-        B2V_TTS_PROVIDER: "system",
-        B2V_REALTIME_AUDIO: "false",
-      },
-      timeout: 60_000,
-    });
+  electronApp = await _electron.launch({
+    args: [PLAYER_DIR, SCENARIO],
+    cwd: PROJECT_ROOT,
+    env: {
+      ...process.env,
+      NODE_OPTIONS: "--experimental-strip-types --no-warnings",
+      PORT: String(TEST_PORT),
+      B2V_CDP_PORT: String(TEST_CDP_PORT),
+      B2V_MODE: "human",
+      B2V_TTS_PROVIDER: "system",
+      B2V_REALTIME_AUDIO: "true",
+    },
+    timeout: 60_000,
+  });
 
-    const page: Page = await electronApp.firstWindow();
-    await page.waitForLoadState("domcontentloaded");
-    await page.waitForSelector("[data-testid='step-card-0']", { timeout: 90_000 });
+  page = await electronApp.firstWindow();
+  await page.waitForLoadState("domcontentloaded");
+  await page.waitForSelector("[data-testid='step-card-0']", { timeout: 90_000 });
+});
 
-    // Autoplay should start — wait for the stop button or error banner
+test.afterAll(async () => {
+  if (electronApp) await closeElectron(electronApp);
+});
+
+test("clear cache shows size 0", async () => {
+  test.setTimeout(30_000);
+
+  const clearBtn = page.locator("[data-testid='ctrl-clear-cache']");
+  await expect(clearBtn).toBeVisible({ timeout: 10_000 });
+  await clearBtn.click();
+
+  // After clearing, button text should indicate zero cache
+  await expect(clearBtn).toContainText("Clear cache", { timeout: 5_000 });
+  // Should NOT contain any size like KB/MB — just "Clear cache"
+  const text = await clearBtn.textContent();
+  expect(text).not.toMatch(/\d+\.\d+\s*(KB|MB|GB|B)/);
+});
+
+test("play triggers build overlay with progress messages", async () => {
+  test.setTimeout(180_000);
+
+  // Instrument Audio API to track playback calls
+  await page.evaluate(() => {
+    (window as any).__b2vAudioPlayed = [];
+    const OrigAudio = window.Audio;
+    (window as any).Audio = function (src?: string) {
+      const a = new OrigAudio(src);
+      const origPlay = a.play.bind(a);
+      a.play = () => {
+        (window as any).__b2vAudioPlayed.push(src);
+        return origPlay();
+      };
+      return a;
+    } as any;
+  });
+
+  const playBtn = page.locator("[data-testid='ctrl-play-all']");
+  await expect(playBtn).toBeVisible({ timeout: 10_000 });
+  await playBtn.click();
+
+  // Build overlay should appear
+  const overlay = page.locator("[data-testid='build-overlay']");
+
+  if (hasSystemTts()) {
+    // Wait for the build overlay to appear (TTS generation takes time)
+    await expect(overlay).toBeVisible({ timeout: 30_000 });
+
+    // Static message
+    await expect(overlay.locator("text=Building the cache...")).toBeVisible();
+
+    // Dynamic progress message should mention the provider
+    const progressMsg = page.locator("[data-testid='build-progress-msg']");
+    await expect(progressMsg).toBeVisible({ timeout: 10_000 });
+    const msgText = await progressMsg.textContent();
+    expect(msgText).toContain("Generating narration via");
+
+    // Wait for the build overlay to disappear (build complete)
+    await expect(overlay).toBeHidden({ timeout: 120_000 });
+  } else {
+    // System TTS not available — might get an error instead
+    const errorBanner = page.locator(".bg-red-950");
     const result = await Promise.race([
-      page.waitForSelector("[data-testid='ctrl-stop']", { timeout: 120_000 }).then(() => "running" as const),
-      page.waitForSelector(".bg-red-950", { timeout: 120_000 }).then(() => "error" as const),
-    ]);
+      overlay.waitFor({ state: "visible", timeout: 30_000 }).then(() => "overlay" as const),
+      errorBanner.waitFor({ state: "visible", timeout: 30_000 }).then(() => "error" as const),
+    ].map(p => p.catch(() => "timeout" as const)));
 
     if (result === "error") {
-      const msg = await page.locator(".bg-red-950").textContent().catch(() => "unknown");
-      if (hasSystemTts()) {
-        throw new Error(`Scenario errored with system TTS: ${msg}`);
-      }
-      // If system TTS is not available, an error is acceptable
-      console.log(`System TTS not available — error expected: ${msg}`);
-    } else {
-      console.log("Scenario running with forced system TTS");
+      console.log("System TTS not available — error expected");
+      return;
     }
-  } finally {
-    if (electronApp) await closeElectron(electronApp);
   }
 });
 
-test("TTS cache directory contains audio files after run", async () => {
-  const cacheDir = path.join(PROJECT_ROOT, ".cache", "tts");
-  if (!fs.existsSync(cacheDir)) {
-    console.log("TTS cache dir does not exist — skipping (no TTS keys may be set)");
+test("cache files are created after prebuild", async () => {
+  test.setTimeout(30_000);
+
+  if (!hasSystemTts()) {
+    console.log("Skipping cache check — system TTS not available");
     return;
   }
 
-  const files = fs.readdirSync(cacheDir).filter((f) => f.endsWith(".mp3"));
-  console.log(`Found ${files.length} cached TTS audio files in ${cacheDir}`);
-  expect(files.length).toBeGreaterThan(0);
+  const cacheDir = path.join(PROJECT_ROOT, ".cache", "tts");
+  if (!fs.existsSync(cacheDir)) {
+    console.log("TTS cache dir does not exist — checking skipped");
+    return;
+  }
+
+  const audioFiles = fs.readdirSync(cacheDir).filter((f) =>
+    f.endsWith(".mp3") || f.endsWith(".wav") || f.endsWith(".aiff"),
+  );
+  console.log(`Found ${audioFiles.length} cached TTS audio files in ${cacheDir}`);
+  expect(audioFiles.length).toBeGreaterThan(0);
+});
+
+test("scenario completes and audio was played via browser API", async () => {
+  test.setTimeout(300_000);
+
+  if (!hasSystemTts()) {
+    console.log("Skipping playback check — system TTS not available");
+    return;
+  }
+
+  const errorBanner = page.locator(".bg-red-950");
+
+  // Wait for the scenario to finish — all steps done
+  const stepCount = await page.locator("[data-testid^='step-card-']").count();
+  const lastStepDone = page.locator(`text=${stepCount} / ${stepCount}`);
+
+  for (let i = 0; i < 600; i++) {
+    const errorVisible = await errorBanner.isVisible().catch(() => false);
+    if (errorVisible) {
+      const msg = await errorBanner.textContent().catch(() => "unknown");
+      throw new Error(`Scenario error during execution: ${msg}`);
+    }
+    if (await lastStepDone.isVisible().catch(() => false)) break;
+    await page.waitForTimeout(500);
+  }
+
+  await expect(lastStepDone).toBeVisible({ timeout: 5_000 });
+
+  // Verify audio was played via browser API
+  const playedUrls: string[] = await page.evaluate(() => (window as any).__b2vAudioPlayed ?? []);
+  console.log(`Audio playback calls tracked: ${playedUrls.length}`);
+  expect(playedUrls.length).toBeGreaterThan(0);
+
+  // Each URL should point to our audio endpoint
+  for (const url of playedUrls) {
+    expect(url).toContain("/api/audio/");
+  }
 });
 
 test("resolveVoiceForGender returns correct voices per provider and gender", async () => {
@@ -118,13 +224,13 @@ test("resolveVoiceForGender returns correct voices per provider and gender", asy
     path.join(PROJECT_ROOT, "packages/browser2video/tts-language-presets.ts")
   );
 
-  // OpenAI: male → "onyx", female → "nova" for English
+  // OpenAI: male -> "onyx", female -> "nova" for English
   const openaiMale = resolveVoiceForGender("openai", "en", "male");
   const openaiFemale = resolveVoiceForGender("openai", "en", "female");
   expect(openaiMale).toBe("onyx");
   expect(openaiFemale).toBe("nova");
 
-  // Google: male → B suffix, female → C suffix for English
+  // Google: male -> B suffix, female -> C suffix for English
   const googleMale = resolveVoiceForGender("google", "en", "male");
   const googleFemale = resolveVoiceForGender("google", "en", "female");
   expect(googleMale).toContain("Neural2");
@@ -137,7 +243,7 @@ test("resolveVoiceForGender returns correct voices per provider and gender", asy
     expect(resolveVoiceForGender("system", null, "female")).toBe("Samantha");
   }
 
-  // No gender → null
+  // No gender -> null
   expect(resolveVoiceForGender("openai", "en", null)).toBeNull();
   expect(resolveVoiceForGender("openai", "en", undefined)).toBeNull();
 

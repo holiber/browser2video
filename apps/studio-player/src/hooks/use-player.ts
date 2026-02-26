@@ -70,6 +70,7 @@ export interface PlayerState {
   cacheSize: number;
   audioSettings: AudioSettings;
   detectedProvider: string;
+  buildProgress: { step: number; total: number; message: string } | null;
 }
 
 type Action =
@@ -95,6 +96,8 @@ type Action =
   | { type: "audioSettings"; settings: AudioSettings; detected: string }
   | { type: "cacheSize"; size: number }
   | { type: "status"; runMode?: "human" | "fast" }
+  | { type: "buildProgress"; step: number; total: number; message: string }
+  | { type: "buildComplete" }
   ;
 
 const initial: PlayerState = {
@@ -123,6 +126,7 @@ const initial: PlayerState = {
   cacheSize: 0,
   audioSettings: {},
   detectedProvider: "none",
+  buildProgress: null,
 };
 
 function reducer(state: PlayerState, action: Action): PlayerState {
@@ -237,6 +241,10 @@ function reducer(state: PlayerState, action: Action): PlayerState {
       return { ...state, cacheSize: action.size };
     case "status":
       return { ...state, runMode: action.runMode ?? state.runMode };
+    case "buildProgress":
+      return { ...state, buildProgress: { step: action.step, total: action.total, message: action.message } };
+    case "buildComplete":
+      return { ...state, buildProgress: null };
     case "reset":
       return {
         ...state,
@@ -394,6 +402,17 @@ export function usePlayer(wsUrl: string) {
             case "status":
               dispatch({ type: "status", runMode: msg.runMode });
               break;
+            case "buildProgress":
+              dispatch({ type: "buildProgress", step: msg.step, total: msg.total, message: msg.message });
+              break;
+            case "buildComplete":
+              dispatch({ type: "buildComplete" });
+              break;
+            case "playAudio": {
+              const audio = new Audio(msg.url);
+              audio.play().catch((e: unknown) => console.error("[audio] playback failed:", e));
+              break;
+            }
           }
         } catch { /* ignore parse errors */ }
       };
