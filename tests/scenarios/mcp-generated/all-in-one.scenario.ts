@@ -363,22 +363,39 @@ export default defineScenario<Ctx>("All-in-One Demo", (s) => {
 
   s.step("Vim in shell", narrations.tuiVim, async ({ grid }) => {
     const shell = grid.actors[1];
-    try { await shell.waitForPrompt(); } catch { }
-    await shell.typeAndEnter("vim");
-    await shell.waitForText(["~"], 10000);
+    await shell.waitForPrompt(15000);
+    await shell.typeAndEnter("vim -u NONE -N");
 
-    const vimContent = await shell.read();
-    if (!vimContent.includes("~")) throw new Error("Vim did not launch — no '~' lines visible");
+    // Vim's empty buffer shows many `~` markers. xterm textContent joins rows
+    // with spaces (e.g. "~ ~ ~ ~"), so count isolated tildes instead of lines.
+    const vimDeadline = Date.now() + 15000;
+    let tildeCount = 0;
+    while (Date.now() < vimDeadline) {
+      const content = await shell.read();
+      tildeCount = (content.match(/(?:^|[\s])~(?:[\s]|$)/g) || []).length;
+      if (tildeCount >= 3) break;
+      await grid.page.waitForTimeout(500);
+    }
+    if (tildeCount < 3) {
+      const content = await shell.read();
+      throw new Error(`Vim did not launch — expected >=3 tilde markers, got ${tildeCount}. Content:\n${content.slice(0, 400)}`);
+    }
 
     await shell.pressKey("i");
     await shell.typeAndEnter("Hello from the all-in-one demo!");
     await shell.type("TUI apps work seamlessly in browser2video.");
 
-    await shell.waitForText(["Hello from the all-in-one demo"], 5000);
+    await shell.waitForText(["Hello from the all-in-one demo"], 10000);
+
+    // Verify typed text is actually visible in the vim buffer
+    const afterType = await shell.read();
+    if (!afterType.includes("Hello from the all-in-one demo")) {
+      throw new Error(`Typed text not visible in vim. Content: ${afterType.slice(0, 300)}`);
+    }
 
     await shell.pressKey("Escape");
     await shell.typeAndEnter(":q!");
-    await shell.waitForPrompt(10000);
+    await shell.waitForPrompt(15000);
   });
 
   // ====================================================================
