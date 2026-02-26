@@ -4,7 +4,7 @@
  */
 import { useState, useEffect } from "react";
 import { Volume2, X } from "lucide-react";
-import type { AudioSettings } from "../hooks/use-player";
+import type { AudioSettings } from "../stores/player-store";
 
 const PROVIDERS = [
   { value: "", label: "Auto (best available)" },

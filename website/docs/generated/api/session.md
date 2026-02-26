@@ -112,7 +112,7 @@ Tracks a named step shown in subtitles and logs. Accepts an optional narration s
 
 ```ts
 await step("Fill the form", async () => {
-  await actor.type("#name", "Alice");
+  await actor.type("#name", "Veronica");
 });
 ```
 
@@ -120,7 +120,7 @@ await step("Fill the form", async () => {
 
 ```ts
 await step("Fill the form", "Now we fill in the user's name", async () => {
-  await actor.type("#name", "Alice");
+  await actor.type("#name", "Veronica");
 });
 ```
 

@@ -95,15 +95,17 @@ test.afterAll(async () => {
 test("clear cache shows size 0", async () => {
   test.setTimeout(30_000);
 
-  const clearBtn = page.locator("[data-testid='ctrl-clear-cache']");
-  await expect(clearBtn).toBeVisible({ timeout: 10_000 });
-  await clearBtn.click();
+  const cacheBtn = page.locator("[data-testid='ctrl-clear-cache']");
+  await expect(cacheBtn).toBeVisible({ timeout: 10_000 });
 
-  // After clearing, button text should indicate zero cache
-  await expect(clearBtn).toContainText("Clear cache", { timeout: 5_000 });
-  // Should NOT contain any size like KB/MB — just "Clear cache"
-  const text = await clearBtn.textContent();
-  expect(text).not.toMatch(/\d+\.\d+\s*(KB|MB|GB|B)/);
+  // Open cache popover and clear scenario cache
+  await cacheBtn.click();
+  const clearScenarioBtn = page.locator("[data-testid='ctrl-clear-scenario-cache']");
+  await expect(clearScenarioBtn).toBeVisible({ timeout: 5_000 });
+  await clearScenarioBtn.click();
+
+  // After clearing, the cache button should show "0 B" for scenario size
+  await expect(cacheBtn).toContainText("0 B", { timeout: 5_000 });
 });
 
 test("play triggers build overlay with progress messages", async () => {

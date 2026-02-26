@@ -66,7 +66,7 @@ function PlainLayout({ children }: { children: React.ReactNode }) {
 }
 
 function DeviceLayout({ role, children }: { role: string | null; children: React.ReactNode }) {
-  if (role === "alice") {
+  if (role === "veronica") {
     return (
       <DeviceFrame variant="iphone">
         <IPhoneChrome>{children}</IPhoneChrome>

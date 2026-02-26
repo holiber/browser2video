@@ -1,50 +1,13 @@
 import { useEffect, useRef } from "react";
-import { usePlayer } from "./hooks/use-player";
+import { observer } from "mobx-react-lite";
+import { usePlayerStore } from "./stores/context";
 import { StepGraph } from "./components/step-graph";
 import { Preview } from "./components/preview";
 import { Controls } from "./components/controls";
 import { ScenarioPicker } from "./components/scenario-picker";
 
-const WS_URL = `ws://${window.location.host}/ws`;
-
-export default function App() {
-  const { state, cursor, loadScenario, runStep, runAll, reset, cancel, clearCache, setViewMode, importArtifacts, downloadArtifacts, sendStudioEvent, setAudioSettings } = usePlayer(WS_URL);
-  const {
-    scenario,
-    scenarioFiles,
-    stepStates,
-    screenshots,
-    activeStep,
-    liveFrame,
-    liveFrames,
-    studioFrames,
-    connected,
-    error,
-    loading,
-    stepDurationsFast,
-    stepDurationsHuman,
-    stepHasAudio,
-    runMode,
-    viewMode,
-    paneLayout,
-    terminalServerUrl,
-    videoPath,
-    importing,
-    importResult,
-    cacheSize,
-    audioSettings,
-    detectedProvider,
-    buildProgress,
-  } = state;
-
-  const isFastForwarding = stepStates.some((s) => s === "fast-forwarding");
-  const showOverlay = loading || isFastForwarding || !!buildProgress;
-  const overlayLabel = buildProgress
-    ? "Building the cache..."
-    : loading ? "Loading..." : "Replaying slides...";
-
-  const activeScreenshot = activeStep >= 0 ? screenshots[activeStep] : null;
-  const activeCaption = activeStep >= 0 && scenario ? scenario.steps[activeStep]?.caption : undefined;
+export default observer(function App() {
+  const store = usePlayerStore();
 
   const autoRunInitRef = useRef(false);
   const autoRunRef = useRef<{ file: string; autoplay: boolean } | null>(null);
@@ -61,31 +24,34 @@ export default function App() {
   useEffect(() => {
     const auto = autoRunRef.current;
     if (!auto) return;
-    if (!connected) return;
+    if (!store.connected) return;
 
-    loadScenario(auto.file);
-    if (auto.autoplay) runAll();
+    store.loadScenario(auto.file);
+    if (auto.autoplay) store.runAll();
 
-    // Only do this once per app launch.
     autoRunRef.current = null;
-  }, [connected, loadScenario, runAll]);
+  }, [store.connected, store]);
+
+  const { scenario } = store;
 
   return (
     <div className="h-screen flex flex-col bg-zinc-950 text-zinc-200">
       <ScenarioPicker
-        onLoad={loadScenario}
-        connected={connected}
+        onLoad={(f) => store.loadScenario(f)}
+        connected={store.connected}
         scenarioName={scenario?.name ?? null}
-        scenarioFiles={scenarioFiles}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
-        onClearCache={clearCache}
-        cacheSize={cacheSize}
+        scenarioFiles={store.scenarioFiles}
+        viewMode={store.viewMode}
+        onViewModeChange={(m) => store.setViewMode(m)}
+        onClearScenarioCache={() => store.clearScenarioCache()}
+        onClearGlobalCache={() => store.clearGlobalCache()}
+        scenarioCacheSize={store.scenarioCacheSize}
+        globalCacheSize={store.globalCacheSize}
       />
 
-      {error && (
+      {store.error && (
         <div className="px-4 py-2 bg-red-950 border-b border-red-800 text-red-300 text-sm">
-          {error}
+          {store.error}
         </div>
       )}
 
@@ -94,14 +60,14 @@ export default function App() {
           {scenario ? (
             <StepGraph
               steps={scenario.steps}
-              stepStates={stepStates}
-              screenshots={screenshots}
-              activeStep={activeStep}
-              stepDurationsFast={stepDurationsFast}
-              stepDurationsHuman={stepDurationsHuman}
-              stepHasAudio={stepHasAudio}
-              runMode={runMode}
-              onStepClick={runStep}
+              stepStates={store.stepStates}
+              screenshots={store.screenshots}
+              activeStep={store.activeStep}
+              stepDurationsFast={store.stepDurationsFast}
+              stepDurationsHuman={store.stepDurationsHuman}
+              stepHasAudio={store.stepHasAudio}
+              runMode={store.runMode}
+              onStepClick={(i) => store.runStep(i)}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-zinc-600 px-6">
@@ -118,34 +84,34 @@ export default function App() {
         </div>
         <div className="flex-1 relative">
           <Preview
-            screenshot={activeScreenshot}
-            liveFrame={liveFrame}
-            liveFrames={liveFrames}
-            studioFrames={studioFrames}
-            activeStep={activeStep}
-            stepCaption={activeCaption}
-            viewMode={viewMode}
-            stepState={activeStep >= 0 ? stepStates[activeStep] : undefined}
-            paneLayout={paneLayout}
-            terminalServerUrl={terminalServerUrl}
+            screenshot={store.activeScreenshot}
+            liveFrame={store.liveFrame}
+            liveFrames={store.liveFrames}
+            studioFrames={store.studioFrames}
+            activeStep={store.activeStep}
+            stepCaption={store.activeCaption}
+            viewMode={store.viewMode}
+            stepState={store.activeStep >= 0 ? store.stepStates[store.activeStep] : undefined}
+            paneLayout={store.paneLayout}
+            terminalServerUrl={store.terminalServerUrl}
             showStudio={!scenario}
-            videoPath={videoPath}
-            cursor={cursor}
-            sendStudioEvent={sendStudioEvent}
+            videoPath={store.videoPath}
+            cursor={store.cursor}
+            sendStudioEvent={(msg) => store.sendStudioEvent(msg)}
           />
-          {showOverlay && (
+          {store.showOverlay && (
             <div
               className="absolute inset-0 z-30 bg-black/60 backdrop-blur-sm flex items-center justify-center"
-              data-testid={buildProgress ? "build-overlay" : undefined}
+              data-testid={store.buildProgress ? "build-overlay" : undefined}
             >
               <div className="flex flex-col items-center gap-3 max-w-md px-4">
                 <div className="w-8 h-8 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm text-zinc-300 font-medium">{overlayLabel}</span>
-                {buildProgress && (
+                <span className="text-sm text-zinc-300 font-medium">{store.overlayLabel}</span>
+                {store.buildProgress && (
                   <>
-                    <span className="text-xs text-zinc-400">{buildProgress.step} / {buildProgress.total}</span>
+                    <span className="text-xs text-zinc-400">{store.buildProgress.step} / {store.buildProgress.total}</span>
                     <span className="text-xs text-zinc-500 text-center truncate w-full" data-testid="build-progress-msg">
-                      {buildProgress.message}
+                      {store.buildProgress.message}
                     </span>
                   </>
                 )}
@@ -158,22 +124,22 @@ export default function App() {
       {scenario && (
         <Controls
           stepCount={scenario.steps.length}
-          activeStep={activeStep}
-          stepStates={stepStates}
-          connected={connected}
-          importing={importing}
-          importResult={importResult}
-          audioSettings={audioSettings}
-          detectedProvider={detectedProvider}
-          onRunStep={runStep}
-          onRunAll={runAll}
-          onReset={reset}
-          onCancel={cancel}
-          onImportArtifacts={importArtifacts}
-          onDownloadArtifacts={downloadArtifacts}
-          onAudioSettingsChange={setAudioSettings}
+          activeStep={store.activeStep}
+          stepStates={store.stepStates}
+          connected={store.connected}
+          importing={store.importing}
+          importResult={store.importResult}
+          audioSettings={store.audioSettings}
+          detectedProvider={store.detectedProvider}
+          onRunStep={(i) => store.runStep(i)}
+          onRunAll={() => store.runAll()}
+          onReset={() => store.reset()}
+          onCancel={() => store.cancel()}
+          onImportArtifacts={(d) => store.importArtifacts(d)}
+          onDownloadArtifacts={(r) => store.downloadArtifacts(r)}
+          onAudioSettingsChange={(s) => store.setAudioSettings(s)}
         />
       )}
     </div>
   );
-}
+});

@@ -35,7 +35,7 @@ export default function MacOSChrome({ children, title, onMessengerClick }: Props
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
-  const role = params.get("role") ?? "alice";
+  const role = params.get("role") ?? "veronica";
   const ws = params.get("ws") ?? "";
 
   const windowTitle = title ?? deriveTitle(location.pathname);

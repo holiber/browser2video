@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState } from "react";
-import type { CursorState } from "../hooks/use-player";
+import type { CursorState } from "../stores/player-store";
 
 interface CursorOverlayProps {
   cursor: CursorState;

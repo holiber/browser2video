@@ -9,6 +9,8 @@ This repo is a small monorepo for recording repeatable browser automation "proof
     Zod schemas/operation registry, CLI (`b2v`), MCP server (`b2v-mcp`), and terminal WebSocket bridge.
 - `apps/demo/`
   - Vite + React app used as a stable, controllable target for scenarios.
+- `apps/studio-player/`
+  - Electron + Vite + React app for recording and replaying scenarios. Uses MobX for state management (`src/stores/player-store.ts`).
 - `tests/scenarios/`
   - Standalone scenario files (`.ts` / `.js`) using `createSession()` for each scenario.
 
@@ -17,7 +19,8 @@ This repo is a small monorepo for recording repeatable browser automation "proof
 The primary entry point is `createSession()` which returns a `Session` object:
 
 - `session.openPage(opts)` — open a browser page with optional URL and viewport
-- `session.openTerminal(opts)` — open an in-browser terminal (xterm.js)
+- `session.createTerminal(cmd?, opts?)` — open an in-browser terminal (xterm.js, high-level API)
+- `session.openTerminal(opts)` — low-level terminal creation
 - `session.step(caption, fn)` — track a named step with subtitles
 - `session.step(caption, narration, fn)` — step with concurrent TTS narration
 - `session.finish()` — stop recording, compose video, mix audio, generate subtitles
@@ -50,12 +53,18 @@ Recording is configured via `SessionOptions.record`:
 
 ## Narration
 
-When `OPENAI_API_KEY` is set (or `narration.enabled: true`):
+TTS narration is resolved via `resolveNarrator()` which picks the best available provider:
 
-- TTS audio is generated via OpenAI TTS API
-- Audio clips are cached in `.cache/tts/` (keyed by text + voice + speed + language)
+1. **Google Cloud TTS** — if `GOOGLE_TTS_API_KEY` is set
+2. **OpenAI TTS** — if `OPENAI_API_KEY` is set (uses `tts-1-hd` model with classic voices)
+3. **System TTS** — macOS `say`, Windows SAPI, or Linux `espeak-ng`
+4. **Piper TTS** — open-source fallback
+
+The provider can be forced via `B2V_TTS_PROVIDER` environment variable.
+
+- Audio clips are cached in `.cache/tts/` (keyed by provider + text + voice + speed + language)
 - `narration.language` auto-translates text via OpenAI Chat API before TTS
-- `narration.realtime` plays audio through speakers during execution
+- `narration.realtime` plays audio through speakers during execution (browser-based `HTMLAudioElement` in Electron, `afplay`/`ffplay` fallback otherwise)
 - Audio events are mixed into the final video via ffmpeg
 
 ## Artifacts

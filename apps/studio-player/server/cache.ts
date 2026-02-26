@@ -295,18 +295,49 @@ export class PlayerCache {
     }
   }
 
-  /** Get total cache size in bytes (recursive). */
+  /** Get total player cache size in bytes (recursive). */
   getCacheSize(): number {
+    return PlayerCache.dirSize(this.cacheRoot);
+  }
+
+  /** Get cache size for a single scenario (all hash variants). */
+  getScenarioCacheSize(scenarioRelPath: string): number {
+    const prefix = scenarioRelPath.replace(/[/\\]/g, "_").replace(/\.scenario\.ts$/, "") + "_";
     if (!fs.existsSync(this.cacheRoot)) return 0;
     let total = 0;
-    const walk = (dir: string) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const p = path.join(dir, entry.name);
+    for (const entry of fs.readdirSync(this.cacheRoot, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.startsWith(prefix)) {
+        total += PlayerCache.dirSize(path.join(this.cacheRoot, entry.name));
+      }
+    }
+    return total;
+  }
+
+  /** Get the size of the entire .cache/ root (player + tts + tests + everything). */
+  getGlobalCacheSize(): number {
+    const globalRoot = path.dirname(this.cacheRoot);
+    return PlayerCache.dirSize(globalRoot);
+  }
+
+  /** Remove the entire .cache/ root (all subdirs: player, tts, tests, etc.). */
+  clearGlobal(): void {
+    const globalRoot = path.dirname(this.cacheRoot);
+    if (fs.existsSync(globalRoot)) {
+      fs.rmSync(globalRoot, { recursive: true, force: true });
+    }
+  }
+
+  private static dirSize(dir: string): number {
+    if (!fs.existsSync(dir)) return 0;
+    let total = 0;
+    const walk = (d: string) => {
+      for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, entry.name);
         if (entry.isDirectory()) walk(p);
         else try { total += fs.statSync(p).size; } catch { }
       }
     };
-    walk(this.cacheRoot);
+    walk(dir);
     return total;
   }
 }

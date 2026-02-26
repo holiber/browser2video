@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { FolderOpen, ChevronDown, Monitor, Film, Trash2 } from "lucide-react";
-import type { ViewMode } from "../hooks/use-player";
+import { useState, useRef, useEffect } from "react";
+import { FolderOpen, ChevronDown, Monitor, Film, Database, Trash2 } from "lucide-react";
+import type { ViewMode } from "../stores/player-store";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -16,12 +16,27 @@ interface ScenarioPickerProps {
   scenarioFiles: string[];
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
-  onClearCache?: () => void;
-  cacheSize?: number;
+  onClearScenarioCache?: () => void;
+  onClearGlobalCache?: () => void;
+  scenarioCacheSize?: number;
+  globalCacheSize?: number;
 }
 
-export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles, viewMode, onViewModeChange, onClearCache, cacheSize }: ScenarioPickerProps) {
+export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles, viewMode, onViewModeChange, onClearScenarioCache, onClearGlobalCache, scenarioCacheSize, globalCacheSize }: ScenarioPickerProps) {
   const [selected, setSelected] = useState("");
+  const [cachePopoverOpen, setCachePopoverOpen] = useState(false);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!cachePopoverOpen) return;
+    const handleClick = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        setCachePopoverOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [cachePopoverOpen]);
 
   const handleSelect = (file: string) => {
     if (file) {
@@ -107,18 +122,62 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
         </button>
       </div>
 
-      {onClearCache && (
-        <button
-          onClick={onClearCache}
-          className="flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors flex-shrink-0"
-          title="Clear cache"
-          data-testid="ctrl-clear-cache"
-        >
-          <Trash2 size={12} />
-          {cacheSize && cacheSize > 0
-            ? `Clear cache (${formatBytes(cacheSize)})`
-            : "Clear cache"}
-        </button>
+      {(onClearScenarioCache || onClearGlobalCache) && (
+        <div className="relative flex-shrink-0" ref={popoverRef}>
+          <button
+            onClick={() => setCachePopoverOpen((v) => !v)}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+            title="Cache management"
+            data-testid="ctrl-clear-cache"
+          >
+            <Database size={12} />
+            <span>
+              {formatBytes(scenarioCacheSize ?? 0)}
+              {" / "}
+              {formatBytes(globalCacheSize ?? 0)}
+            </span>
+          </button>
+
+          {cachePopoverOpen && (
+            <div className="absolute right-0 top-full mt-1 z-50 w-64 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl p-3 flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium text-zinc-300">Scenario cache</span>
+                  <span className="text-[10px] text-zinc-500">{formatBytes(scenarioCacheSize ?? 0)}</span>
+                </div>
+                {onClearScenarioCache && (
+                  <button
+                    onClick={() => { onClearScenarioCache(); setCachePopoverOpen(false); }}
+                    className="flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:text-red-300 hover:bg-zinc-800 transition-colors"
+                    data-testid="ctrl-clear-scenario-cache"
+                  >
+                    <Trash2 size={11} />
+                    Clear
+                  </button>
+                )}
+              </div>
+
+              <div className="border-t border-zinc-800" />
+
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col">
+                  <span className="text-xs font-medium text-zinc-300">Global cache</span>
+                  <span className="text-[10px] text-zinc-500">{formatBytes(globalCacheSize ?? 0)}</span>
+                </div>
+                {onClearGlobalCache && (
+                  <button
+                    onClick={() => { onClearGlobalCache(); setCachePopoverOpen(false); }}
+                    className="flex items-center gap-1 px-2 py-1 rounded text-xs text-red-400 hover:text-red-300 hover:bg-zinc-800 transition-colors"
+                    data-testid="ctrl-clear-global-cache"
+                  >
+                    <Trash2 size={11} />
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       <div

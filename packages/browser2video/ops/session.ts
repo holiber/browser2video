@@ -87,11 +87,11 @@ export const stepOp = defineOp({
   examples: [
     {
       title: "Simple step",
-      code: `await step("Fill the form", async () => {\n  await actor.type("#name", "Alice");\n});`,
+      code: `await step("Fill the form", async () => {\n  await actor.type("#name", "Veronica");\n});`,
     },
     {
       title: "Step with narration",
-      code: `await step("Fill the form", "Now we fill in the user's name", async () => {\n  await actor.type("#name", "Alice");\n});`,
+      code: `await step("Fill the form", "Now we fill in the user's name", async () => {\n  await actor.type("#name", "Veronica");\n});`,
     },
   ],
   tags: ["lifecycle"],

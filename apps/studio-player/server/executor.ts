@@ -105,15 +105,23 @@ export class Executor<T = any> {
       if (this.projectRoot) process.chdir(this.projectRoot);
       let newSession: Session | null = null;
       try {
+        const { narration: scenarioNarr, ...scenarioRest } = this.descriptor.sessionOpts ?? {};
+        const { narration: runtimeNarr, ...runtimeRest } = this.sessionOpts ?? {};
+
         newSession = await createSession({
           mode,
           // Embedded (nested StudioPlayer) needs live frames via CDP screencast.
           // Session recording in Electron mode also uses CDP screencast internally,
           // so enabling both would conflict and produce 0 live frames.
           record: mode === "human" && !isEmbedded,
-          narration: { enabled: true, realtime: process.env.B2V_HEADLESS !== "1" },
-          ...this.descriptor.sessionOpts,
-          ...this.sessionOpts,
+          narration: {
+            enabled: true,
+            realtime: process.env.B2V_HEADLESS !== "1",
+            ...scenarioNarr,
+            ...runtimeNarr,
+          },
+          ...scenarioRest,
+          ...runtimeRest,
           headed: false,
           cdpEndpoint: this.cdpEndpoint ?? undefined,
           onRequestPage: this.onRequestPage ?? undefined,

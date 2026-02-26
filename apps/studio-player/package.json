@@ -14,8 +14,10 @@
     "@xterm/xterm": "^6.0.0",
     "browser2video": "workspace:*",
     "dockview": "^5.0.0",
-    "jabterm": "github:holiber/jabterm#v0.1.4",
+    "jabterm": "github:holiber/jabterm#v0.1.5",
     "lucide-react": "^0.469.0",
+    "mobx": "^6.15.0",
+    "mobx-react-lite": "^4.1.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "ws": "^8.19.0"

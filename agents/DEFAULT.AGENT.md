@@ -6,7 +6,6 @@ Agent should follow the default rules if they don't have their own rules dependi
 ## Common rules
 
 Agent MUST not edit files in agents/ folder without permission.
-You can find useful resources in the agents/DOCS.md file.
 
 ## Documentation
 

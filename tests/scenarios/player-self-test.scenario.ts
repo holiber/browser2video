@@ -569,17 +569,19 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         const btn = page.locator("[data-testid='ctrl-clear-cache']");
         await btn.waitFor({ timeout: 5_000 });
 
+        // Button text format: "{scenarioSize} / {globalSize}", e.g. "1.2 MB / 45.3 MB"
+        const sizePattern = /[\d.]+\s*(B|KB|MB|GB)\s*\/\s*[\d.]+\s*(B|KB|MB|GB)/;
         await page.waitForFunction(
-            () => /Clear cache \([\d.]+\s*(B|KB|MB|GB)\)/.test(
+            (pat: string) => new RegExp(pat).test(
                 document.querySelector('[data-testid="ctrl-clear-cache"]')?.textContent ?? "",
             ),
-            undefined,
+            sizePattern.source,
             { timeout: 10_000 },
         );
 
         const text = await btn.textContent();
-        if (!text || !(/Clear cache \([\d.]+\s*(B|KB|MB|GB)\)/.test(text))) {
-            throw new Error(`Cache button should show size after steps ran, got: "${text}"`);
+        if (!text || !sizePattern.test(text)) {
+            throw new Error(`Cache button should show scenario/global sizes, got: "${text}"`);
         }
         console.error(`[self-test] Cache button text: "${text}"`);
     });

@@ -68,7 +68,7 @@ The goal of this tier is to have a good looking compact player UI whit e2e test 
 
 - when user launches player it started with 1x1 layout with a + button, that allows to select what should be in this pane - browser or terminal
 - user clicks browser, and see a prompt with url and confirmation button.
-- user also see a checkbox "open in dedicated browser window instead iframe (TODO)"
+- user also see a checkbox "open in dedicated browser window instead iframe"
 - by default the user opens the github page of this project
 - after that user should be able to split the view horizontaly and open a terminal
 - user should check that "echo" command is working

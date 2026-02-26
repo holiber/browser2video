@@ -261,6 +261,14 @@ interface PaneState {
   cdpRecorder?: CdpScreencastRecorder;
   process?: ChildProcess;
   createdAtMs: number;
+  consoleLogs?: string[];
+}
+
+interface GridActorEntry {
+  actor: TerminalActor;
+  label: string;
+  type: "terminal" | "browser";
+  frame?: Frame;
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +302,7 @@ export class Session {
   private terminalServer: TerminalServer | null = null;
   private terminalCounter = 0;
   private lastGridConfig: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string } | null = null;
+  private _gridActorEntries: GridActorEntry[] = [];
 
   // Resolved options
   readonly _modeRef: ModeRef;
@@ -658,11 +667,16 @@ export class Session {
       }
     }
 
-    // Console/error listeners
+    // Console/error listeners — collect all messages for log files
+    const consoleLogs: string[] = [];
     page.on("console", (msg) => {
+      const line = `[${msg.type()}] ${msg.text()}`;
+      consoleLogs.push(line);
       if (msg.type() === "error") console.error(`  [${label} Error] ${msg.text()}`);
     });
     page.on("pageerror", (err) => {
+      const line = `[pageerror] ${(err as Error).message}`;
+      consoleLogs.push(line);
       console.error(`  [${label} Error] ${(err as Error).message}`);
     });
 
@@ -678,7 +692,7 @@ export class Session {
       });
     }
 
-    const pane: PaneState = { id, type: "browser", label, context, page, actor, rawVideoPath, createdAtMs: Date.now() };
+    const pane: PaneState = { id, type: "browser", label, context, page, actor, rawVideoPath, consoleLogs, createdAtMs: Date.now() };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
 
@@ -1008,7 +1022,7 @@ export class Session {
       // Electron mode: the grid is rendered by the player's React app.
       // The session reports gridConfig via getLayoutInfo() and the executor
       // pushes it to the player. We find the main Electron window page
-      // via CDP using the __b2vWsInstances marker set by use-player.ts.
+      // via CDP using the __b2vWsInstances marker set by player-store.ts.
       let found: Page | null = null;
       for (let attempt = 0; attempt < 80; attempt++) {
         for (const ctx of this.browser!.contexts()) {
@@ -1138,6 +1152,13 @@ export class Session {
       actor.cursorId = (pc.title ?? pc.testId ?? `actor-${i}`).toLowerCase().replace(/\s+/g, '-');
       this._wireReplayEvents(actor);
       actors.push(actor);
+
+      this._gridActorEntries.push({
+        actor,
+        label: pc.title,
+        type: pc.type,
+        frame: iframeFrame,
+      });
     }
 
     // Inject cursor overlay once for all actors — cursors are lazily created
@@ -1169,10 +1190,23 @@ export class Session {
       }
     }
 
+    // Capture console logs from the grid page
+    const consoleLogs: string[] = [];
+    page.on("console", (msg) => {
+      const line = `[${msg.type()}] ${msg.text()}`;
+      consoleLogs.push(line);
+      if (msg.type() === "error") console.error(`  [grid Error] ${msg.text()}`);
+    });
+    page.on("pageerror", (err) => {
+      const line = `[pageerror] ${(err as Error).message}`;
+      consoleLogs.push(line);
+      console.error(`  [grid Error] ${(err as Error).message}`);
+    });
+
     // Register as a single pane for video recording
     const pane: PaneState = {
       id, type: "terminal", label, context, page,
-      rawVideoPath, createdAtMs: Date.now(),
+      rawVideoPath, consoleLogs, createdAtMs: Date.now(),
     };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
@@ -1398,6 +1432,53 @@ export class Session {
   }
 
   /**
+   * Save logs for all panes (browser console + terminal content) to artifactDir.
+   * Called automatically by finish() and abort() before pages are closed.
+   */
+  private async _savePaneLogs(): Promise<void> {
+    const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_").slice(0, 60);
+    const saved: string[] = [];
+
+    // Save console logs for every pane that collected them (standalone pages + grid page)
+    for (const pane of this.panes.values()) {
+      if (pane.consoleLogs && pane.consoleLogs.length > 0) {
+        const logPath = path.join(this.artifactDir, `${sanitize(pane.label)}.console.log`);
+        try {
+          fs.writeFileSync(logPath, pane.consoleLogs.join("\n") + "\n", "utf-8");
+          saved.push(path.basename(logPath));
+        } catch { /* best-effort */ }
+      }
+    }
+
+    // Save grid terminal and browser pane logs
+    for (const entry of this._gridActorEntries) {
+      const safeName = sanitize(entry.label);
+      if (entry.type === "terminal") {
+        try {
+          const content = await entry.actor.read();
+          if (content) {
+            const logPath = path.join(this.artifactDir, `${safeName}.terminal.log`);
+            fs.writeFileSync(logPath, content + "\n", "utf-8");
+            saved.push(path.basename(logPath));
+          }
+        } catch { /* page may already be closed */ }
+      } else if (entry.type === "browser" && entry.frame) {
+        try {
+          const url = entry.frame.url();
+          const text = await entry.frame.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+          const logPath = path.join(this.artifactDir, `${safeName}.page.log`);
+          fs.writeFileSync(logPath, `URL: ${url}\n\n${text}\n`, "utf-8");
+          saved.push(path.basename(logPath));
+        } catch { /* frame may be detached */ }
+      }
+    }
+
+    if (saved.length > 0) {
+      console.error(`  Pane logs:  ${saved.join(", ")}`);
+    }
+  }
+
+  /**
    * Register a cleanup function to run automatically when `finish()` is called.
    * Use this for servers, terminal processes, and other resources so you don't
    * need a try/finally wrapper around your scenario.
@@ -1424,6 +1505,9 @@ export class Session {
     const videoPath = this.record ? path.join(this.artifactDir, "run.mp4") : undefined;
     const subtitlesPath = path.join(this.artifactDir, "captions.vtt");
     const metadataPath = path.join(this.artifactDir, "run.json");
+
+    // Save pane logs before pages are closed
+    await this._savePaneLogs();
 
     // Tail capture — screenshot forces Chromium to composite the latest visual state
     // (deterministic render flush) and produces a thumbnail for the video.
@@ -1610,6 +1694,9 @@ export class Session {
 
     // Kill audio playback immediately
     this.audioDirector.stop();
+
+    // Save pane logs before pages are closed
+    await this._savePaneLogs().catch(() => {});
 
     // Force-close all pages — this interrupts any running Playwright operations
     for (const pane of this.panes.values()) {

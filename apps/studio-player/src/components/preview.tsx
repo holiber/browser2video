@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from "react";
-import type { ViewMode, StepState, PaneLayoutInfo, CursorState } from "../hooks/use-player";
+import type { ViewMode, StepState, PaneLayoutInfo, CursorState } from "../stores/player-store";
 import { CursorOverlay } from "./cursor-overlay";
 import { StudioGrid } from "./studio-grid";
 import { ScenarioGrid, type ScenarioGridConfig } from "./scenario-grid";

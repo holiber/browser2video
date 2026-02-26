@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Play, Square, SkipForward, SkipBack, RotateCcw, Download, FolderInput } from "lucide-react";
-import type { StepState, AudioSettings } from "../hooks/use-player";
+import type { StepState, AudioSettings } from "../stores/player-store";
 import { AudioSettingsPanel } from "./audio-settings";
 
 

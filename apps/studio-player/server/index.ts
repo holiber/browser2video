@@ -83,7 +83,8 @@ type ClientMsg =
   | { type: "reset" }
   | { type: "cancel" }
   | { type: "listScenarios" }
-  | { type: "clearCache" }
+  | { type: "clearScenarioCache" }
+  | { type: "clearGlobalCache" }
   | { type: "setViewMode"; mode: ViewMode }
   | { type: "setAudioSettings"; settings: AudioSettings }
   | { type: "getAudioSettings" }
@@ -102,8 +103,8 @@ type ServerMsg =
   | { type: "liveFrame"; data: string; paneId?: string }
   | { type: "paneLayout"; layout: PaneLayoutInfo }
   | { type: "cachedData"; screenshots: (string | null)[]; stepDurations: (number | null)[]; stepDurationsFast: (number | null)[]; stepDurationsHuman: (number | null)[]; stepHasAudio: boolean[]; videoPath?: string | null }
-  | { type: "cacheCleared"; cacheSize?: number }
-  | { type: "cacheSize"; size: number }
+  | { type: "cacheCleared"; scenarioSize: number; globalSize: number }
+  | { type: "cacheSize"; scenarioSize: number; globalSize: number }
   | { type: "cancelled" }
   | { type: "viewMode"; mode: ViewMode }
   | { type: "replayEvent"; event: ReplayEvent }
@@ -155,9 +156,12 @@ function persistStepCache(index: number, screenshot: string, durationMs: number,
 }
 
 function broadcastCacheSize() {
-  const size = cache.getCacheSize();
+  const globalSize = cache.getGlobalCacheSize();
   for (const client of wss.clients) {
-    send(client as WebSocket, { type: "cacheSize", size });
+    const scenarioSize = currentScenarioFile
+      ? cache.getScenarioCacheSize(currentScenarioFile)
+      : 0;
+    send(client as WebSocket, { type: "cacheSize", scenarioSize, globalSize });
   }
 }
 
@@ -508,7 +512,11 @@ wss.on("connection", (ws) => {
 
   const files = listPlayerScenarioFiles();
   send(ws, { type: "scenarioFiles", files });
-  send(ws, { type: "cacheSize", size: cache.getCacheSize() });
+  send(ws, {
+    type: "cacheSize",
+    scenarioSize: currentScenarioFile ? cache.getScenarioCacheSize(currentScenarioFile) : 0,
+    globalSize: cache.getGlobalCacheSize(),
+  });
   send(ws, { type: "viewMode", mode: currentViewMode });
   send(ws, {
     type: "audioSettings",
@@ -717,15 +725,24 @@ wss.on("connection", (ws) => {
           break;
         }
 
-        case "clearCache": {
+        case "clearScenarioCache": {
           if (currentScenarioFile) {
             const absPath = path.isAbsolute(currentScenarioFile) ? currentScenarioFile : path.resolve(PROJECT_ROOT, currentScenarioFile);
             cache.clearForScenario(absPath, currentScenarioFile);
             currentStepMetas = [];
-          } else {
-            cache.clearAll();
           }
-          send(ws, { type: "cacheCleared", cacheSize: cache.getCacheSize() });
+          send(ws, {
+            type: "cacheCleared",
+            scenarioSize: currentScenarioFile ? cache.getScenarioCacheSize(currentScenarioFile) : 0,
+            globalSize: cache.getGlobalCacheSize(),
+          });
+          break;
+        }
+
+        case "clearGlobalCache": {
+          cache.clearGlobal();
+          currentStepMetas = [];
+          send(ws, { type: "cacheCleared", scenarioSize: 0, globalSize: 0 });
           break;
         }
 

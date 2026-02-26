@@ -53,7 +53,7 @@ export default function IPhoneChrome({ children, onMessengerClick }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
-  const role = params.get("role") ?? "alice";
+  const role = params.get("role") ?? "veronica";
   const ws = params.get("ws") ?? "";
 
   const handleDockClick = useCallback(

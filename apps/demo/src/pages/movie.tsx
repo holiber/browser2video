@@ -1,9 +1,9 @@
 /**
  * @description Movie description page for the streaming app.
- * Shows "3 Body Problem" series info — used by the chat scenario as Alice's starting view.
+ * Shows "3 Body Problem" series info — used by the chat scenario as Veronica's starting view.
  * Device chrome (title bar, dock) is handled by MacOSChrome layout wrapper.
  *
- * URL params: ?role=alice|bob&ws=... (passed through to the chat page)
+ * URL params: ?role=veronica|bob&ws=... (passed through to the chat page)
  */
 import { Play, Plus, Star, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";

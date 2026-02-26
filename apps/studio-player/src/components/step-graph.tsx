@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Volume2 } from "lucide-react";
-import type { StepState, StepInfo } from "../hooks/use-player";
+import type { StepState, StepInfo } from "../stores/player-store";
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
