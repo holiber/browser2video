@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { resolveCacheDir } from "browser2video";
 
 export interface StepMeta {
   index: number;
@@ -39,7 +40,7 @@ export class PlayerCache {
 
   constructor(projectRoot: string) {
     this.projectRoot = projectRoot;
-    this.cacheRoot = path.join(projectRoot, ".cache", "player");
+    this.cacheRoot = resolveCacheDir("player");
   }
 
   private hashForFile(filePath: string): string {
@@ -278,10 +279,13 @@ export class PlayerCache {
     return { imported, downloadDir };
   }
 
-  clearForScenario(scenarioAbsPath: string, scenarioRelPath: string): void {
-    const { dir } = this.getDir(scenarioAbsPath, scenarioRelPath);
-    if (fs.existsSync(dir)) {
-      fs.rmSync(dir, { recursive: true, force: true });
+  clearForScenario(_scenarioAbsPath: string, scenarioRelPath: string): void {
+    const prefix = scenarioRelPath.replace(/[/\\]/g, "_").replace(/\.scenario\.ts$/, "") + "_";
+    if (!fs.existsSync(this.cacheRoot)) return;
+    for (const entry of fs.readdirSync(this.cacheRoot, { withFileTypes: true })) {
+      if (entry.isDirectory() && entry.name.startsWith(prefix)) {
+        fs.rmSync(path.join(this.cacheRoot, entry.name), { recursive: true, force: true });
+      }
     }
   }
 

@@ -74,9 +74,50 @@ app.commandLine.appendSwitch("remote-debugging-port", String(CDP_PORT));
 // Disable site isolation so nested iframes (terminal panes) are accessible via CDP
 app.commandLine.appendSwitch("disable-site-isolation-trials");
 app.commandLine.appendSwitch("disable-features", "IsolateOrigins,site-per-process");
+// Disable web security so external sites can be embedded in grid iframes
+app.commandLine.appendSwitch("disable-web-security");
 
 let mainWindow: BrowserWindow | null = null;
 let scenarioView: WebContentsView | null = null;
+
+/**
+ * Strip all frame-embedding restrictions from HTTP responses so that any
+ * external website (e.g. github.com) can be loaded inside grid iframes.
+ * The Studio Player is a desktop app — it should behave like a real browser,
+ * not be limited by iframe security policies.
+ */
+function stripFrameBlockingHeaders(session: Electron.Session) {
+  const BLOCKED_HEADERS = [
+    "x-frame-options",
+    "cross-origin-opener-policy",
+    "cross-origin-embedder-policy",
+    "cross-origin-resource-policy",
+  ];
+
+  session.webRequest.onHeadersReceived((details, callback) => {
+    const headers = { ...details.responseHeaders };
+
+    for (const key of Object.keys(headers)) {
+      if (BLOCKED_HEADERS.includes(key.toLowerCase())) {
+        delete headers[key];
+      }
+    }
+
+    const cspKey = Object.keys(headers).find(
+      (k) => k.toLowerCase() === "content-security-policy",
+    );
+    if (cspKey && headers[cspKey]) {
+      headers[cspKey] = headers[cspKey].map((v: string) =>
+        v
+          .split(";")
+          .filter((d: string) => !/frame-ancestors/i.test(d.trim()))
+          .join("; "),
+      );
+    }
+
+    callback({ responseHeaders: headers });
+  });
+}
 
 const SERVER_PORT = parseInt(process.env.PORT ?? "9521", 10);
 
@@ -229,20 +270,6 @@ export async function createScenarioView(
 
   scenarioView.webContents.setWindowOpenHandler(() => ({ action: "deny" as const }));
 
-  // Bypass X-Frame-Options / CSP for nested content
-  scenarioView.webContents.session.webRequest.onHeadersReceived((details, callback) => {
-    const headers = { ...details.responseHeaders };
-    delete headers["x-frame-options"];
-    delete headers["X-Frame-Options"];
-    const csp = headers["content-security-policy"];
-    if (csp) {
-      headers["content-security-policy"] = csp.map((v: string) =>
-        v.split(";").filter((d: string) => !/frame-ancestors/i.test(d.trim())).join("; ")
-      );
-    }
-    callback({ responseHeaders: headers });
-  });
-
   // Default bounds:
   // - Normal mode: start hidden (0×0). The React ElectronScenarioView component
   //   will send the correct bounds via IPC once it mounts.
@@ -286,6 +313,10 @@ export function resizeScenarioView(bounds: { x: number; y: number; width: number
 
 app.whenReady().then(async () => {
   console.error(`[electron ${elt()}] app.whenReady() fired`);
+
+  // Strip frame-blocking headers globally so any site can be embedded in grid iframes
+  const { session } = await import("electron");
+  stripFrameBlockingHeaders(session.defaultSession);
 
   const iconPath = path.join(__dirname, "..", "assets", "icon.png");
   if (process.platform === "darwin" && app.dock) {

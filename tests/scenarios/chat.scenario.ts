@@ -1,22 +1,22 @@
 /**
  * Chat scenario — four concurrent scenes.
  *
- * Veronica (iPhone, left pane) and Bob (Pixel, right pane + terminal) act
+ * Alice (iPhone, left pane) and Bob (Pixel, right pane + terminal) act
  * concurrently within each scene.  True parallelism is achieved via
  * `drawViaInject` — cursor overlay + canvas drawing through evaluate() that
  * doesn't touch the shared page.mouse, so Bob can navigate with the mouse
  * at the same time.
  *
  * Scene 0 — Narrator introduces the demo, circles the panes.
- * Scene 1 — Veronica browses the movie; Bob reads Wikipedia + codes.
+ * Scene 1 — Alice browses the movie; Bob reads Wikipedia + codes.
  *           (Interleaved mouse actions for visual concurrency.)
- *           Veronica opens Messages and types her invitation while Bob
+ *           Alice opens Messages and types her invitation while Bob
  *           types his letter to Armillaria in the terminal (concurrent).
- * Scene 2 — Bob gets the notification, checks calendar; Veronica draws
+ * Scene 2 — Bob gets the notification, checks calendar; Alice draws
  *           an alien spaceship kidnapping Bob on the sketchpad, then sends
  *           it as a picture message.
  *           (Promise.all: draw via inject ‖ mouse nav.)
- * Scene 3 — Bob confirms, Veronica reacts with ❤️, then Veronica types
+ * Scene 3 — Bob confirms, Alice reacts with ❤️, then Alice types
  *           the cinema address while Bob tells Armillaria he can't visit
  *           Friday in the terminal (concurrent).  Narrator wraps up.
  *
@@ -25,14 +25,14 @@
  *       only sees that "Bob looks busy" or "Bob is doing his thing."
  *       Bob's activities are his secret — the narrator should not spoil them.
  *
- * @rule Whenever Veronica types a chat message, Bob MUST be typing in the
+ * @rule Whenever Alice types a chat message, Bob MUST be typing in the
  *       terminal at the same time. Use `typeInTerminalViaInject` for Bob
- *       (synthetic DOM events) so it doesn't conflict with Veronica's
+ *       (synthetic DOM events) so it doesn't conflict with Alice's
  *       `page.keyboard`-based typing. Both run inside `Promise.all`.
  *
  * Layout:
- *   Row 0: [Veronica (iPhone)  |  Bob browser (Pixel)]
- *   Row 1: [Veronica (iPhone)  |  Bob terminal        ]
+ *   Row 0: [Alice (iPhone)  |  Bob browser (Pixel)]
+ *   Row 1: [Alice (iPhone)  |  Bob terminal        ]
  */
 import path from "path";
 import {
@@ -112,7 +112,7 @@ async function assertMessageText(
 /* ------------------------------------------------------------------ */
 
 interface Ctx {
-    veronica: TerminalActor;
+    alice: TerminalActor;
     bobBrowser: TerminalActor;
     bobTerminal: TerminalActor;
     pointer: Actor;
@@ -131,20 +131,20 @@ interface Ctx {
 const NARRATOR_VOICE = "alloy";
 
 const CHAT = {
-    veronicaMsg: "Hey Bob! Are you free this Friday evening? There's a new sci-fi movie I wanna see!",
+    aliceMsg: "Hey Bob! Are you free this Friday evening? There's a new sci-fi movie I wanna see!",
     bobReply: "Friday works! What time and where should we meet?",
-    veronicaReply: "Awesome! Let's meet at seven in the evening at Cinemark Century Daly City!",
+    aliceReply: "Awesome! Let's meet at seven in the evening at Cinemark Century Daly City!",
 } as const;
 
 const NARRATOR = {
     intro:
-        "Welcome to Browser 2 Video. In this demo, Veronica is on her iPhone " +
+        "Welcome to Browser 2 Video. In this demo, Alice is on her iPhone " +
         "while Bob is on his Pixel. They each have their own cursor, moving independently.",
     scene1:
-        "Veronica is browsing 3 Body Problem while Bob looks busy " +
+        "Alice is browsing 3 Body Problem while Bob looks busy " +
         "with something on his screen and in the terminal.",
     scene2:
-        "Veronica sends a movie invitation and draws a little picture while waiting. " +
+        "Alice sends a movie invitation and draws a little picture while waiting. " +
         "Bob receives the notification and checks his calendar.",
     outro:
         "And that's it. Different actors, different devices, concurrent " +
@@ -204,6 +204,12 @@ async function drawViaInject(
     );
     if (isHuman) await sleep(60);
 
+    // Hand-tremor amplitude in normalized coords (~1.5px equivalent)
+    const jitterAmp = isHuman ? 1.5 / Math.max(canvasInfo.bw, canvasInfo.bh) : 0;
+    function jitter(v: number) {
+        return v + (Math.random() + Math.random() - 1) * jitterAmp;
+    }
+
     for (let seg = 0; seg < points.length - 1; seg++) {
         const from = points[seg]!;
         const to = points[seg + 1]!;
@@ -215,8 +221,8 @@ async function drawViaInject(
             const t = s / STEPS;
             const ease = smoothStep(t);
 
-            const rx = from.x + (to.x - from.x) * ease;
-            const ry = from.y + (to.y - from.y) * ease;
+            const rx = jitter(from.x + (to.x - from.x) * ease);
+            const ry = jitter(from.y + (to.y - from.y) * ease);
 
             const { px, py } = toPage(rx, ry);
             await page.evaluate(
@@ -278,14 +284,14 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
         session.addCleanup(() => sync.stop());
         session.addCleanup(() => server.stop());
 
-        const movieUrl = new URL(`${server.baseURL}/movie?role=veronica`);
+        const movieUrl = new URL(`${server.baseURL}/movie?role=alice`);
         movieUrl.searchParams.set("ws", sync.wsUrl);
 
         const wikiUrl = new URL(`${server.baseURL}/wiki?role=bob`);
 
         const grid = await session.createGrid(
             [
-                { url: movieUrl.toString(), label: "Veronica" },
+                { url: movieUrl.toString(), label: "Alice" },
                 { url: wikiUrl.toString(), label: "Bob" },
                 { label: "Bob Terminal" },
             ],
@@ -298,42 +304,42 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
             },
         );
 
-        const [veronica, bobBrowser, bobTerminal] = grid.actors;
+        const [alice, bobBrowser, bobTerminal] = grid.actors;
 
         const pointer = new Actor(grid.page, session.modeRef);
         pointer.cursorId = "narrator";
 
-        veronica.setVoice("shimmer");
-        veronica.cursorId = "veronica";
+        alice.setVoice("shimmer");
+        alice.cursorId = "alice";
         bobBrowser.setVoice("echo");
         bobBrowser.cursorId = "bob";
         bobTerminal.setVoice("echo");
         bobTerminal.cursorId = "bob";
 
         const narrate = (text: string) =>
-            veronica.speak(text, { voice: NARRATOR_VOICE });
+            alice.speak(text, { voice: NARRATOR_VOICE });
 
         const lang = process.env.B2V_NARRATION_LANGUAGE;
         const chatText = {
-            veronicaMsg: await translateText(CHAT.veronicaMsg, lang),
+            aliceMsg: await translateText(CHAT.aliceMsg, lang),
             bobReply: await translateText(CHAT.bobReply, lang),
-            veronicaReply: await translateText(CHAT.veronicaReply, lang),
+            aliceReply: await translateText(CHAT.aliceReply, lang),
         } as typeof CHAT;
 
         const allLines = [
             ...Object.values(NARRATOR).map((t) => ({ text: t, voice: NARRATOR_VOICE })),
-            { text: CHAT.veronicaMsg, voice: "shimmer" },
+            { text: CHAT.aliceMsg, voice: "shimmer" },
             { text: CHAT.bobReply, voice: "echo" },
-            { text: CHAT.veronicaReply, voice: "shimmer" },
+            { text: CHAT.aliceReply, voice: "shimmer" },
         ];
         console.error(`  Warming up ${allLines.length} TTS clips...`);
         await Promise.all(
-            allLines.map(({ text, voice }) => veronica.warmup(text, { voice })),
+            allLines.map(({ text, voice }) => alice.warmup(text, { voice })),
         );
         console.error(`  TTS warmup complete.`);
 
         return {
-            veronica, bobBrowser, bobTerminal, pointer, grid,
+            alice, bobBrowser, bobTerminal, pointer, grid,
             serverBaseURL: server.baseURL,
             syncWsUrl: sync.wsUrl,
             docHash: "",
@@ -357,21 +363,27 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
     );
 
     /* ── Scene 1: Working side by side ─────────────────────────────── */
-    // Interleaved: Veronica browses movie ↔ Bob reads wiki + codes
+    // Interleaved: Alice browses movie ↔ Bob reads wiki + codes
 
     s.step("Working side by side",
         ({ narrate }) => narrate(NARRATOR.scene1),
         async (ctx) => {
-            const { veronica, bobBrowser, bobTerminal, grid } = ctx;
-            const vFrame = veronica.frame as DOMContext;
+            const { alice, bobBrowser, bobTerminal, grid } = ctx;
+            const vFrame = alice.frame as DOMContext;
             const bFrame = bobBrowser.frame as DOMContext;
 
             await vFrame.waitForSelector('[data-testid="movie-page"]', { timeout: 10000 });
             await bFrame.waitForSelector('[data-testid="wiki-page"]', { timeout: 10000 });
 
+            // Assert correct device frames are loaded
+            await vFrame.waitForSelector('[data-testid="device-screen"]', { timeout: 5000 });
+            await vFrame.waitForSelector('img[src*="iphone-frame"]', { timeout: 5000 });
+            await bFrame.waitForSelector('[data-testid="device-screen"]', { timeout: 5000 });
+            await bFrame.waitForSelector('img[src*="pixel-frame"]', { timeout: 5000 });
+
             // ── Interleaved actions ──
 
-            await veronica.hover('[data-testid="movie-title"]');
+            await alice.hover('[data-testid="movie-title"]');
             await bobBrowser.hover('[data-testid="wiki-title"]');
             await grid.page.waitForTimeout(600);
 
@@ -379,25 +391,25 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
                 'echo "++++[>++++++++<-]>+.++++.--------.+++." > armillaria.bf',
             );
 
-            await veronica.hover('[data-testid="movie-synopsis"]');
+            await alice.hover('[data-testid="movie-synopsis"]');
             await grid.page.waitForTimeout(800);
 
             await bobBrowser.scroll('[data-testid="wiki-page"]', 150);
 
-            await veronica.hover('[data-testid="movie-play"]');
+            await alice.hover('[data-testid="movie-play"]');
             await grid.page.waitForTimeout(600);
 
-            await veronica.hover('[data-testid="movie-cast"]');
+            await alice.hover('[data-testid="movie-cast"]');
             await grid.page.waitForTimeout(500);
 
             await bobBrowser.scroll('[data-testid="wiki-page"]', 120);
             await grid.page.waitForTimeout(500);
 
-            // ── Veronica opens Messages in the dock ──
+            // ── Alice opens Messages in the dock ──
 
-            await veronica.hover('[data-testid="dock-messages"]');
+            await alice.hover('[data-testid="dock-messages"]');
             await grid.page.waitForTimeout(400);
-            await veronica.click('[data-testid="dock-messages"]');
+            await alice.click('[data-testid="dock-messages"]');
 
             await vFrame.waitForSelector('[data-testid="chat-page"]', { timeout: 20000 });
             await vFrame.waitForFunction(
@@ -410,67 +422,67 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
             console.error(`  Doc hash: ${hash}`);
             await grid.page.waitForTimeout(400);
 
-            // ── Veronica types her message ‖ Bob writes to Armillaria ──
-            // Veronica uses page.keyboard, Bob uses synthetic DOM events
+            // ── Alice types her message ‖ Bob writes to Armillaria ──
+            // Alice uses page.keyboard, Bob uses synthetic DOM events
             // via typeInTerminalViaInject — no shared resource conflict.
             await Promise.all([
                 (async () => {
-                    await veronica
-                        .type('[data-testid="chat-input"]', ctx.chatText.veronicaMsg)
-                        .speak(CHAT.veronicaMsg);
-                    await veronica.click('[data-testid="chat-send"]');
+                    await alice
+                        .type('[data-testid="chat-input"]', ctx.chatText.aliceMsg)
+                        .speak(CHAT.aliceMsg);
+                    await alice.click('[data-testid="chat-send"]');
                 })(),
                 (async () => {
                     await typeInTerminalViaInject(
                         grid.page, bobTerminal.frame as DOMContext, "bob",
                         bobTerminal.selector,
                         'echo "Dear Armillaria ostoyae,"\n',
-                        veronica.mode === "human",
+                        alice.mode === "human",
                     );
                     await typeInTerminalViaInject(
                         grid.page, bobTerminal.frame as DOMContext, "bob",
                         bobTerminal.selector,
                         'echo "I know they call you pathogenic"\n',
-                        veronica.mode === "human",
+                        alice.mode === "human",
                     );
                     await typeInTerminalViaInject(
                         grid.page, bobTerminal.frame as DOMContext, "bob",
                         bobTerminal.selector,
                         'echo "but you are a farmer, not a parasite"\n',
-                        veronica.mode === "human",
+                        alice.mode === "human",
                     );
                 })(),
             ]);
             await vFrame.waitForSelector('[data-testid="chat-msg-0"]', { timeout: 5000 });
-            await assertMessageText(vFrame, "chat-msg-0", ctx.chatText.veronicaMsg);
+            await assertMessageText(vFrame, "chat-msg-0", ctx.chatText.aliceMsg);
             await grid.page.waitForTimeout(500);
         },
     );
 
-    /* ── Scene 2: Bob checks availability · Veronica draws ─────────── */
+    /* ── Scene 2: Bob checks availability · Alice draws ─────────── */
     // True concurrency: drawViaInject (evaluate only) ‖ Bob's mouse nav
 
     s.step("Bob checks availability",
         ({ narrate }) => narrate(NARRATOR.scene2),
         async (ctx) => {
             const {
-                veronica, bobBrowser, grid,
+                alice, bobBrowser, grid,
                 serverBaseURL, syncWsUrl, chatText,
             } = ctx;
-            const vFrame = veronica.frame as DOMContext;
+            const vFrame = alice.frame as DOMContext;
             const bFrame = bobBrowser.frame as DOMContext;
 
             // ── Sequential setup before concurrent block ──
 
-            // Open Veronica's sketchpad
-            await veronica.click('[data-testid="chat-sketch-toggle"]');
+            // Open Alice's sketchpad
+            await alice.click('[data-testid="chat-sketch-toggle"]');
             await vFrame.waitForSelector('[data-testid="chat-sketch"]', { timeout: 5000 });
             await grid.page.waitForTimeout(300);
 
             // Inject notification into Bob's browser
-            const preview = chatText.veronicaMsg.length > 40
-                ? chatText.veronicaMsg.slice(0, 40) + "…"
-                : chatText.veronicaMsg;
+            const preview = chatText.aliceMsg.length > 40
+                ? chatText.aliceMsg.slice(0, 40) + "…"
+                : chatText.aliceMsg;
 
             await bFrame.evaluate((msg: string) => {
                 const el = document.createElement("div");
@@ -495,7 +507,7 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
                          display:flex;align-items:center;justify-content:center;
                          color:#fff;font-weight:700;font-size:14px;flex-shrink:0">V</div>
                     <div style="flex:1;min-width:0">
-                        <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:2px">Veronica</div>
+                        <div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:2px">Alice</div>
                         <div style="font-size:12px;color:rgba(255,255,255,0.55);
                              overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${msg}</div>
                     </div>`;
@@ -504,9 +516,9 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
 
             await grid.page.waitForTimeout(800);
 
-            // ── Concurrent: Veronica draws (evaluate) ‖ Bob navigates (mouse) ──
+            // ── Concurrent: Alice draws (evaluate) ‖ Bob navigates (mouse) ──
 
-            const isHuman = veronica.mode === "human";
+            const isHuman = alice.mode === "human";
 
             // UFO saucer (dome + body arc)
             const ufoDome = [
@@ -566,11 +578,11 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
             ];
 
             await Promise.all([
-                // Veronica draws alien spaceship kidnapping Bob
+                // Alice draws alien spaceship kidnapping Bob
                 (async () => {
                     for (const stroke of ufoStrokes) {
                         await drawViaInject(
-                            grid.page, vFrame, "veronica",
+                            grid.page, vFrame, "alice",
                             'iframe[name="browser-pane-0"]',
                             '[data-testid="chat-sketch"]',
                             stroke, isHuman,
@@ -614,7 +626,7 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
                     await bf2.waitForSelector('[data-testid="chat-page"]', { timeout: 20000 });
                     await grid.page.waitForTimeout(400);
 
-                    // Bob re-reads Veronica's message while she finishes drawing
+                    // Bob re-reads Alice's message while she finishes drawing
                     await bobBrowser.hover('[data-testid="chat-msg-0"]');
                     await grid.page.waitForTimeout(600);
                     await bobBrowser.hover('[data-testid="chat-input"]');
@@ -622,23 +634,23 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
                 })(),
             ]);
 
-            // Veronica sends the sketch as a picture message
-            await veronica.click('[data-testid="chat-sketch-send"]');
+            // Alice sends the sketch as a picture message
+            await alice.click('[data-testid="chat-sketch-send"]');
             await grid.page.waitForTimeout(600);
         },
     );
 
     /* ── Scene 3: Finale ───────────────────────────────────────────── */
-    // Bob confirms, Veronica reacts, Bob tells Armillaria, narrator outro
+    // Bob confirms, Alice reacts, Bob tells Armillaria, narrator outro
 
     s.step("Finale", async (ctx) => {
-            const { veronica, bobBrowser, bobTerminal, grid, chatText, narrate } = ctx;
-            const vFrame = veronica.frame as DOMContext;
+            const { alice, bobBrowser, bobTerminal, grid, chatText, narrate } = ctx;
+            const vFrame = alice.frame as DOMContext;
 
             // Close sketchpad if open
             const sketchVisible = await vFrame.$('[data-testid="chat-sketchpad"]');
             if (sketchVisible) {
-                await veronica.click('[data-testid="chat-sketch-toggle"]');
+                await alice.click('[data-testid="chat-sketch-toggle"]');
                 await grid.page.waitForTimeout(300);
             }
 
@@ -652,38 +664,38 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
             await assertMessageText(bFrame, "chat-msg-2", chatText.bobReply);
             await grid.page.waitForTimeout(800);
 
-            // Veronica sees the reply
+            // Alice sees the reply
             await vFrame.waitForFunction(
                 () => document.querySelectorAll('[data-testid^="chat-msg-"]').length >= 3,
                 undefined,
                 { timeout: 15000 },
             );
 
-            // Veronica reacts with ❤️ on Bob's message (index 2 after sketch at 1)
-            await veronica.click('[data-testid="chat-react-2"]');
+            // Alice reacts with ❤️ on Bob's message (index 2 after sketch at 1)
+            await alice.click('[data-testid="chat-react-2"]');
             await grid.page.waitForTimeout(500);
 
-            // Veronica replies ‖ Bob types in terminal — truly concurrent.
+            // Alice replies ‖ Bob types in terminal — truly concurrent.
             // Bob's typing uses synthetic DOM events (typeInTerminalViaInject)
-            // so it doesn't touch page.keyboard, which Veronica uses.
+            // so it doesn't touch page.keyboard, which Alice uses.
             await Promise.all([
                 (async () => {
-                    await veronica
-                        .type('[data-testid="chat-input"]', chatText.veronicaReply)
-                        .speak(CHAT.veronicaReply);
-                    await veronica.click('[data-testid="chat-send"]');
+                    await alice
+                        .type('[data-testid="chat-input"]', chatText.aliceReply)
+                        .speak(CHAT.aliceReply);
+                    await alice.click('[data-testid="chat-send"]');
                 })(),
                 typeInTerminalViaInject(
                     grid.page,
                     bobTerminal.frame as DOMContext,
                     "bob",
                     bobTerminal.selector,
-                    'echo "P.S. Can\'t come this Friday. Veronica invited me to the movies!" >> armillaria.bf\n',
-                    veronica.mode === "human",
+                    'echo "P.S. Can\'t come this Friday. Alice invited me to the movies!" >> armillaria.bf\n',
+                    alice.mode === "human",
                 ),
             ]);
             await vFrame.waitForSelector('[data-testid="chat-msg-3"]', { timeout: 5000 });
-            await assertMessageText(vFrame, "chat-msg-3", chatText.veronicaReply);
+            await assertMessageText(vFrame, "chat-msg-3", chatText.aliceReply);
             await grid.page.waitForTimeout(1000);
 
             // Narrator wraps up — after all actions are done

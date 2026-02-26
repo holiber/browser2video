@@ -538,6 +538,33 @@ export default defineScenario<Ctx>("Player Self-Test", (s) => {
         }
     });
 
+    s.step("Step cards show timing", async ({ page }) => {
+        const stepCards = page.locator("[data-testid^='step-card-']");
+        const cardCount = await stepCards.count();
+        const checkCount = Math.min(cardCount, 5);
+
+        let timingsFound = 0;
+        for (let i = 0; i < checkCount; i++) {
+            const durationEl = page.locator(`[data-testid='step-duration-${i}']`);
+            const visible = await durationEl.isVisible().catch(() => false);
+            if (visible) {
+                const text = await durationEl.textContent();
+                if (text && /\d+(\.\d+)?s/.test(text)) {
+                    timingsFound++;
+                    console.error(`[self-test] Step ${i} duration: ${text}`);
+                }
+            }
+        }
+
+        console.error(`[self-test] Step timings found: ${timingsFound}/${checkCount}`);
+        if (timingsFound < 3) {
+            throw new Error(
+                `Expected at least 3 step cards with timing, got ${timingsFound}/${checkCount}. ` +
+                "Step durations should be saved in cache after execution."
+            );
+        }
+    });
+
     s.step("Cache button shows size", async ({ page }) => {
         const btn = page.locator("[data-testid='ctrl-clear-cache']");
         await btn.waitFor({ timeout: 5_000 });

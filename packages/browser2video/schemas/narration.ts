@@ -6,10 +6,14 @@ import { z } from "zod";
 export const TtsProviderSchema = z.enum(["auto", "openai", "google", "system", "piper"]);
 export type TtsProvider = z.infer<typeof TtsProviderSchema>;
 
+export const GenderSchema = z.enum(["male", "female"]);
+export type Gender = z.infer<typeof GenderSchema>;
+
 export const NarrationOptionsSchema = z.object({
   enabled: z.boolean().describe("Whether TTS narration is active."),
   provider: TtsProviderSchema.optional().describe("TTS provider. 'auto' (default) picks the best available."),
-  voice: z.string().optional().describe("TTS voice. Provider-specific."),
+  voice: z.string().optional().describe("TTS voice. Provider-specific. Overrides gender-based selection."),
+  gender: GenderSchema.optional().describe("Actor gender for voice selection. Ignored when explicit voice is set."),
   speed: z.number().min(0.25).max(4).optional().describe("Speech speed 0.25–4.0 (default: 1.0)."),
   model: z.string().optional().describe("OpenAI TTS model: tts-1 | tts-1-hd."),
   apiKey: z.string().optional().describe("OpenAI API key (defaults to OPENAI_API_KEY env var)."),
@@ -23,6 +27,7 @@ export type NarrationOptions = z.infer<typeof NarrationOptionsSchema>;
 
 export const SpeakOptionsSchema = z.object({
   voice: z.string().optional().describe("Override the default TTS voice for this utterance."),
+  gender: GenderSchema.optional().describe("Override actor gender for this utterance. Ignored when explicit voice is set."),
   speed: z.number().min(0.25).max(4).optional().describe("Override the default speech speed."),
 });
 

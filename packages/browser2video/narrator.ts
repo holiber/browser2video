@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { execFileSync, execSync, spawn as spawnProcess, type ChildProcess } from "child_process";
+import { resolveCacheDir } from "./cache-dir.ts";
 
 // Re-export types from local schemas (single source of truth)
 export type {
@@ -23,7 +24,7 @@ import type {
   EffectOptions,
 } from "./schemas/narration.ts";
 
-import { getOpenAITtsDefaultsForLanguage, getGoogleTtsDefaultsForLanguage, isGoogleVoiceName } from "./tts-language-presets.ts";
+import { getOpenAITtsDefaultsForLanguage, getGoogleTtsDefaultsForLanguage, isGoogleVoiceName, resolveVoiceForGender } from "./tts-language-presets.ts";
 
 // ---------------------------------------------------------------------------
 //  AudioDirectorAPI — interface exposed to scenarios via session.audio
@@ -521,18 +522,21 @@ export interface ResolvedNarrator {
  */
 export function resolveNarrator(narr: NarrationOptions): ResolvedNarrator | null {
   const provider = narr.provider ?? "auto";
-  const cacheDir = narr.cacheDir ?? path.resolve(".cache/tts");
+  const cacheDir = narr.cacheDir ?? resolveCacheDir("tts");
 
   const googleKey = narr.googleApiKey ?? process.env.GOOGLE_TTS_API_KEY;
   const openaiKey = narr.apiKey ?? process.env.OPENAI_API_KEY;
 
-  // Helper to create engines
+  // Helper to create engines — gender-based voice selection when explicit voice is absent
   const makeGoogle = () => {
     const googleDefaults = getGoogleTtsDefaultsForLanguage(narr.language);
+    const genderVoice = !narr.voice ? resolveVoiceForGender("google", narr.language, narr.gender) : null;
     return new GoogleTTSEngine({
       googleApiKey: googleKey!,
       cacheDir,
-      voice: narr.voice && isGoogleVoiceName(narr.voice) ? narr.voice : googleDefaults?.voice ?? "en-US-Neural2-J",
+      voice: narr.voice && isGoogleVoiceName(narr.voice)
+        ? narr.voice
+        : genderVoice ?? googleDefaults?.voice ?? "en-US-Neural2-J",
       speed: narr.speed ?? googleDefaults?.speed ?? 1.0,
       language: narr.language,
     });
@@ -540,29 +544,36 @@ export function resolveNarrator(narr: NarrationOptions): ResolvedNarrator | null
 
   const makeOpenAI = () => {
     const langDefaults = getOpenAITtsDefaultsForLanguage(narr.language);
+    const genderVoice = !narr.voice ? resolveVoiceForGender("openai", narr.language, narr.gender) : null;
     return new TTSEngine({
       apiKey: openaiKey!,
       cacheDir,
-      voice: narr.voice ?? langDefaults?.voice ?? "ash",
+      voice: narr.voice ?? genderVoice ?? langDefaults?.voice ?? "ash",
       speed: narr.speed ?? langDefaults?.speed ?? 1.0,
       model: narr.model ?? langDefaults?.model ?? "tts-1-hd",
       language: narr.language,
     });
   };
 
-  const makeSystem = () => new SystemTTSEngine({
-    cacheDir,
-    voice: narr.voice,
-    speed: narr.speed,
-    language: narr.language,
-  });
+  const makeSystem = () => {
+    const genderVoice = !narr.voice ? resolveVoiceForGender("system", narr.language, narr.gender) : null;
+    return new SystemTTSEngine({
+      cacheDir,
+      voice: narr.voice ?? genderVoice,
+      speed: narr.speed,
+      language: narr.language,
+    });
+  };
 
-  const makePiper = () => new PiperTTSEngine({
-    cacheDir,
-    voice: narr.voice,
-    speed: narr.speed,
-    language: narr.language,
-  });
+  const makePiper = () => {
+    const genderVoice = !narr.voice ? resolveVoiceForGender("piper", narr.language, narr.gender) : null;
+    return new PiperTTSEngine({
+      cacheDir,
+      voice: narr.voice ?? genderVoice,
+      speed: narr.speed,
+      language: narr.language,
+    });
+  };
 
   // Explicit provider
   if (provider !== "auto") {
@@ -702,7 +713,7 @@ export async function translateText(
   const apiKey = opts?.apiKey ?? process.env.OPENAI_API_KEY;
   if (!apiKey) return text;
 
-  const cacheDir = opts?.cacheDir ?? path.resolve(".cache/tts");
+  const cacheDir = opts?.cacheDir ?? resolveCacheDir("tts");
   fs.mkdirSync(cacheDir, { recursive: true });
 
   const cacheFile = path.join(
@@ -758,6 +769,9 @@ export class AudioDirector implements AudioDirectorAPI {
   private videoStartTime: number;
   private ffmpegPath?: string;
   private realtime: boolean;
+  private provider: string;
+  private language?: string;
+  private sessionGender?: "male" | "female";
   private _activeProcs = new Set<ChildProcess>();
   private _sleepTimer: ReturnType<typeof setTimeout> | null = null;
   private _sleepResolve: (() => void) | null = null;
@@ -768,11 +782,17 @@ export class AudioDirector implements AudioDirectorAPI {
     videoStartTime: number;
     ffmpegPath?: string;
     realtime?: boolean;
+    provider?: string;
+    language?: string;
+    gender?: "male" | "female";
   }) {
     this.tts = opts.tts;
     this.videoStartTime = opts.videoStartTime;
     this.ffmpegPath = opts.ffmpegPath;
     this.realtime = opts.realtime ?? false;
+    this.provider = opts.provider ?? "openai";
+    this.language = opts.language;
+    this.sessionGender = opts.gender;
   }
 
   /** Pre-generate TTS audio so a subsequent speak() starts instantly. */
@@ -784,10 +804,21 @@ export class AudioDirector implements AudioDirectorAPI {
   async speak(text: string, opts?: SpeakOptions): Promise<void> {
     if (this._stopped) return;
 
+    const effectiveOpts = { ...opts };
+    const gender = effectiveOpts.gender ?? this.sessionGender;
+    if (gender && !effectiveOpts.voice) {
+      const genderVoice = resolveVoiceForGender(
+        this.provider as any,
+        this.language,
+        gender,
+      );
+      if (genderVoice) effectiveOpts.voice = genderVoice;
+    }
+
     const startMs = Date.now() - this.videoStartTime;
     const { audioPath, durationMs } = await this.tts.generate(
       text,
-      opts,
+      effectiveOpts,
       this.ffmpegPath,
     );
 
@@ -1018,5 +1049,8 @@ export function createAudioDirector(opts: {
     videoStartTime: opts.videoStartTime,
     ffmpegPath: opts.ffmpegPath,
     realtime: narr.realtime,
+    provider: resolved.provider,
+    language: narr.language,
+    gender: narr.gender,
   });
 }

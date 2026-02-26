@@ -172,6 +172,13 @@ export function linearPath(
   return points;
 }
 
+/** Apply small random perturbation to a point (simulates hand tremor). */
+function jitterPoint(p: { x: number; y: number }, amplitude = 1.5): { x: number; y: number } {
+  const dx = (Math.random() + Math.random() - 1) * amplitude;
+  const dy = (Math.random() + Math.random() - 1) * amplitude;
+  return { x: Math.round(p.x + dx), y: Math.round(p.y + dy) };
+}
+
 // ---------------------------------------------------------------------------
 //  Cursor overlay injection script (runs inside the browser page)
 // ---------------------------------------------------------------------------
@@ -607,6 +614,106 @@ export class Actor {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  //  Private helpers — DRY building blocks for cursor, click, and element ops
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Animate cursor from current position to target via windMouse path.
+   * Handles first-movement teleport. Updates cursorX/cursorY.
+   * If `moveMouse` is true (default), also calls page.mouse.move at each step.
+   */
+  private async _animateCursorTo(
+    tx: number,
+    ty: number,
+    opts?: { moveMouse?: boolean },
+  ) {
+    const moveMouse = opts?.moveMouse ?? true;
+    tx = Math.round(tx);
+    ty = Math.round(ty);
+
+    if (!this._cursorInitialized) {
+      this._cursorInitialized = true;
+      this.cursorX = tx;
+      this.cursorY = ty;
+      if (moveMouse) await this.page.mouse.move(tx, ty);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${tx}, ${ty}, '${this.cursorId}')`);
+      this._emitCursorMove(tx, ty);
+      return;
+    }
+
+    const points = windMouse({ x: this.cursorX, y: this.cursorY }, { x: tx, y: ty });
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]!;
+      if (moveMouse) await this.page.mouse.move(p.x, p.y);
+      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
+      this._emitCursorMove(p.x, p.y);
+      await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
+    }
+    this.cursorX = tx;
+    this.cursorY = ty;
+  }
+
+  /**
+   * Perform a click with visual effects (ripple, cursorDown/Up) at coordinates.
+   * In fast mode dispatches a plain mouse.click instead.
+   */
+  private async _performClick(x: number, y: number) {
+    if (this.mode === "human") {
+      await this.page.evaluate(`window.__b2v_clickEffect?.(${x}, ${y})`);
+      this._emitClick(x, y);
+      await sleep(pickMs(this.delays.clickEffectMs));
+      await this.page.mouse.down();
+      await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
+      await sleep(pickMs(this.delays.clickHoldMs));
+      await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
+      await this.page.mouse.up();
+      await sleep(pickMs(this.delays.afterClickMs));
+    } else {
+      await this.page.mouse.click(x, y);
+    }
+  }
+
+  /**
+   * Resolve a selector to its visible ElementHandle, scroll it into view,
+   * and return its center coordinates + the handle.
+   * Falls back to page context if frame context fails.
+   */
+  private async _resolveElement(
+    selector: string,
+    opts?: { scrollTo?: "center" | false; timeout?: number },
+  ): Promise<{ x: number; y: number; el: ElementHandle }> {
+    const timeout = opts?.timeout ?? 3000;
+    let el: ElementHandle | null = null;
+    try {
+      el = await this._context.waitForSelector(selector, { state: "visible", timeout });
+    } catch (err) {
+      if (this._context !== this.page) {
+        el = await this.page.waitForSelector(selector, { state: "visible", timeout });
+      } else {
+        throw err;
+      }
+    }
+    if (!el) throw new Error(`Element not found: ${selector}`);
+
+    if (opts?.scrollTo !== false) {
+      const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
+      await el.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
+      await sleep(pickMs(this.delays.afterScrollIntoViewMs));
+    }
+
+    const box = (await el.boundingBox())!;
+    return {
+      x: Math.round(box.x + box.width / 2),
+      y: Math.round(box.y + box.height / 2),
+      el,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  //  Public API
+  // ---------------------------------------------------------------------------
+
   /**
    * Move cursor smoothly to specific coordinates (human mode only).
    * Useful when interacting with Playwright Locator APIs directly.
@@ -614,29 +721,7 @@ export class Actor {
   async moveCursorTo(x: number, y: number) {
     if (this.mode !== "human") return;
     await this._refreshIframeBox();
-    const tx = Math.round(x);
-    const ty = Math.round(y);
-    if (!this._cursorInitialized) {
-      // First cursor movement: teleport to target (skip windMouse from 0,0)
-      this._cursorInitialized = true;
-      this.cursorX = tx;
-      this.cursorY = ty;
-      await this.page.mouse.move(tx, ty);
-      await this.page.evaluate(`window.__b2v_moveCursor?.(${tx}, ${ty}, '${this.cursorId}')`);
-      this._emitCursorMove(tx, ty);
-      return;
-    }
-    const from = { x: this.cursorX, y: this.cursorY };
-    const points = windMouse(from, { x: tx, y: ty });
-    for (let i = 0; i < points.length; i++) {
-      const p = points[i]!;
-      await this.page.mouse.move(p.x, p.y);
-      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
-      this._emitCursorMove(p.x, p.y);
-      await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
-    }
-    this.cursorX = tx;
-    this.cursorY = ty;
+    await this._animateCursorTo(x, y);
   }
 
   /**
@@ -662,59 +747,19 @@ export class Actor {
     await this._context.waitForSelector(selector, { state: "visible", timeout });
   }
 
-  /** Move cursor smoothly to an element center (human) or no-op (fast). */
+  /** Move cursor smoothly to an element center (human) or just resolve (fast). */
   private async moveTo(
     selector: string,
   ): Promise<{ x: number; y: number; el: ElementHandle }> {
     await this._refreshIframeBox();
-    let el: ElementHandle | null = null;
-    try {
-      el = await this._context.waitForSelector(selector, { state: "visible", timeout: 3000 });
-    } catch (err) {
-      if (this._context !== this.page) {
-        el = await this.page.waitForSelector(selector, { state: "visible", timeout: 3000 });
-      } else {
-        throw err;
-      }
-    }
-    if (!el) throw new Error(`Element not found: ${selector}`);
-    const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
-    await el.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
-    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
-    const box = (await el.boundingBox())!;
-    const target = {
-      x: Math.round(box.x + box.width / 2),
-      y: Math.round(box.y + box.height / 2),
-    };
-
+    const { x, y, el } = await this._resolveElement(selector);
     if (this.mode === "human") {
-      if (!this._cursorInitialized) {
-        // First cursor movement: teleport to target (skip windMouse from 0,0)
-        this._cursorInitialized = true;
-        await this.page.mouse.move(target.x, target.y);
-        await this.page.evaluate(
-          `window.__b2v_moveCursor?.(${target.x}, ${target.y}, '${this.cursorId}')`,
-        );
-        this._emitCursorMove(target.x, target.y);
-      } else {
-        const from = { x: this.cursorX, y: this.cursorY };
-        const points = windMouse(from, target);
-
-        for (let i = 0; i < points.length; i++) {
-          const p = points[i]!;
-          await this.page.mouse.move(p.x, p.y);
-          await this.page.evaluate(
-            `window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`,
-          );
-          this._emitCursorMove(p.x, p.y);
-          await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
-        }
-      }
+      await this._animateCursorTo(x, y);
+    } else {
+      this.cursorX = x;
+      this.cursorY = y;
     }
-
-    this.cursorX = target.x;
-    this.cursorY = target.y;
-    return { ...target, el };
+    return { x, y, el };
   }
 
   /** Move cursor to an element (hover). */
@@ -725,28 +770,7 @@ export class Actor {
   /** Click on an element. */
   async click(selector: string) {
     const { x, y } = await this.moveTo(selector);
-
-    if (this.mode === "human") {
-      await this.page.evaluate(
-        `window.__b2v_clickEffect?.(${x}, ${y})`,
-      );
-      this._emitClick(x, y);
-      await sleep(pickMs(this.delays.clickEffectMs));
-    }
-
-    if (this.mode === "human") {
-      await this.page.mouse.down();
-      await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
-      await sleep(pickMs(this.delays.clickHoldMs));
-      await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
-      await this.page.mouse.up();
-    } else {
-      await this.page.mouse.click(x, y);
-    }
-
-    if (this.mode === "human") {
-      await sleep(pickMs(this.delays.afterClickMs));
-    }
+    await this._performClick(x, y);
   }
 
   /**
@@ -828,28 +852,19 @@ export class Actor {
       const text = await option.evaluate((el: any) => el.textContent?.trim());
       if (text === valueText) {
         const box = (await option.boundingBox())!;
-        const target = {
-          x: Math.round(box.x + box.width / 2),
-          y: Math.round(box.y + box.height / 2),
-        };
+        const tx = Math.round(box.x + box.width / 2);
+        const ty = Math.round(box.y + box.height / 2);
 
         if (this.mode === "human") {
-          const from = { x: this.cursorX, y: this.cursorY };
-          const points = windMouse(from, target);
-          for (let i = 0; i < points.length; i++) {
-            const p = points[i]!;
-            await this.page.mouse.move(p.x, p.y);
-            await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
-            this._emitCursorMove(p.x, p.y);
-            await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, points.length));
-          }
-          await this.page.evaluate(`window.__b2v_clickEffect?.(${target.x}, ${target.y})`);
-          this._emitClick(target.x, target.y);
+          await this._animateCursorTo(tx, ty);
+          await this.page.evaluate(`window.__b2v_clickEffect?.(${tx}, ${ty})`);
+          this._emitClick(tx, ty);
           await sleep(pickMs(this.delays.clickEffectMs));
+        } else {
+          this.cursorX = tx;
+          this.cursorY = ty;
         }
 
-        this.cursorX = target.x;
-        this.cursorY = target.y;
         await option.click({ force: true });
         await sleep(pickMs(this.delays.afterClickMs));
         return;
@@ -921,14 +936,7 @@ export class Actor {
     to = { x: Math.round(to.x), y: Math.round(to.y) };
 
     if (this.mode === "human") {
-      const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, from);
-      for (let i = 0; i < movePoints.length; i++) {
-        const p = movePoints[i]!;
-        await this.page.mouse.move(p.x, p.y);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
-        this._emitCursorMove(p.x, p.y);
-        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
-      }
+      await this._animateCursorTo(from.x, from.y);
     }
 
     await this.page.mouse.move(from.x, from.y);
@@ -960,37 +968,15 @@ export class Actor {
 
   /** Drag from one element's center to another element's center. */
   async drag(fromSelector: string, toSelector: string) {
-    const fromEl = (await this._context.waitForSelector(fromSelector, { state: "visible", timeout: 3000 }))!;
-    const fromBox = (await fromEl.boundingBox())!;
-    const from = {
-      x: Math.round(fromBox.x + fromBox.width / 2),
-      y: Math.round(fromBox.y + fromBox.height / 2),
-    };
-
-    const toEl = (await this._context.waitForSelector(toSelector, { state: "visible", timeout: 3000 }))!;
-    const toBox = (await toEl.boundingBox())!;
-    const to = {
-      x: Math.round(toBox.x + toBox.width / 2),
-      y: Math.round(toBox.y + toBox.height / 2),
-    };
-
-    await this.dragCoords(from, to);
+    const { x: fx, y: fy } = await this._resolveElement(fromSelector, { scrollTo: false });
+    const { x: tx, y: ty } = await this._resolveElement(toSelector, { scrollTo: false });
+    await this.dragCoords({ x: fx, y: fy }, { x: tx, y: ty });
   }
 
   /** Drag an element by a pixel offset. */
   async dragByOffset(selector: string, dx: number, dy: number) {
-    const el = (await this._context.waitForSelector(selector, { state: "visible", timeout: 3000 }))!;
-    const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
-    await el.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
-    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
-    const box = (await el.boundingBox())!;
-    const from = {
-      x: Math.round(box.x + box.width / 2),
-      y: Math.round(box.y + box.height / 2),
-    };
-    const to = { x: from.x + dx, y: from.y + dy };
-
-    await this.dragCoords(from, to);
+    const { x, y } = await this._resolveElement(selector);
+    await this.dragCoords({ x, y }, { x: x + dx, y: y + dy });
   }
 
   /**
@@ -999,11 +985,7 @@ export class Actor {
    * Produces a visible browser text selection highlight.
    */
   async selectText(fromSelector: string, toSelector?: string) {
-    const fromEl = (await this._context.waitForSelector(fromSelector, { state: "visible", timeout: 5000 }))!;
-    const scrollBehavior: ScrollBehavior = this.mode === "human" ? "smooth" : "auto";
-    await fromEl.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
-    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
-
+    const { el: fromEl } = await this._resolveElement(fromSelector, { timeout: 5000 });
     const fromBox = (await fromEl.boundingBox())!;
     const from = {
       x: Math.round(fromBox.x + 2),
@@ -1012,7 +994,7 @@ export class Actor {
 
     let to: { x: number; y: number };
     if (toSelector) {
-      const toEl = (await this._context.waitForSelector(toSelector, { state: "visible", timeout: 5000 }))!;
+      const { el: toEl } = await this._resolveElement(toSelector, { scrollTo: false, timeout: 5000 });
       const toBox = (await toEl.boundingBox())!;
       to = {
         x: Math.round(toBox.x + toBox.width - 2),
@@ -1029,11 +1011,8 @@ export class Actor {
   }
 
   /** Draw on a canvas element (points are 0-1 normalized). */
-  async draw(canvasSelector: string, points: Array<{ x: number; y: number }>) {
-    const canvas = (await this._context.waitForSelector(canvasSelector, {
-      state: "visible",
-      timeout: 3000,
-    }))!;
+  async draw(canvasSelector: string, points: Array<{ x: number; y: number }>, opts?: { humanJitter?: boolean }) {
+    const { el: canvas } = await this._resolveElement(canvasSelector);
     const box = (await canvas.boundingBox())!;
 
     const absPoints = points.map((p) => ({
@@ -1044,25 +1023,20 @@ export class Actor {
     if (absPoints.length < 2) return;
 
     if (this.mode === "human") {
-      const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, absPoints[0]);
-      for (let i = 0; i < movePoints.length; i++) {
-        const p = movePoints[i]!;
-        await this.page.mouse.move(p.x, p.y);
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
-        this._emitCursorMove(p.x, p.y);
-        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
-      }
+      await this._animateCursorTo(absPoints[0].x, absPoints[0].y);
     }
 
     await this.page.mouse.move(absPoints[0].x, absPoints[0].y);
     await this.page.mouse.down();
     await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
 
+    const applyJitter = this.mode === "human" && (opts?.humanJitter ?? true);
     for (let i = 1; i < absPoints.length; i++) {
       const segSteps = this.mode === "human" ? 12 : 1;
       const segPoints = linearPath(absPoints[i - 1], absPoints[i], segSteps);
       for (let j = 0; j < segPoints.length; j++) {
-        const p = segPoints[j]!;
+        const raw = segPoints[j]!;
+        const p = applyJitter ? jitterPoint(raw) : raw;
         await this.page.mouse.move(p.x, p.y);
         if (this.mode === "human") {
           await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
@@ -1084,22 +1058,17 @@ export class Actor {
   /**
    * Circle the cursor around an element in a spiral path (1.5 full rotations),
    * like a presenter circling something on a whiteboard. The radius grows from
-   * 0.7x to 1.0x with slight noise for human imperfection. Fast mode: no-op.
+   * 0.7x to 1.0x smoothly. Fast mode: no-op.
    *
    * Duration auto-scales with element size (larger element = longer circle).
    * Override with `durationMs` if needed.
    */
-  async circleAround(selector: string, opts?: { durationMs?: number }) {
+  async circleAround(selector: string, opts?: { durationMs?: number; laser?: boolean }) {
     if (this.mode !== "human") return;
+    const useLaser = opts?.laser ?? true;
     await this._refreshIframeBox();
 
-    const el = (await this._context.waitForSelector(selector, {
-      state: "visible",
-      timeout: 3000,
-    }))!;
-    const scrollBehavior: ScrollBehavior = "smooth";
-    await el.evaluate((e, b) => (e as Element).scrollIntoView({ block: "center", behavior: b }), scrollBehavior);
-    await sleep(pickMs(this.delays.afterScrollIntoViewMs));
+    const { el } = await this._resolveElement(selector);
     const box = (await el.boundingBox())!;
 
     const cx = box.x + box.width / 2;
@@ -1107,22 +1076,15 @@ export class Actor {
     const baseRx = box.width / 2 + 18;
     const baseRy = box.height / 2 + 14;
 
-    // Spiral: 1.5 full rotations (3*PI), radius grows from 0.7x to 1.0x
     const totalAngle = 3 * Math.PI;
     const rStart = 0.7;
     const rEnd = 1.0;
 
-    // Start point at the spiral entry (angle=0, radius=rStart)
     const startX = cx + baseRx * rStart;
     const startY = cy;
-    const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, { x: Math.round(startX), y: Math.round(startY) });
-    for (let i = 0; i < movePoints.length; i++) {
-      const p = movePoints[i]!;
-      await this.page.mouse.move(p.x, p.y);
-      await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
-      this._emitCursorMove(p.x, p.y);
-      await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
-    }
+    await this._animateCursorTo(Math.round(startX), Math.round(startY));
+
+    if (useLaser) await this.page.evaluate(`window.__b2v_laserOn?.('${this.cursorId}')`);
 
     // Auto-calculate duration from path length: ~400px/s, clamped to [800, 1500] ms
     const avgRadius = (baseRx + baseRy) / 2;
@@ -1138,9 +1100,8 @@ export class Actor {
       const t = i / totalSteps;
       const angle = t * totalAngle;
       const rFactor = rStart + (rEnd - rStart) * t;
-      const noise = 3.0 * (1 - t * 0.4);
-      const px = Math.round(cx + baseRx * rFactor * Math.cos(angle) + (Math.random() - 0.5) * noise);
-      const py = Math.round(cy + baseRy * rFactor * Math.sin(angle) + (Math.random() - 0.5) * noise);
+      const px = Math.round(cx + baseRx * rFactor * Math.cos(angle));
+      const py = Math.round(cy + baseRy * rFactor * Math.sin(angle));
 
       if (px !== Math.round(prevX) || py !== Math.round(prevY)) {
         await this.page.mouse.move(px, py);
@@ -1152,20 +1113,17 @@ export class Actor {
       await sleep(stepDelay);
     }
 
+    if (useLaser) await this.page.evaluate(`window.__b2v_laserOff?.('${this.cursorId}')`);
     this.cursorX = Math.round(prevX);
     this.cursorY = Math.round(prevY);
   }
 
   /**
-   * Highlight an element with a laser-pointer trail spiraling around it.
-   * Enables the laser trail, performs circleAround, then disables the trail.
-   * Fast mode: no-op (same as circleAround).
+   * Alias for circleAround with laser pointer enabled.
+   * Kept for backward compatibility.
    */
-  async highlight(selector: string, opts?: { durationMs?: number }) {
-    if (this.mode !== "human") return;
-    await this.page.evaluate(`window.__b2v_laserOn?.('${this.cursorId}')`);
+  async highlight(selector: string, opts?: { durationMs?: number; laser?: boolean }) {
     await this.circleAround(selector, opts);
-    await this.page.evaluate(`window.__b2v_laserOff?.('${this.cursorId}')`);
   }
 
   /**
@@ -1176,7 +1134,7 @@ export class Actor {
    */
   async drawOnPage(
     points: Array<{ x: number; y: number }>,
-    opts?: { color?: string; lineWidth?: number; clear?: boolean },
+    opts?: { color?: string; lineWidth?: number; clear?: boolean; humanJitter?: boolean },
   ) {
     if (points.length < 2) return;
     const color = opts?.color ?? "rgba(239, 68, 68, 0.85)";
@@ -1210,17 +1168,12 @@ export class Actor {
     );
 
     if (this.mode === "human") {
-      const movePoints = windMouse({ x: this.cursorX, y: this.cursorY }, absPoints[0]);
-      for (let i = 0; i < movePoints.length; i++) {
-        const p = movePoints[i]!;
-        await this.page.evaluate(`window.__b2v_moveCursor?.(${p.x}, ${p.y}, '${this.cursorId}')`);
-        this._emitCursorMove(p.x, p.y);
-        await sleep(easedStepMs(pickMs(this.delays.mouseMoveStepMs), i, movePoints.length));
-      }
+      await this._animateCursorTo(absPoints[0].x, absPoints[0].y, { moveMouse: false });
     }
 
     await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
 
+    const applyJitter = this.mode === "human" && (opts?.humanJitter ?? true);
     for (let i = 1; i < absPoints.length; i++) {
       const prev = absPoints[i - 1];
       const cur = absPoints[i];
@@ -1228,7 +1181,8 @@ export class Actor {
       const segPoints = linearPath(prev, cur, segSteps);
 
       for (let j = 0; j < segPoints.length; j++) {
-        const p = segPoints[j]!;
+        const raw = segPoints[j]!;
+        const p = applyJitter ? jitterPoint(raw) : raw;
         await this.page.evaluate(
           ({ x, y }) => {
             const c = document.getElementById("__b2v_draw_overlay") as HTMLCanvasElement | null;
@@ -1282,20 +1236,7 @@ export class Actor {
    */
   async clickAt(x: number, y: number) {
     await this.moveCursorTo(x, y);
-
-    if (this.mode === "human") {
-      await this.page.evaluate(`window.__b2v_clickEffect?.(${x}, ${y})`);
-      this._emitClick(x, y);
-      await sleep(pickMs(this.delays.clickEffectMs));
-      await this.page.mouse.down();
-      await this.page.evaluate(`window.__b2v_cursorDown?.('${this.cursorId}')`);
-      await sleep(pickMs(this.delays.clickHoldMs));
-      await this.page.evaluate(`window.__b2v_cursorUp?.('${this.cursorId}')`);
-      await this.page.mouse.up();
-      await sleep(pickMs(this.delays.afterClickMs));
-    } else {
-      await this.page.mouse.click(x, y);
-    }
+    await this._performClick(x, y);
   }
 
   /** Add a breathing pause between major steps (human mode only). */

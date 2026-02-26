@@ -34,6 +34,7 @@ import {
   type NarrationOptions,
 } from "./narrator.ts";
 import { startTerminalWsServer, type TerminalServer, type GridPaneConfig } from "./terminal-ws-server.ts";
+import { resolveCacheDir } from "./cache-dir.ts";
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -867,7 +868,7 @@ export class Session {
 
     // Lazy-start terminal WS server (singleton)
     if (!this.terminalServer) {
-      this.terminalServer = await startTerminalWsServer(0, this.artifactDir);
+      this.terminalServer = await startTerminalWsServer(0, resolveCacheDir());
       this.cleanupFns.push(() => this.terminalServer!.close());
     }
 
@@ -951,7 +952,7 @@ export class Session {
 
     // Lazy-start terminal WS server (singleton)
     if (!this.terminalServer) {
-      this.terminalServer = await startTerminalWsServer(0, this.artifactDir);
+      this.terminalServer = await startTerminalWsServer(0, resolveCacheDir());
       this.cleanupFns.push(() => this.terminalServer!.close());
     }
 
@@ -1049,10 +1050,14 @@ export class Session {
       try {
         await page.waitForSelector(testIdSel, { timeout: 30000 });
       } catch (e) {
-        // Debug: check page state at time of failure
         const isClosed = page.isClosed();
         const url = isClosed ? "CLOSED" : page.url();
-        console.error(`[session] waitForSelector failed for ${testIdSel}: isClosed=${isClosed} url=${url} error=${(e as Error).message}`);
+        const debugInfo = await page.evaluate(() => {
+          const previewMode = document.querySelector("[data-preview-mode]")?.getAttribute("data-preview-mode") ?? "none";
+          const testIds = [...document.querySelectorAll("[data-testid]")].map(el => el.getAttribute("data-testid"));
+          return { previewMode, testIds };
+        }).catch(() => ({ previewMode: "eval-failed", testIds: [] as (string | null)[] }));
+        console.error(`[session] waitForSelector failed for ${testIdSel}: isClosed=${isClosed} url=${url} previewMode=${debugInfo.previewMode} existingTestIds=${debugInfo.testIds.join(",")}`);
         throw e;
       }
 

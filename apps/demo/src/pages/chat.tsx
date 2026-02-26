@@ -1,6 +1,6 @@
 /**
  * @description Chat page synced between two users via Automerge.
- * URL params: ?role=veronica|bob&ws=... + #automerge:docHash
+ * URL params: ?role=alice|bob&ws=... + #automerge:docHash
  */
 import { useState, useCallback, useRef, useEffect, type KeyboardEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -20,7 +20,7 @@ import {
 
 interface ChatMessage {
     id: string;
-    sender: "veronica" | "bob";
+    sender: "alice" | "bob";
     text: string;
     image?: string;
     ts: number;
@@ -34,11 +34,11 @@ interface ChatDoc {
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
-function getRoleFromURL(): "veronica" | "bob" {
+function getRoleFromURL(): "alice" | "bob" {
     const params = new URLSearchParams(window.location.search);
     const role = params.get("role");
-    if (role === "veronica" || role === "bob") return role;
-    return "veronica";
+    if (role === "alice" || role === "bob") return role;
+    return "alice";
 }
 
 let msgCounter = 0;
@@ -48,7 +48,7 @@ function nextMsgId(): string {
 }
 
 const ROLE_COLORS = {
-    veronica: {
+    alice: {
         bg: "bg-violet-500/20",
         border: "border-violet-500/30",
         name: "text-violet-400",
@@ -64,7 +64,7 @@ const ROLE_COLORS = {
     },
 } as const;
 
-const ROLE_LABELS = { veronica: "Veronica 👩", bob: "Bob 👨‍💻" } as const;
+const ROLE_LABELS = { alice: "Alice 👩", bob: "Bob 👨‍💻" } as const;
 
 /* ------------------------------------------------------------------ */
 /*  Hook: find or create the shared Automerge document via URL hash    */
@@ -125,7 +125,7 @@ function MessageBubble({
                 <div
                     className={`h-7 w-7 shrink-0 rounded-full ${colors.avatar} flex items-center justify-center text-[11px] font-bold text-white`}
                 >
-                    {msg.sender === "veronica" ? "V" : "B"}
+                    {msg.sender === "alice" ? "V" : "B"}
                 </div>
 
                 {/* Bubble + reaction */}

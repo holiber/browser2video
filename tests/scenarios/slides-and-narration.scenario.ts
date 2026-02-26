@@ -87,6 +87,24 @@ export default defineScenario<Ctx>("Slides and Narration", (s) => {
 
     s.step("Highlight slide title", narrations.highlight, async ({ actor }) => {
         await actor.highlight('[data-testid="slides-title-2"]');
+
+        // After highlight(), laser trail should have been cleaned up
+        const laserActive = await actor.page.evaluate(
+            () => Object.keys((window as any).__b2v_laserTrails || {}).length,
+        );
+        if (laserActive > 0) throw new Error("Laser trail was not cleaned up after highlight()");
+    });
+
+    s.step("circleAround with default laser", async ({ actor }) => {
+        await actor.circleAround('[data-testid="slides-next"]');
+        const laserClean = await actor.page.evaluate(
+            () => Object.keys((window as any).__b2v_laserTrails || {}).length === 0,
+        );
+        if (!laserClean) throw new Error("circleAround laser trail not cleaned up");
+    });
+
+    s.step("circleAround with laser disabled", async ({ actor }) => {
+        await actor.circleAround('[data-testid="slides-prev"]', { laser: false });
     });
 
     s.step("Outro", narrations.outro, async () => {});

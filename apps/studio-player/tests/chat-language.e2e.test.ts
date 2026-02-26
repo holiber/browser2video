@@ -13,9 +13,9 @@ const TTS_CACHE_DIR = path.resolve(PROJECT_ROOT, ".cache/tts");
 const TTS_SPEED = 1;
 
 const INTRO =
-  "Welcome to Browser 2 Video. In this demo, Veronica is on her iPhone " +
+  "Welcome to Browser 2 Video. In this demo, Alice is on her iPhone " +
   "while Bob is on his Pixel. They each have their own cursor, moving independently.";
-const VERONICA_MSG =
+const ALICE_MSG =
   "Hey Bob! Are you free this Friday evening? There's a new sci-fi movie I wanna see!";
 const BOB_REPLY =
   "Friday works! What time and where should we meet?";
@@ -138,7 +138,7 @@ function assertAudioCached(language: string) {
 
   // TTS cache for each voice used by the scenario
   expect(fs.existsSync(ttsAudioCachePath(language, INTRO, "alloy"))).toBe(true);
-  expect(fs.existsSync(ttsAudioCachePath(language, VERONICA_MSG, "shimmer"))).toBe(true);
+  expect(fs.existsSync(ttsAudioCachePath(language, ALICE_MSG, "shimmer"))).toBe(true);
   expect(fs.existsSync(ttsAudioCachePath(language, BOB_REPLY, "echo"))).toBe(true);
 }
 

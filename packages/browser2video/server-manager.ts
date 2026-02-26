@@ -151,7 +151,21 @@ async function startStaticServer(root: string, preferredPort?: number, liveReloa
     ".svg": "image/svg+xml",
   };
 
-  const LIVE_RELOAD_SCRIPT = `<script>(function(){var es=new EventSource("/__livereload"),t=0;es.onmessage=function(){clearTimeout(t);t=setTimeout(function(){location.reload()},100)}})()</script>`;
+  const LIVE_RELOAD_SCRIPT = `<script>(function(){
+    var es=new EventSource("/__livereload"),t=0,busy=false;
+    es.onmessage=function(){
+      clearTimeout(t);
+      t=setTimeout(function(){
+        if(busy)return;busy=true;
+        fetch(location.href,{cache:"no-store"}).then(function(r){return r.text()}).then(function(html){
+          var doc=new DOMParser().parseFromString(html,"text/html");
+          document.head.innerHTML=doc.head.innerHTML;
+          document.body.innerHTML=doc.body.innerHTML;
+          busy=false;
+        }).catch(function(){busy=false;location.reload()});
+      },300);
+    };
+  })()</script>`;
 
   const sseClients = new Set<ServerResponse>();
 

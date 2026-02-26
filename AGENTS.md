@@ -12,6 +12,10 @@ When driving **Studio Player** (Electron app) via UI automation, WebSocket messa
 - Do not issue a second `runAll`/`runStep` while a run is in progress; wait for completion or send `cancel` and wait for cancellation acknowledgement before starting another run.
 - If you implement new automation, ensure it cannot trigger overlapping executions (race conditions between `load` and `runAll`, double-clicks, reconnect retries, etc.).
 
+## Pre-commit sanitization
+
+Before committing any changes, check [agents/SANITIZER.md](agents/SANITIZER.md) for path and credential sanitization rules.
+
 ## Scenario debugging workflow rule
 
 When validating “all scenarios run without errors” and you find a failure:

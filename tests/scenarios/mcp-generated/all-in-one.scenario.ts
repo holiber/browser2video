@@ -366,12 +366,19 @@ export default defineScenario<Ctx>("All-in-One Demo", (s) => {
     try { await shell.waitForPrompt(); } catch { }
     await shell.typeAndEnter("vim");
     await shell.waitForText(["~"], 10000);
+
+    const vimContent = await shell.read();
+    if (!vimContent.includes("~")) throw new Error("Vim did not launch — no '~' lines visible");
+
     await shell.pressKey("i");
     await shell.typeAndEnter("Hello from the all-in-one demo!");
     await shell.type("TUI apps work seamlessly in browser2video.");
+
+    await shell.waitForText(["Hello from the all-in-one demo"], 5000);
+
     await shell.pressKey("Escape");
     await shell.typeAndEnter(":q!");
-    try { await shell.waitForPrompt(); } catch { }
+    await shell.waitForPrompt(10000);
   });
 
   // ====================================================================

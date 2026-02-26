@@ -15,6 +15,7 @@ import WikiPage from "@/pages/wiki";
 import SlidesPage from "@/pages/slides";
 import IPhoneChrome from "@/components/iphone-chrome";
 import PixelChrome from "@/components/pixel-chrome";
+import DeviceFrame from "@/components/device-frame";
 import { RepoContext } from "@/lib/use-automerge";
 import { createRepo } from "@/lib/use-automerge";
 
@@ -65,8 +66,20 @@ function PlainLayout({ children }: { children: React.ReactNode }) {
 }
 
 function DeviceLayout({ role, children }: { role: string | null; children: React.ReactNode }) {
-  if (role === "veronica") return <IPhoneChrome>{children}</IPhoneChrome>;
-  if (role === "bob") return <PixelChrome>{children}</PixelChrome>;
+  if (role === "alice") {
+    return (
+      <DeviceFrame variant="iphone">
+        <IPhoneChrome>{children}</IPhoneChrome>
+      </DeviceFrame>
+    );
+  }
+  if (role === "bob") {
+    return (
+      <DeviceFrame variant="pixel">
+        <PixelChrome>{children}</PixelChrome>
+      </DeviceFrame>
+    );
+  }
   return <PlainLayout>{children}</PlainLayout>;
 }
 

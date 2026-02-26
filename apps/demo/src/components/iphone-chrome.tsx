@@ -53,7 +53,7 @@ export default function IPhoneChrome({ children, onMessengerClick }: Props) {
   const navigate = useNavigate();
   const location = useLocation();
   const [params] = useSearchParams();
-  const role = params.get("role") ?? "veronica";
+  const role = params.get("role") ?? "alice";
   const ws = params.get("ws") ?? "";
 
   const handleDockClick = useCallback(
@@ -72,7 +72,7 @@ export default function IPhoneChrome({ children, onMessengerClick }: Props) {
   const isMessengerActive = location.pathname === "/chat";
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 overflow-hidden">
+    <div className="flex flex-col h-full bg-zinc-950 overflow-hidden">
       <div className="select-none">
         <StatusBar />
       </div>

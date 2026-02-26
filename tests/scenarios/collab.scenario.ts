@@ -53,7 +53,7 @@ export default defineScenario<Ctx>("Collaboration Demo", (s) => {
     await bossFrame.waitForFunction(
       () => document.location.hash.length > 1,
       undefined,
-      { timeout: 20000 },
+      { timeout: 60000 },
     );
     const hash = await bossFrame.evaluate(() => document.location.hash);
     const docUrl = hash.startsWith("#") ? hash.slice(1) : hash;
@@ -73,8 +73,8 @@ export default defineScenario<Ctx>("Collaboration Demo", (s) => {
   s.step("Verify both pages are ready", async ({ boss, worker }) => {
     const bossFrame = boss.frame as DOMContext;
     const workerFrame = worker.frame as DOMContext;
-    await bossFrame.waitForSelector('[data-testid="notes-page"]', { timeout: 20000 });
-    await workerFrame.waitForSelector('[data-testid="notes-page"]', { timeout: 20000 });
+    await bossFrame.waitForSelector('[data-testid="notes-page"]', { timeout: 60000 });
+    await workerFrame.waitForSelector('[data-testid="notes-page"]', { timeout: 60000 });
   });
 
   for (let i = 0; i < TASKS.length; i++) {

@@ -75,6 +75,12 @@ export default defineScenario<Ctx>("Drawing", (s) => {
             color: "rgba(250, 204, 21, 0.9)",
             lineWidth: 3,
         });
+
+        const hasOverlay = await actor.page.evaluate(
+            () => !!document.getElementById("__b2v_draw_overlay"),
+        );
+        if (!hasOverlay) throw new Error("Drawing overlay canvas was not created");
+
         await actor.drawOnPage(CHECKMARK_POINTS, {
             color: "rgba(74, 222, 128, 0.9)",
             lineWidth: 4,

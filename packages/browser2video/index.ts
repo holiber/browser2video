@@ -84,6 +84,7 @@ export type { NarrationOptions, AudioDirectorAPI, AudioEvent, ResolvedNarrator }
 export { translateText, resolveNarrator } from "./narrator.ts";
 
 // Shared utilities (less common, but available)
+export { resolveCacheDir } from "./cache-dir.ts";
 export { composeVideos } from "./video-compositor.ts";
 export { startScreenCapture, tryParseDisplaySize } from "./screen-capture.ts";
 

@@ -51,7 +51,7 @@ export default function PixelChrome({ children }: Props) {
   const pageTitle = deriveTitle(location.pathname);
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950 select-none overflow-hidden">
+    <div className="flex flex-col h-full bg-zinc-950 select-none overflow-hidden">
       <StatusBar />
 
       {/* App bar */}

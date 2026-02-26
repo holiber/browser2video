@@ -9,7 +9,7 @@
  *
  * Modeled EXACTLY after player-self-test.scenario.ts setup.
  */
-import { defineScenario, InjectedActor, type Session } from "browser2video";
+import { defineScenario, InjectedActor, resolveCacheDir, type Session } from "browser2video";
 import path from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
@@ -151,8 +151,7 @@ export default defineScenario<Ctx>("Cursor Proof", (s) => {
         const stepCard = page.locator("[data-testid='step-card-1']");
         await stepCard.locator("img").first().waitFor({ state: "visible", timeout: 120_000 });
 
-        const artifactsDir = process.env.B2V_TEST_ARTIFACTS_DIR || "/tmp";
-        try { fs.mkdirSync(artifactsDir, { recursive: true }); } catch { /* ignore */ }
+        const artifactsDir = process.env.B2V_TEST_ARTIFACTS_DIR || resolveCacheDir();
         const proofPath = path.join(artifactsDir, "b2v-cursor-proof.png");
 
         // Poll until BOTH cursors are visible:
