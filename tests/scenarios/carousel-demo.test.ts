@@ -6,7 +6,7 @@
  * Layout: browser (left), work terminal (right-top), dev server (right-bottom)
  */
 import { fileURLToPath } from "url";
-import { createSession } from "browser2video";
+import { createSession, tildify } from "browser2video";
 import path from "path";
 import fs from "node:fs";
 
@@ -190,9 +190,9 @@ async function scenario() {
   const gridPage = grid.page;
 
   // Navigate terminals to the fixture directory
-  await editor.typeAndEnter(`cd ${fixtureDir}`);
+  await editor.typeAndEnter(`cd ${tildify(fixtureDir)}`);
   await editor.waitForPrompt();
-  await server.typeAndEnter(`cd ${fixtureDir}`);
+  await server.typeAndEnter(`cd ${tildify(fixtureDir)}`);
   await server.waitForPrompt();
 
   // ── Phase 1: Project Setup ──────────────────────────────────────────

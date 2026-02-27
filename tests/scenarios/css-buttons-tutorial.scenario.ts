@@ -2,7 +2,7 @@
  * Narrated tutorial: building 3 animated CSS buttons from scratch.
  * Demonstrates vim editing, live-reload preview, narration, and circleAround highlighting.
  */
-import { defineScenario, startServer, resolveCacheDir, type Session } from "browser2video";
+import { defineScenario, startServer, resolveCacheDir, tildify, type Session } from "browser2video";
 import type { GridHandle, TerminalActor } from "browser2video";
 import path from "node:path";
 import fs from "node:fs";
@@ -62,7 +62,7 @@ export default defineScenario<Ctx>("CSS Buttons Tutorial", (s) => {
     );
     const shell = grid.actors[1];
 
-    await shell.typeAndEnter(`cd ${workDir}`);
+    await shell.typeAndEnter(`cd ${tildify(workDir)}`);
     await shell.waitForPrompt();
 
     return { session, grid, shell, workDir };

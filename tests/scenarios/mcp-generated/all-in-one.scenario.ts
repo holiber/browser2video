@@ -9,7 +9,7 @@
  * Each section uses a separate grid with appropriate layout.
  */
 import path from "path";
-import { defineScenario, startServer, type Session, type Frame, type GridHandle } from "browser2video";
+import { defineScenario, startServer, tildify, type Session, type Frame, type GridHandle } from "browser2video";
 import { startSyncServer } from "../../../apps/demo/scripts/sync-server.ts";
 import { execSync } from "node:child_process";
 
@@ -259,7 +259,7 @@ export default defineScenario<Ctx>("All-in-One Demo", (s) => {
     workerUrl.hash = hash;
     await worker.goto(workerUrl.toString());
 
-    const reviewerCmd = `cd ${JSON.stringify(process.cwd())} && node apps/demo/scripts/reviewer-cli.ts --ws ${JSON.stringify(syncWsUrl)} --doc ${JSON.stringify(docUrl)} --log ${JSON.stringify(path.join(process.cwd(), "artifacts", "reviewer-all-in-one.log"))}`;
+    const reviewerCmd = `cd ${tildify(process.cwd())} && node apps/demo/scripts/reviewer-cli.ts --ws ${JSON.stringify(syncWsUrl)} --doc ${JSON.stringify(docUrl)} --log ${tildify(path.join(process.cwd(), "artifacts", "reviewer-all-in-one.log"))}`;
     await reviewer.typeAndEnter(reviewerCmd);
   });
 

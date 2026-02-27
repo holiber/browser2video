@@ -59,3 +59,15 @@ export function resolveCacheDir(subdir?: string): string {
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+/**
+ * Replace the user's home directory prefix with `~` so absolute paths
+ * typed into terminal panes don't leak the full filesystem location.
+ */
+export function tildify(absPath: string): string {
+  const home = os.homedir();
+  if (absPath.startsWith(home + path.sep) || absPath === home) {
+    return "~" + absPath.slice(home.length);
+  }
+  return absPath;
+}

@@ -6,7 +6,7 @@
  *   [Boss browser | Worker browser | Reviewer terminal]
  */
 import path from "path";
-import { defineScenario, startServer, type TerminalActor, type Frame, type GridHandle } from "browser2video";
+import { defineScenario, startServer, tildify, type TerminalActor, type Frame, type GridHandle } from "browser2video";
 import { startSyncServer } from "../../apps/demo/scripts/sync-server.ts";
 
 type DOMContext = Frame;
@@ -64,7 +64,7 @@ export default defineScenario<Ctx>("Collaboration Demo", (s) => {
     workerUrl.hash = hash;
     await worker.goto(workerUrl.toString());
 
-    const reviewerCmd = `cd ${JSON.stringify(process.cwd())} && node apps/demo/scripts/reviewer-cli.ts --ws ${JSON.stringify(sync.wsUrl)} --doc ${JSON.stringify(docUrl)} --log ${JSON.stringify(path.join(process.cwd(), "artifacts", "reviewer.log"))}`;
+    const reviewerCmd = `cd ${tildify(process.cwd())} && node apps/demo/scripts/reviewer-cli.ts --ws ${JSON.stringify(sync.wsUrl)} --doc ${JSON.stringify(docUrl)} --log ${tildify(path.join(process.cwd(), "artifacts", "reviewer.log"))}`;
     await reviewer.typeAndEnter(reviewerCmd);
 
     return { boss, worker, reviewer, grid };

@@ -20,7 +20,7 @@
  *   - TUI renders "Todo" column within 30s (polls with error detection)
  *   - TUI exits cleanly after "q" (terminal is idle)
  */
-import { defineScenario, resolveCacheDir, type TerminalActor, type Frame } from "browser2video";
+import { defineScenario, resolveCacheDir, tildify, type TerminalActor, type Frame } from "browser2video";
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -136,7 +136,7 @@ export default defineScenario<Ctx>("Test GH Repo As Human", (s) => {
     async ({ term, workDir }) => {
       const repoDir = path.join(workDir, "unikanban");
       await term.waitForPrompt();
-      await term.typeAndEnter(`cd ${workDir}`);
+      await term.typeAndEnter(`cd ${tildify(workDir)}`);
       await term.waitForPrompt();
 
       if (fs.existsSync(path.join(repoDir, ".git"))) {
