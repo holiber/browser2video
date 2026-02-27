@@ -1,4 +1,5 @@
 import { makeAutoObservable, runInAction } from "mobx";
+import type { SceneConfig } from "browser2video";
 
 // ---------------------------------------------------------------------------
 //  Types (re-exported for components)
@@ -30,6 +31,7 @@ export interface PaneLayoutInfo {
     viewport: { width: number; height: number };
     jabtermWsUrl?: string;
   };
+  sceneConfig?: SceneConfig;
   pageUrl?: string;
   viewport: { width: number; height: number };
   electronView?: boolean;
@@ -85,6 +87,7 @@ export class PlayerStore {
   // UI state
   error: string | null = null;
   loading = false;
+  executing = false;
   importing = false;
   importResult: { count: number; scenarios: string[] } | null = null;
 
@@ -171,10 +174,12 @@ export class PlayerStore {
   }
 
   runAll(): void {
+    this.executing = true;
     this._send({ type: "runAll" });
   }
 
   reset(): void {
+    this.executing = false;
     this._send({ type: "reset" });
     if (this.scenario) {
       this.stepStates = this.scenario.steps.map(() => "pending" as StepState);
@@ -219,6 +224,10 @@ export class PlayerStore {
 
   sendStudioEvent(msg: Record<string, unknown>): void {
     this._send(msg);
+  }
+
+  dispatchSceneAction(sceneName: string, actionId: string, payload?: unknown): void {
+    this._send({ type: "sceneAction", sceneName, actionId, payload });
   }
 
   setAudioSettings(settings: AudioSettings): void {
@@ -280,6 +289,7 @@ export class PlayerStore {
       }
 
       case "cancelled":
+        this.executing = false;
         this.stepStates = this.stepStates.map((s) =>
           s === "running" || s === "fast-forwarding" ? "pending" : s,
         );
@@ -348,6 +358,7 @@ export class PlayerStore {
         break;
 
       case "finished":
+        this.executing = false;
         this.liveFrame = null;
         this.liveFrames = {};
         this.videoPath = msg.videoPath ?? null;
@@ -380,7 +391,12 @@ export class PlayerStore {
 
       case "error":
         this.loading = false;
+        this.executing = false;
         this.error = msg.message;
+        this.stepStates = this.stepStates.map((s) =>
+          s === "running" || s === "fast-forwarding" ? "pending" : s,
+        );
+        this.buildProgress = null;
         break;
 
       case "status":
@@ -400,7 +416,19 @@ export class PlayerStore {
         audio.play().catch((e: unknown) => console.error("[audio] playback failed:", e));
         break;
       }
+
+      case "sceneAction":
+        this._handleSceneAction(msg.sceneName, msg.actionId, msg.payload);
+        break;
     }
+  }
+
+  /** Scene action state: { "Bob/toggleTerminal": true } */
+  sceneActionStates: Record<string, unknown> = {};
+
+  private _handleSceneAction(sceneName: string, actionId: string, payload?: unknown): void {
+    const key = `${sceneName}/${actionId}`;
+    this.sceneActionStates = { ...this.sceneActionStates, [key]: payload };
   }
 
   private _handleReplayEvent(event: any): void {

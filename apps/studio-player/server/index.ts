@@ -581,6 +581,9 @@ wss.on("connection", (ws) => {
             const url = `/api/audio/${encodeURIComponent(audioPath)}`;
             send(ws, { type: "playAudio", url, durationMs });
           };
+          executor.onSceneAction = (sceneName, actionId, payload) => {
+            send(ws, { type: "sceneAction", sceneName, actionId, payload });
+          };
 
           const absPath = path.isAbsolute(msg.file) ? msg.file : path.resolve(PROJECT_ROOT, msg.file);
           const { dir, hash } = cache.getDir(absPath, msg.file);
@@ -707,8 +710,11 @@ wss.on("connection", (ws) => {
               console.error("[player] Execution aborted by user");
               send(ws, { type: "cancelled" });
             } else {
+              const errMsg = (err as Error).message ?? "Unknown error";
               console.error("[player] runAll error:", err);
-              send(ws, { type: "error", message: (err as Error).message ?? "Unknown error" });
+              executor.logError("executor", errMsg);
+              try { await executor.reset(); } catch { /* best-effort to persist logs */ }
+              send(ws, { type: "error", message: errMsg });
             }
           }
           break;
@@ -790,6 +796,16 @@ wss.on("connection", (ws) => {
             await executor.abort();
           }
           send(ws, { type: "cancelled" });
+          break;
+        }
+
+        case "sceneAction": {
+          if (executor) {
+            const session = (executor as any).session;
+            if (session?._sceneActionHandler) {
+              session._sceneActionHandler(msg.sceneName, msg.actionId, msg.payload);
+            }
+          }
           break;
         }
 

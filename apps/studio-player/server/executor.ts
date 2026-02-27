@@ -12,6 +12,7 @@ import {
   type Session,
   type SessionOptions,
   type ReplayEvent,
+  type SceneConfig,
 } from "browser2video";
 import type { ScenarioDescriptor, StepDescriptor } from "browser2video/scenario";
 import type { GridPaneConfig } from "browser2video/terminal";
@@ -23,6 +24,7 @@ export interface PaneLayoutInfo {
   layout?: string;
   terminalServerUrl?: string;
   gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string };
+  sceneConfig?: SceneConfig;
   pageUrl?: string;
   viewport: { width: number; height: number };
   /** True when the scenario page is an Electron WebContentsView (managed via CDP) */
@@ -55,6 +57,7 @@ export class Executor<T = any> {
   onPaneLayout: ((layout: PaneLayoutInfo) => void) | null = null;
   onReplayEvent: ((event: ReplayEvent) => void) | null = null;
   onPlayAudio: ((audioPath: string, durationMs: number) => void) | null = null;
+  onSceneAction: ((sceneName: string, actionId: string, payload?: unknown) => void) | null = null;
 
   constructor(descriptor: ScenarioDescriptor<T>, opts?: {
     sessionOpts?: Partial<SessionOptions>;
@@ -113,7 +116,7 @@ export class Executor<T = any> {
           // Embedded (nested StudioPlayer) needs live frames via CDP screencast.
           // Session recording in Electron mode also uses CDP screencast internally,
           // so enabling both would conflict and produce 0 live frames.
-          record: mode === "human" && !isEmbedded,
+          record: process.env.B2V_RECORD === "1" || (mode === "human" && !isEmbedded),
           narration: {
             enabled: true,
             realtime: process.env.B2V_HEADLESS !== "1",
@@ -127,9 +130,6 @@ export class Executor<T = any> {
           onRequestPage: this.onRequestPage ?? undefined,
         });
 
-        // When the session has grid config ready, push it to the player
-        // immediately so it can render the ScenarioGrid while setupFn
-        // is still waiting for terminals to appear.
         newSession._onGridConfigReady = () => {
           try {
             const layout = newSession!.getLayoutInfo();
@@ -139,6 +139,11 @@ export class Executor<T = any> {
           } catch (err) {
             console.error("[executor] Failed to push grid config:", err);
           }
+        };
+
+        // Wire scene action dispatch: scenario → session → executor → player
+        newSession._sceneActionHandler = (sceneName, actionId, payload) => {
+          this.onSceneAction?.(sceneName, actionId, payload);
         };
 
         if (this.onPlayAudio) {
@@ -268,6 +273,10 @@ export class Executor<T = any> {
     }
   }
 
+  logError(source: string, message: string): void {
+    this.session?.logError(source, message);
+  }
+
   private async executeStep(
     stepDesc: StepDescriptor<T>,
     index: number,
@@ -277,18 +286,23 @@ export class Executor<T = any> {
     const { step } = session;
     const t0 = Date.now();
 
-    if (stepDesc.narration && mode === "human") {
-      await step(stepDesc.caption, stepDesc.narration, () => stepDesc.run(this.ctx!));
-    } else if (stepDesc.narrationFn && mode === "human") {
-      // Narration function runs concurrently; step waits for both
-      const ctx = this.ctx!;
-      await step(stepDesc.caption, async () => {
-        const narrationPromise = stepDesc.narrationFn!(ctx);
-        await stepDesc.run(ctx);
-        await narrationPromise;
-      });
-    } else {
-      await step(stepDesc.caption, () => stepDesc.run(this.ctx!));
+    try {
+      if (stepDesc.narration && mode === "human") {
+        await step(stepDesc.caption, stepDesc.narration, () => stepDesc.run(this.ctx!));
+      } else if (stepDesc.narrationFn && mode === "human") {
+        const ctx = this.ctx!;
+        await step(stepDesc.caption, async () => {
+          const narrationPromise = stepDesc.narrationFn!(ctx);
+          await stepDesc.run(ctx);
+          await narrationPromise;
+        });
+      } else {
+        await step(stepDesc.caption, () => stepDesc.run(this.ctx!));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.session?.logError("step", `Step "${stepDesc.caption}" failed: ${msg}`);
+      throw err;
     }
 
     await this.checkLayoutChange();
@@ -335,6 +349,16 @@ export class Executor<T = any> {
     return { screenshot, durationMs };
   }
 
+  private _logStep(index: number, caption: string, durationMs: number) {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    const total = this.descriptor.steps.length;
+    const sec = (durationMs / 1000).toFixed(1);
+    console.error(`[${hh}:${mm}:${ss}] step ${index + 1}/${total} ran for ${sec}s "${caption}"`);
+  }
+
   async runTo(
     targetIndex: number,
     mode: "human" | "fast" = "human",
@@ -353,6 +377,7 @@ export class Executor<T = any> {
       onStepStart?.(i, true);
       const { screenshot, durationMs } = await this.executeStep(this.descriptor.steps[i], i, "fast");
       this.executedUpTo = i;
+      this._logStep(i, this.descriptor.steps[i].caption, durationMs);
       onStepComplete?.({ index: i, screenshot, mode: "fast", durationMs });
     }
 
@@ -365,6 +390,7 @@ export class Executor<T = any> {
         mode,
       );
       this.executedUpTo = targetIndex;
+      this._logStep(targetIndex, this.descriptor.steps[targetIndex].caption, durationMs);
       const result: StepResult = { index: targetIndex, screenshot, mode, durationMs };
       onStepComplete?.(result);
       return result;

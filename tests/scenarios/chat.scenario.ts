@@ -1,15 +1,13 @@
 /**
- * Chat scenario — four concurrent scenes.
+ * Chat scenario — four concurrent scenes using the composable scenes API.
  *
- * Veronica (iPhone, left pane) and Bob (Pixel, right pane + terminal) act
- * concurrently within each scene.  True parallelism is achieved via
- * `drawViaInject` — cursor overlay + canvas drawing through evaluate() that
- * doesn't touch the shared page.mouse, so Bob can navigate with the mouse
- * at the same time.
+ * Uses `session.scenes.create()` with a "split" root containing:
+ *   - Left:  "iphone" scene for Veronica (single browser slot)
+ *   - Right: "laptop" scene for Bob (browser + terminal with Quake-style toggle)
  *
- * Scene 0 — Narrator introduces the demo, circles the panes.
+ * Scene 0 — Narrator introduces the demo, circles the scene frames.
  * Scene 1 — Veronica browses the movie; Bob reads Wikipedia + codes.
- *           (Interleaved mouse actions for visual concurrency.)
+ *           Terminal slides down (toggleTerminal action).
  *           Veronica opens Messages and types her invitation while Bob
  *           types his letter to Armillaria in the terminal (concurrent).
  * Scene 2 — Bob gets the notification, checks calendar; Veronica draws
@@ -29,15 +27,11 @@
  *       terminal at the same time. Use `typeInTerminalViaInject` for Bob
  *       (synthetic DOM events) so it doesn't conflict with Veronica's
  *       `page.keyboard`-based typing. Both run inside `Promise.all`.
- *
- * Layout:
- *   Row 0: [Veronica (iPhone)  |  Bob browser (Pixel)]
- *   Row 1: [Veronica (iPhone)  |  Bob terminal        ]
  */
 import path from "path";
 import {
-    defineScenario, startServer, Actor, translateText,
-    type TerminalActor, type Frame, type GridHandle, type Page,
+    defineScenario, startServer, Actor, translateText, defineScene,
+    type TerminalActor, type Frame, type GridHandle, type SceneHandle, type Page,
 } from "browser2video";
 import { startSyncServer } from "../../apps/demo/scripts/sync-server.ts";
 
@@ -117,6 +111,7 @@ interface Ctx {
     bobTerminal: TerminalActor;
     pointer: Actor;
     grid: GridHandle;
+    sceneHandle: SceneHandle;
     serverBaseURL: string;
     syncWsUrl: string;
     docHash: string;
@@ -139,7 +134,7 @@ const CHAT = {
 const NARRATOR = {
     intro:
         "Welcome to Browser 2 Video. In this demo, Veronica is on her iPhone " +
-        "while Bob is on his Pixel. They each have their own cursor, moving independently.",
+        "while Bob is on his screen. They each have their own cursor, moving independently.",
     scene1:
         "Veronica is browsing 3 Body Problem while Bob looks busy " +
         "with something on his screen and in the terminal.",
@@ -289,24 +284,50 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
 
         const wikiUrl = new URL(`${server.baseURL}/wiki?role=bob`);
 
-        const grid = await session.createGrid(
-            [
-                { url: movieUrl.toString(), label: "Veronica" },
-                { url: wikiUrl.toString(), label: "Bob" },
-                { label: "Bob Terminal" },
+        const scene = defineScene({
+            type: "split",
+            name: "Chat Demo",
+            children: [
+                {
+                    type: "iphone",
+                    name: "Veronica",
+                    slots: {
+                        screen: { type: "browser", url: movieUrl.toString(), label: "Veronica" },
+                    },
+                },
+                {
+                    type: "laptop",
+                    name: "Bob",
+                    slots: {
+                        browser: { type: "browser", url: wikiUrl.toString(), label: "Bob" },
+                        terminal: { type: "terminal", label: "Bob Terminal" },
+                    },
+                    actions: [
+                        { id: "toggleTerminal", label: "Terminal", type: "toggle", defaultState: false },
+                    ],
+                },
             ],
-            {
-                viewport: { width: 1280, height: 720 },
-                grid: [
-                    [0, 1],
-                    [0, 2],
-                ],
-            },
-        );
+        });
 
-        const [veronica, bobBrowser, bobTerminal] = grid.actors;
+        const sceneHandle = await session.scenes.create(scene, {
+            viewport: { width: 1280, height: 720 },
+        });
 
-        const pointer = new Actor(grid.page, session.modeRef);
+        const [veronica, bobBrowser, bobTerminal] = sceneHandle.actors;
+
+        // Keep a GridHandle-like reference for backward compat with existing step code
+        const grid = {
+            actors: sceneHandle.actors,
+            page: sceneHandle.page,
+            paneConfigs: sceneHandle.config.resolvedSlots.map((s) => ({
+                type: s.type,
+                testId: s.testId,
+                title: s.title,
+            })),
+            viewport: sceneHandle.config.viewport,
+        } as unknown as GridHandle;
+
+        const pointer = new Actor(sceneHandle.page, session.modeRef);
         pointer.cursorId = "narrator";
 
         veronica.setVoice("shimmer");
@@ -339,7 +360,7 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
         console.error(`  TTS warmup complete.`);
 
         return {
-            veronica, bobBrowser, bobTerminal, pointer, grid,
+            veronica, bobBrowser, bobTerminal, pointer, grid, sceneHandle,
             serverBaseURL: server.baseURL,
             syncWsUrl: sync.wsUrl,
             docHash: "",
@@ -351,13 +372,14 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
 
     s.step("Introduction",
         ({ narrate }) => narrate(NARRATOR.intro),
-        async ({ pointer, grid }) => {
+        async ({ pointer, grid, sceneHandle }) => {
             await grid.page.waitForTimeout(500);
-            await pointer.circleAround('[data-testid="browser-pane-0"]');
+            // Circle the scene frames
+            const iphoneFrame = await grid.page.$('[data-testid="scene-iphone-frame"]');
+            const laptopFrame = await grid.page.$('[data-testid="scene-laptop-frame"]');
+            if (iphoneFrame) await pointer.circleAround('[data-testid="scene-iphone-frame"]');
             await grid.page.waitForTimeout(500);
-            await pointer.circleAround('[data-testid="browser-pane-1"]');
-            await grid.page.waitForTimeout(500);
-            await pointer.circleAround('[data-testid="xterm-term-shell-2"]');
+            if (laptopFrame) await pointer.circleAround('[data-testid="scene-laptop-frame"]');
             await grid.page.waitForTimeout(1000);
         },
     );
@@ -368,24 +390,28 @@ export default defineScenario<Ctx>("Chat Demo", (s) => {
     s.step("Working side by side",
         ({ narrate }) => narrate(NARRATOR.scene1),
         async (ctx) => {
-            const { veronica, bobBrowser, bobTerminal, grid } = ctx;
+            const { veronica, bobBrowser, bobTerminal, grid, sceneHandle } = ctx;
             const vFrame = veronica.frame as DOMContext;
             const bFrame = bobBrowser.frame as DOMContext;
 
             await vFrame.waitForSelector('[data-testid="movie-page"]', { timeout: 10000 });
             await bFrame.waitForSelector('[data-testid="wiki-page"]', { timeout: 10000 });
 
-            // Assert correct device frames are loaded
-            await vFrame.waitForSelector('[data-testid="device-screen"]', { timeout: 5000 });
-            await vFrame.waitForSelector('img[src*="iphone-frame"]', { timeout: 5000 });
-            await bFrame.waitForSelector('[data-testid="device-screen"]', { timeout: 5000 });
-            await bFrame.waitForSelector('img[src*="pixel-frame"]', { timeout: 5000 });
+            // Assert scene layout: iPhone frame for Veronica, laptop frame for Bob
+            const page = grid.page;
+            await page.waitForSelector('[data-testid="scene-iphone-frame"]', { timeout: 5000 });
+            await page.waitForSelector('[data-testid="scene-laptop-frame"]', { timeout: 5000 });
+            await page.waitForSelector('[data-testid="scene-split"]', { timeout: 5000 });
 
             // ── Interleaved actions ──
 
             await veronica.hover('[data-testid="movie-title"]');
             await bobBrowser.hover('[data-testid="wiki-title"]');
             await grid.page.waitForTimeout(600);
+
+            // Toggle terminal on (Quake-style slide down)
+            sceneHandle.dispatch("Bob", "toggleTerminal", true);
+            await grid.page.waitForTimeout(400);
 
             await bobTerminal.typeAndEnter(
                 'echo "++++[>++++++++<-]>+.++++.--------.+++." > armillaria.bf',

@@ -14,7 +14,6 @@ import MoviePage from "@/pages/movie";
 import WikiPage from "@/pages/wiki";
 import SlidesPage from "@/pages/slides";
 import IPhoneChrome from "@/components/iphone-chrome";
-import PixelChrome from "@/components/pixel-chrome";
 import DeviceFrame from "@/components/device-frame";
 import { RepoContext } from "@/lib/use-automerge";
 import { createRepo } from "@/lib/use-automerge";
@@ -74,11 +73,7 @@ function DeviceLayout({ role, children }: { role: string | null; children: React
     );
   }
   if (role === "bob") {
-    return (
-      <DeviceFrame variant="pixel">
-        <PixelChrome>{children}</PixelChrome>
-      </DeviceFrame>
-    );
+    return <PlainLayout>{children}</PlainLayout>;
   }
   return <PlainLayout>{children}</PlainLayout>;
 }

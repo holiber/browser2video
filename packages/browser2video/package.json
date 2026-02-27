@@ -38,6 +38,7 @@
   "files": [
     "bin/",
     "*.ts",
+    "adapters/",
     "ops/",
     "schemas/",
     "examples/",
@@ -45,7 +46,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:unit": "node --experimental-strip-types --experimental-transform-types --test tests/unapi.test.ts"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",

@@ -5,6 +5,7 @@ import { StepGraph } from "./components/step-graph";
 import { Preview } from "./components/preview";
 import { Controls } from "./components/controls";
 import { ScenarioPicker } from "./components/scenario-picker";
+import { ScenePanel } from "./components/scene-panel";
 
 export default observer(function App() {
   const store = usePlayerStore();
@@ -98,6 +99,8 @@ export default observer(function App() {
             videoPath={store.videoPath}
             cursor={store.cursor}
             sendStudioEvent={(msg) => store.sendStudioEvent(msg)}
+            sceneActionStates={store.sceneActionStates}
+            onSceneAction={(name, id, payload) => store.dispatchSceneAction(name, id, payload)}
           />
           {store.showOverlay && (
             <div
@@ -121,12 +124,19 @@ export default observer(function App() {
         </div>
       </div>
 
+      <ScenePanel
+        paneLayout={store.paneLayout}
+        sceneActionStates={store.sceneActionStates}
+        onDispatch={(name, id, payload) => store.dispatchSceneAction(name, id, payload)}
+      />
+
       {scenario && (
         <Controls
           stepCount={scenario.steps.length}
           activeStep={store.activeStep}
           stepStates={store.stepStates}
           connected={store.connected}
+          executing={store.executing}
           importing={store.importing}
           importResult={store.importResult}
           audioSettings={store.audioSettings}

@@ -20,6 +20,22 @@
 export { createSession, Session, type GridHandle } from "./session.ts";
 
 // ---------------------------------------------------------------------------
+//  Scenes (composable layouts)
+// ---------------------------------------------------------------------------
+
+export {
+  defineScene,
+  walkSlots,
+  walkScenes,
+  type SceneDescriptor,
+  type SlotConfig,
+  type SceneAction,
+  type SceneConfig,
+  type SceneHandle,
+  type ResolvedSlot,
+} from "./scene.ts";
+
+// ---------------------------------------------------------------------------
 //  Scenario builder (declarative step definitions for player / batch)
 // ---------------------------------------------------------------------------
 
@@ -87,6 +103,33 @@ export { translateText, resolveNarrator } from "./narrator.ts";
 export { resolveCacheDir } from "./cache-dir.ts";
 export { composeVideos } from "./video-compositor.ts";
 export { startScreenCapture, tryParseDisplaySize } from "./screen-capture.ts";
+
+// ---------------------------------------------------------------------------
+//  Unapi — unified procedure registry
+// ---------------------------------------------------------------------------
+
+export {
+  defineProcedure,
+  Router,
+  createClient,
+  type Procedure,
+  type ProcedureMeta,
+  type ProcedureDescriptor,
+  type CallContext,
+} from "./unapi.ts";
+
+export {
+  allProcedures,
+  createB2vRouter,
+  createB2vState,
+  type B2vState,
+} from "./procedures.ts";
+
+// Adapters (transport layers derived from the router)
+export { runCli, type CliAdapterOptions } from "./adapters/cli.ts";
+export { registerMcpTools, procedureIdToMcpName, mcpNameToProcedureId, type McpAdapterOptions } from "./adapters/mcp.ts";
+export { createWsHandler, createRawWsHandler, type WsAdapterOptions, type WsMessage, type WsSender } from "./adapters/ws.ts";
+export { createHttpHandler, type HttpAdapterOptions } from "./adapters/http.ts";
 
 // ---------------------------------------------------------------------------
 //  Schemas & operations registry (from former @browser2video/lib)

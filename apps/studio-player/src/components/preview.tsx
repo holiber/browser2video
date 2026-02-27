@@ -3,6 +3,7 @@ import type { ViewMode, StepState, PaneLayoutInfo, CursorState } from "../stores
 import { CursorOverlay } from "./cursor-overlay";
 import { StudioGrid } from "./studio-grid";
 import { ScenarioGrid, type ScenarioGridConfig } from "./scenario-grid";
+import { SceneRenderer } from "./scenes/scene-renderer";
 
 interface PreviewProps {
   screenshot: string | null;
@@ -19,6 +20,8 @@ interface PreviewProps {
   videoPath: string | null;
   cursor: CursorState;
   sendStudioEvent: (msg: Record<string, unknown>) => void;
+  sceneActionStates: Record<string, unknown>;
+  onSceneAction: (sceneName: string, actionId: string, payload?: unknown) => void;
 }
 
 function layoutToFlexClass(layout?: string): string {
@@ -130,14 +133,14 @@ export function Preview({
   videoPath,
   cursor,
   sendStudioEvent,
+  sceneActionStates,
+  onSceneAction,
 }: PreviewProps) {
   const isRunning = stepState === "running" || stepState === "fast-forwarding";
   const isMultiPane = (paneLayout?.panes?.length ?? 0) > 1 && !paneLayout?.gridConfig;
   const hasLiveFrames = Object.keys(liveFrames).length > 0;
 
-  // Stabilize the gridConfig reference: JSON-serialize to detect actual
-  // data changes, so ScenarioGrid doesn't rebuild panels when only
-  // pageUrl or other non-grid fields in paneLayout change.
+  // Stabilize the gridConfig reference
   const gridConfigJson = paneLayout?.gridConfig?.jabtermWsUrl
     ? JSON.stringify(paneLayout.gridConfig)
     : "";
@@ -145,6 +148,15 @@ export function Preview({
     if (!gridConfigJson) return null;
     return JSON.parse(gridConfigJson) as ScenarioGridConfig;
   }, [gridConfigJson]);
+
+  // Stabilize scene config reference
+  const sceneConfigJson = paneLayout?.sceneConfig
+    ? JSON.stringify(paneLayout.sceneConfig)
+    : "";
+  const sceneConfig = useMemo(() => {
+    if (!sceneConfigJson) return null;
+    return JSON.parse(sceneConfigJson) as NonNullable<PaneLayoutInfo["sceneConfig"]>;
+  }, [sceneConfigJson]);
 
   // --- Cached video (no steps run yet) ---
   if (viewMode === "video" && videoPath && activeStep < 0) {
@@ -174,6 +186,25 @@ export function Preview({
           <span className="ml-auto">{liveBadge}</span>
         </div>
         <StudioGrid terminalServerUrl={terminalServerUrl} studioFrames={studioFrames} sendStudioEvent={sendStudioEvent} />
+      </div>
+    );
+  }
+
+  // Scene mode — renders composable scene tree (split, iphone, laptop, etc.)
+  if (sceneConfig) {
+    return (
+      <div data-preview-mode="scene" className="flex flex-col h-full">
+        <StepHeader activeStep={activeStep} stepCaption={stepCaption} badge={liveBadge} />
+        <div className="flex-1 min-h-0">
+          <SceneRenderer
+            scene={sceneConfig.scene}
+            resolvedSlots={sceneConfig.resolvedSlots}
+            jabtermWsUrl={sceneConfig.jabtermWsUrl}
+            slotOffset={0}
+            sceneActionStates={sceneActionStates}
+            onDispatch={onSceneAction}
+          />
+        </div>
       </div>
     );
   }

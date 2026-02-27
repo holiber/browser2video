@@ -14,7 +14,7 @@ const TTS_SPEED = 1;
 
 const INTRO =
   "Welcome to Browser 2 Video. In this demo, Veronica is on her iPhone " +
-  "while Bob is on his Pixel. They each have their own cursor, moving independently.";
+  "while Bob is on his screen. They each have their own cursor, moving independently.";
 const VERONICA_MSG =
   "Hey Bob! Are you free this Friday evening? There's a new sci-fi movie I wanna see!";
 const BOB_REPLY =

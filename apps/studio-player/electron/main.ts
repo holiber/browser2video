@@ -128,19 +128,21 @@ const cliArgs = (() => { // parse early so createMainWindow can use headless fla
 const isHeadless = cliArgs.headless;
 const isHidden = isEmbedded || isHeadless;
 
-function parseAutoScenarioFromCli(argv: string[]): { file: string | null; autoplay: boolean; headless: boolean } {
+function parseAutoScenarioFromCli(argv: string[]): { file: string | null; autoplay: boolean; headless: boolean; record: boolean } {
   // Electron argv usually looks like:
   //   [electronExe, appPath, ...userArgs]
   // We support both explicit `--scenario` and positional `*.scenario.ts`.
   let file: string | null = null;
   let autoplay = false;
   let headless = false;
+  let record = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--no-play" || a === "--no-autoplay") autoplay = false;
     if (a === "--play" || a === "--autoplay") autoplay = true;
     if (a === "--headless") headless = true;
+    if (a === "--record") record = true;
 
     if (a === "--scenario" && argv[i + 1]) {
       file = argv[i + 1];
@@ -159,7 +161,7 @@ function parseAutoScenarioFromCli(argv: string[]): { file: string | null; autopl
     }
   }
 
-  return { file, autoplay, headless };
+  return { file, autoplay, headless, record };
 }
 
 function createMainWindow() {
@@ -331,6 +333,7 @@ app.whenReady().then(async () => {
   process.env.PORT = String(SERVER_PORT);
   process.env.B2V_CDP_PORT = String(CDP_PORT);
   if (isHeadless) process.env.B2V_HEADLESS = "1";
+  if (cliArgs.record) process.env.B2V_RECORD = "1";
 
   // Load a minimal splash page immediately. This unblocks Playwright's
   // firstWindow() which otherwise waits ~15s for the first navigation.

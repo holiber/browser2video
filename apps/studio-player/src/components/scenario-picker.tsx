@@ -105,6 +105,7 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
             : "text-zinc-400 hover:text-zinc-200"
             }`}
           title="Embed scenario content inline"
+          data-testid="ctrl-view-live"
         >
           <Monitor size={12} />
           Live
@@ -116,6 +117,7 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
             : "text-zinc-400 hover:text-zinc-200"
             }`}
           title="Play recorded video"
+          data-testid="ctrl-view-video"
         >
           <Film size={12} />
           Video

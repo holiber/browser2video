@@ -9,6 +9,7 @@ interface ControlsProps {
   activeStep: number;
   stepStates: StepState[];
   connected: boolean;
+  executing: boolean;
   importing: boolean;
   importResult: { count: number; scenarios: string[] } | null;
   audioSettings: AudioSettings;
@@ -27,6 +28,7 @@ export function Controls({
   activeStep,
   stepStates,
   connected,
+  executing,
   importing,
   importResult,
   audioSettings,
@@ -39,7 +41,7 @@ export function Controls({
   onDownloadArtifacts,
   onAudioSettingsChange,
 }: ControlsProps) {
-  const isRunning = stepStates.some((s) => s === "running" || s === "fast-forwarding");
+  const isRunning = executing || stepStates.some((s) => s === "running" || s === "fast-forwarding");
   const allDone = stepStates.every((s) => s === "done");
   const nextStep = stepStates.findIndex((s) => s === "pending");
   const [showImportMenu, setShowImportMenu] = useState(false);

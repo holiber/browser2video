@@ -35,6 +35,7 @@ import {
 } from "./narrator.ts";
 import { startTerminalWsServer, type TerminalServer, type GridPaneConfig } from "./terminal-ws-server.ts";
 import { resolveCacheDir } from "./cache-dir.ts";
+import { type SceneDescriptor, type SceneConfig, type SceneHandle, type ResolvedSlot, walkSlots, walkScenes } from "./scene.ts";
 
 // ---------------------------------------------------------------------------
 //  Helpers
@@ -302,6 +303,8 @@ export class Session {
   private terminalServer: TerminalServer | null = null;
   private terminalCounter = 0;
   private lastGridConfig: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string } | null = null;
+  private lastSceneConfig: SceneConfig | null = null;
+  private _sceneActionHandler: ((sceneName: string, actionId: string, payload?: unknown) => void) | null = null;
   private _gridActorEntries: GridActorEntry[] = [];
 
   // Resolved options
@@ -319,6 +322,8 @@ export class Session {
   private audioDirector!: AudioDirectorAPI & { getEvents?: () => AudioEvent[] };
   /** Replay log for streaming cursor/click/step events to the player */
   readonly replayLog = new ReplayLog();
+  /** Aggregated error log — written to errors.log in the artifact directory. */
+  private _errors: string[] = [];
 
   /** Current execution mode — reads from the shared ModeRef. */
   get mode(): Mode { return this._modeRef.current; }
@@ -334,6 +339,22 @@ export class Session {
    * share the session's mode and respond to setMode() calls.
    */
   get modeRef(): ModeRef { return this._modeRef; }
+
+  /**
+   * Record an error for the aggregated errors.log file.
+   * Call this from external code (executor, scenario steps) to persist
+   * errors that would otherwise only appear in stderr.
+   */
+  logError(source: string, message: string): void {
+    const benign = /WebSocket connection to .* failed|favicon\.ico|Content Security Policy|Failed to load resource:.*404/i;
+    if (benign.test(message)) return;
+
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const ss = String(now.getSeconds()).padStart(2, "0");
+    this._errors.push(`[${hh}:${mm}:${ss}] [${source}] ${message}`);
+  }
 
   constructor(opts: SessionOptions = {}) {
     const underPW = isUnderPlaywright();
@@ -672,12 +693,16 @@ export class Session {
     page.on("console", (msg) => {
       const line = `[${msg.type()}] ${msg.text()}`;
       consoleLogs.push(line);
-      if (msg.type() === "error") console.error(`  [${label} Error] ${msg.text()}`);
+      if (msg.type() === "error") {
+        console.error(`  [${label} Error] ${msg.text()}`);
+        this.logError(label, msg.text());
+      }
     });
     page.on("pageerror", (err) => {
       const line = `[pageerror] ${(err as Error).message}`;
       consoleLogs.push(line);
       console.error(`  [${label} Error] ${(err as Error).message}`);
+      this.logError(label, `pageerror: ${(err as Error).message}`);
     });
 
     const actor = new Actor(page, this._modeRef, { delays: this.delays, cursorColor: this.cursorColor });
@@ -1076,27 +1101,38 @@ export class Session {
       }
 
       if (pc.type === "terminal") {
-        // Command panes (mc, htop, etc.) render TUI — wait for any non-empty content.
-        // Shell panes (no command) show a prompt — wait for prompt characters.
-        const isCommandPane = !!pc.cmd;
-        await page.waitForFunction(
-          ([sel, waitForPrompt]: [string, boolean]) => {
-            const root = document.querySelector(sel);
-            if (!root) return false;
-            // xterm v6: .xterm-accessibility-tree; xterm v5: .xterm-rows
-            const tree = root.querySelector(".xterm-accessibility-tree");
-            const rows = root.querySelector(".xterm-rows");
-            if (!tree && !rows) return false;
-            const text = (tree ?? rows as any)?.textContent ?? "";
-            if (waitForPrompt) {
-              return text.includes("$") || text.includes("#") || text.includes("%");
-            }
-            // For command panes, any non-empty content means the TUI has rendered
-            return text.trim().length > 0;
-          },
-          [testIdSel, !isCommandPane] as [string, boolean],
-          { timeout: 30000 },
-        );
+        // Skip content readiness for terminals hidden off-screen (e.g. scene
+        // slots with defaultState: false that are CSS-translated out of view).
+        // IntersectionObserver correctly handles overflow:hidden clipping.
+        const isInViewport = await page.evaluate((sel: string) => new Promise<boolean>((resolve) => {
+          const el = document.querySelector(sel);
+          if (!el) { resolve(false); return; }
+          const observer = new IntersectionObserver((entries) => {
+            observer.disconnect();
+            resolve((entries[0]?.intersectionRatio ?? 0) > 0.05);
+          }, { threshold: 0.05 });
+          observer.observe(el);
+        }), testIdSel);
+
+        if (isInViewport) {
+          const isCommandPane = !!pc.cmd;
+          await page.waitForFunction(
+            ([sel, waitForPrompt]: [string, boolean]) => {
+              const root = document.querySelector(sel);
+              if (!root) return false;
+              const tree = root.querySelector(".xterm-accessibility-tree");
+              const rows = root.querySelector(".xterm-rows");
+              if (!tree && !rows) return false;
+              const text = (tree ?? rows as any)?.textContent ?? "";
+              if (waitForPrompt) {
+                return text.includes("$") || text.includes("#") || text.includes("%");
+              }
+              return text.trim().length > 0;
+            },
+            [testIdSel, !isCommandPane] as [string, boolean],
+            { timeout: 30000 },
+          );
+        }
       } else {
         // Wait for the iframe element to appear inside the browser pane container
         await page.waitForSelector(`${testIdSel} iframe`, { timeout: 30000 });
@@ -1195,12 +1231,16 @@ export class Session {
     page.on("console", (msg) => {
       const line = `[${msg.type()}] ${msg.text()}`;
       consoleLogs.push(line);
-      if (msg.type() === "error") console.error(`  [grid Error] ${msg.text()}`);
+      if (msg.type() === "error") {
+        console.error(`  [grid Error] ${msg.text()}`);
+        this.logError("grid", msg.text());
+      }
     });
     page.on("pageerror", (err) => {
       const line = `[pageerror] ${(err as Error).message}`;
       consoleLogs.push(line);
       console.error(`  [grid Error] ${(err as Error).message}`);
+      this.logError("grid", `pageerror: ${(err as Error).message}`);
     });
 
     // Register as a single pane for video recording
@@ -1274,6 +1314,102 @@ export class Session {
     },
   ): Promise<GridHandle> {
     return this.createTerminalGrid(panes, opts, true);
+  }
+
+  // -----------------------------------------------------------------------
+  //  Public: scenes.create — composable scene layouts
+  // -----------------------------------------------------------------------
+
+  /**
+   * Namespace for composable scene operations.
+   *
+   * ```ts
+   * const handle = await session.scenes.create(defineScene({
+   *   type: "split",
+   *   name: "Demo",
+   *   children: [
+   *     { type: "iphone", name: "Alice", slots: { screen: { type: "browser", url } } },
+   *     { type: "laptop", name: "Bob", slots: {
+   *       browser: { type: "browser", url: wikiUrl },
+   *       terminal: { type: "terminal", label: "Shell" },
+   *     }, actions: [{ id: "toggleTerminal", label: "Terminal", type: "toggle", defaultState: false }] },
+   *   ],
+   * }));
+   * const [alice, bobBrowser, bobTerminal] = handle.actors;
+   * handle.dispatch("Bob", "toggleTerminal", true);
+   * ```
+   */
+  get scenes() {
+    return {
+      create: (scene: SceneDescriptor, opts?: { viewport?: { width: number; height: number } }) =>
+        this._createScene(scene, opts),
+    };
+  }
+
+  private async _createScene(
+    scene: SceneDescriptor,
+    opts?: { viewport?: { width: number; height: number } },
+  ): Promise<SceneHandle> {
+    const allSlots = [...walkSlots(scene)];
+
+    const panes: Array<{
+      command?: string;
+      label?: string;
+      url?: string;
+      allowAddTab?: boolean;
+    }> = allSlots.map(({ slot }) => ({
+      command: slot.command,
+      label: slot.label ?? slot.testId,
+      url: slot.url,
+    }));
+
+    // Pre-compute resolved slots so lastSceneConfig is available
+    // when _onGridConfigReady fires inside createTerminalGrid.
+    // This avoids a deadlock (deferred callback prevents grid rendering)
+    // and a double-push (which would detach browser frames).
+    const vpW = opts?.viewport?.width ?? 1280;
+    const vpH = opts?.viewport?.height ?? 720;
+    const counterBase = this.terminalCounter;
+    const resolvedSlots: ResolvedSlot[] = allSlots.map(({ slot }, i) => {
+      const idx = counterBase + i;
+      const testId = slot.url
+        ? `browser-pane-${idx}`
+        : `xterm-term-${(slot.command ?? `shell-${idx}`).replace(/[^a-zA-Z0-9_-]/g, "-").replace(/-+/g, "-").slice(0, 30)}`;
+      return {
+        type: slot.type,
+        testId,
+        title: slot.label ?? slot.testId ?? `Pane ${i}`,
+        url: slot.url,
+        cmd: slot.command,
+      };
+    });
+
+    if (!this.terminalServer) {
+      this.terminalServer = await startTerminalWsServer(0, resolveCacheDir());
+      this.cleanupFns.push(() => this.terminalServer!.close());
+    }
+
+    this.lastSceneConfig = {
+      scene,
+      resolvedSlots,
+      viewport: { width: vpW, height: vpH },
+      jabtermWsUrl: this.terminalServer!.baseWsUrl,
+    };
+
+    const gridHandle = await this.createTerminalGrid(panes, {
+      viewport: opts?.viewport,
+    }, true);
+
+    const dispatch = (sceneName: string, actionId: string, payload?: unknown) => {
+      this._sceneActionHandler?.(sceneName, actionId, payload);
+    };
+
+    return {
+      actors: gridHandle.actors,
+      page: gridHandle.page,
+      dispatch,
+      config: this.lastSceneConfig!,
+    };
   }
 
   // -----------------------------------------------------------------------
@@ -1401,6 +1537,7 @@ export class Session {
     layout: LayoutConfig;
     terminalServerUrl?: string;
     gridConfig?: { panes: GridPaneConfig[]; grid?: number[][]; viewport: { width: number; height: number }; jabtermWsUrl?: string };
+    sceneConfig?: SceneConfig;
     pageUrl?: string;
     viewport: { width: number; height: number };
     electronView?: boolean;
@@ -1421,12 +1558,9 @@ export class Session {
       layout: this.layout,
       terminalServerUrl: this.terminalServer?.baseWsUrl,
       gridConfig: this.lastGridConfig ?? undefined,
+      sceneConfig: this.lastSceneConfig ?? undefined,
       pageUrl,
-      viewport: this.lastGridConfig?.viewport ?? { width: 1280, height: 720 },
-      // electronView uses Electron's WebContentsView overlay, which only works
-      // when the player IS the native Electron window. In embedded mode
-      // (B2V_EMBEDDED=1), the player is viewed through a browser iframe, so
-      // the WebContentsView would render on the hidden inner window = black screen.
+      viewport: this.lastSceneConfig?.viewport ?? this.lastGridConfig?.viewport ?? { width: 1280, height: 720 },
       electronView: !!(this._cdpEndpoint && this._onRequestPage) && process.env.B2V_EMBEDDED !== "1",
     };
   }
@@ -1471,6 +1605,14 @@ export class Session {
           saved.push(path.basename(logPath));
         } catch { /* frame may be detached */ }
       }
+    }
+
+    if (this._errors.length > 0) {
+      const errLogPath = path.join(this.artifactDir, "errors.log");
+      try {
+        fs.writeFileSync(errLogPath, this._errors.join("\n") + "\n", "utf-8");
+        saved.push("errors.log");
+      } catch { /* best-effort */ }
     }
 
     if (saved.length > 0) {
