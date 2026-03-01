@@ -81,12 +81,7 @@ async function getScenarioOptions(): Promise<string[]> {
 }
 
 async function selectScenario(file: string) {
-  const pickerSelect = page.locator("[data-testid='picker-select']");
-  if (await pickerSelect.isVisible().catch(() => false)) {
-    await pickerSelect.selectOption(file);
-    return;
-  }
-  await page.selectOption("[data-testid='picker-switch']", { label: file });
+  await page.locator("[data-testid='picker-select']").selectOption(file);
 }
 
 async function waitForAllStepsDone(timeoutMs: number) {

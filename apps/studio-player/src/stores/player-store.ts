@@ -65,6 +65,7 @@ export class PlayerStore {
   // Scenario list & current scenario
   scenarioFiles: string[] = [];
   scenario: { name: string; steps: StepInfo[] } | null = null;
+  currentScenarioFile: string | null = null;
 
   // Per-step state
   stepStates: StepState[] = [];
@@ -165,6 +166,7 @@ export class PlayerStore {
   }
 
   loadScenario(file: string): void {
+    this.currentScenarioFile = file;
     this.loading = true;
     this._send({ type: "load", file });
   }

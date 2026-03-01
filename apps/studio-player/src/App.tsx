@@ -40,6 +40,7 @@ export default observer(function App() {
       <ScenarioPicker
         onLoad={(f) => store.loadScenario(f)}
         connected={store.connected}
+        scenarioFile={store.currentScenarioFile}
         scenarioName={scenario?.name ?? null}
         scenarioFiles={store.scenarioFiles}
         viewMode={store.viewMode}

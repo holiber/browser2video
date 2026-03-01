@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { FolderOpen, ChevronDown, Monitor, Film, Database, Trash2 } from "lucide-react";
 import type { ViewMode } from "../stores/player-store";
 
@@ -12,6 +12,7 @@ function formatBytes(bytes: number): string {
 interface ScenarioPickerProps {
   onLoad: (file: string) => void;
   connected: boolean;
+  scenarioFile: string | null;
   scenarioName: string | null;
   scenarioFiles: string[];
   viewMode: ViewMode;
@@ -22,8 +23,7 @@ interface ScenarioPickerProps {
   globalCacheSize?: number;
 }
 
-export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles, viewMode, onViewModeChange, onClearScenarioCache, onClearGlobalCache, scenarioCacheSize, globalCacheSize }: ScenarioPickerProps) {
-  const [selected, setSelected] = useState("");
+export function ScenarioPicker({ onLoad, connected, scenarioFile, scenarioName, scenarioFiles, viewMode, onViewModeChange, onClearScenarioCache, onClearGlobalCache, scenarioCacheSize, globalCacheSize }: ScenarioPickerProps) {
   const [cachePopoverOpen, setCachePopoverOpen] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -39,63 +39,42 @@ export function ScenarioPicker({ onLoad, connected, scenarioName, scenarioFiles,
   }, [cachePopoverOpen]);
 
   const handleSelect = (file: string) => {
-    if (file) {
-      setSelected(file);
-      onLoad(file);
-    }
+    if (file) onLoad(file);
   };
 
+  const hasFiles = scenarioFiles.length > 0;
+
   return (
-    <div className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800 bg-zinc-900">
+    <div className="h-9 flex items-center gap-3 px-3 border-b border-zinc-800 bg-zinc-900 flex-shrink-0">
       <FolderOpen size={16} className="text-zinc-500 flex-shrink-0" />
 
-      {scenarioName ? (
-        <div className="flex items-center gap-3 flex-1">
-          <span className="text-sm font-medium text-zinc-200">{scenarioName}</span>
-          <span className="text-xs text-zinc-600 truncate">{selected}</span>
-          <div className="ml-auto flex items-center gap-2">
-            <div className="relative">
-              <select
-                value=""
-                onChange={(e) => handleSelect(e.target.value)}
-                disabled={!connected}
-                className="appearance-none bg-zinc-800 border border-zinc-700 rounded px-3 py-1 pr-7 text-xs text-zinc-300 cursor-pointer hover:border-zinc-600 focus:outline-none focus:border-blue-600 disabled:opacity-30"
-                data-testid="picker-switch"
-              >
-                <option value="">Switch scenario...</option>
-                {scenarioFiles.map((f) => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-              <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
-            </div>
-          </div>
+      {hasFiles ? (
+        <div className="relative w-72 max-w-[50vw] flex-shrink-0">
+          <select
+            value={scenarioFile ?? ""}
+            onChange={(e) => handleSelect(e.target.value)}
+            disabled={!connected}
+            className="h-7 w-full appearance-none bg-zinc-800 border border-zinc-700 rounded px-3 pr-7 text-xs text-zinc-200 cursor-pointer hover:border-zinc-600 focus:outline-none focus:border-blue-600 disabled:opacity-30"
+            data-testid="picker-select"
+          >
+            <option value="">Select a scenario...</option>
+            {scenarioFiles.map((f) => (
+              <option key={f} value={f}>{f}</option>
+            ))}
+          </select>
+          <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
         </div>
       ) : (
-        <div className="flex items-center gap-2 flex-1">
-          {scenarioFiles.length > 0 ? (
-            <div className="relative flex-1 max-w-md">
-              <select
-                value={selected}
-                onChange={(e) => handleSelect(e.target.value)}
-                disabled={!connected}
-                className="w-full appearance-none bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 pr-8 text-sm text-zinc-200 cursor-pointer hover:border-zinc-600 focus:outline-none focus:border-blue-600 disabled:opacity-30"
-                data-testid="picker-select"
-              >
-                <option value="">Select a scenario file...</option>
-                {scenarioFiles.map((f) => (
-                  <option key={f} value={f}>{f}</option>
-                ))}
-              </select>
-              <ChevronDown size={14} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
-            </div>
-          ) : (
-            <span className="text-sm text-zinc-600">
-              {connected ? "No .scenario.ts files found" : "Connecting..."}
-            </span>
-          )}
-        </div>
+        <span className="text-xs text-zinc-600">
+          {connected ? "No .scenario.ts files found" : "Connecting..."}
+        </span>
       )}
+
+      {scenarioName && (
+        <span className="text-xs text-zinc-500 truncate min-w-0">{scenarioName}</span>
+      )}
+
+      <div className="flex-1" />
 
       <div className="flex items-center gap-1 rounded-full bg-zinc-800 p-0.5 flex-shrink-0">
         <button
