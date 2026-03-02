@@ -9,6 +9,18 @@ import { probeDurationSeconds } from "./screen-capture.ts";
 //  Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Returns ffmpeg H.264 encoder args optimized for the current platform.
+ * macOS: hardware-accelerated h264_videotoolbox.
+ * Other: software libx264 with veryfast preset.
+ */
+export function h264EncoderArgs(bitrate = "10M"): string[] {
+  if (process.platform === "darwin") {
+    return ["-c:v", "h264_videotoolbox", "-b:v", bitrate];
+  }
+  return ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"];
+}
+
 function probeWidth(videoPath: string, ffmpeg: string): number {
   const size = probeSize(videoPath, ffmpeg);
   return size.w;
@@ -122,9 +134,7 @@ export function composeVideos(opts: ComposeOptions): void {
     "-map", "[v]",
     "-r", "60",
     "-fps_mode", "cfr",
-    "-c:v", "libx264",
-    "-preset", "veryfast",
-    "-crf", "18",
+    ...h264EncoderArgs(),
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
     outputPath,
@@ -151,18 +161,15 @@ export function composeVideos(opts: ComposeOptions): void {
   if (outDur > 0) console.error(`  Output duration: ${outDur.toFixed(2)}s`);
 }
 
-/** Re-encode a single WebM to MP4 at constant 60fps for smooth playback. */
+/** Re-encode a single raw video (WebM or MKV) to MP4 at constant 60fps. */
 function reencodeToMp4(inputPath: string, outputPath: string, ffmpeg: string): void {
-  // pad filter: ensure even dimensions for libx264 (CDP screencast can produce odd sizes)
   const args = [
     "-y",
     "-i", inputPath,
     "-vf", "fps=60,pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p",
     "-r", "60",
     "-fps_mode", "cfr",
-    "-c:v", "libx264",
-    "-preset", "veryfast",
-    "-crf", "18",
+    ...h264EncoderArgs(),
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
     outputPath,
@@ -308,9 +315,7 @@ function composeWithGridTemplate(
     "-map", "[v]",
     "-r", "60",
     "-fps_mode", "cfr",
-    "-c:v", "libx264",
-    "-preset", "veryfast",
-    "-crf", "18",
+    ...h264EncoderArgs(),
     "-pix_fmt", "yuv420p",
     "-movflags", "+faststart",
     outputPath,

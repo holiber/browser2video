@@ -44,12 +44,23 @@ Delay values are configurable per-session via `SessionOptions.delays`.
 Recording is configured via `SessionOptions.record`:
 
 - `true` (default in human mode)
-  - Uses Playwright `recordVideo` context option to capture raw WebM per pane
-  - Composes multi-pane video using ffmpeg (`hstack`/`xstack`)
-  - Finalizes to `run.mp4` with ffmpeg (`libx264`, `yuv420p`, `+faststart`)
+  - **Playwright path** (headless/owned browser): uses `recordVideo` context option to capture raw WebM per pane.
+  - **CDP path** (Electron/Studio Player): uses `CdpScreencastRecorder` — CDP `Page.startScreencast` sends JPEG frames into ffmpeg with `-c:v copy` (lossless MJPEG passthrough to MKV). This means near-zero CPU during recording so frames are never dropped due to encoding backpressure. The MKV is re-encoded to H.264 MP4 during the composition step. A frame queue with backpressure handling ensures the ffmpeg pipe never blocks the CDP ack loop.
+  - Composes multi-pane video using ffmpeg (`hstack`/`xstack`).
+  - On **macOS**: composition/re-encode uses hardware-accelerated `h264_videotoolbox` (Apple VideoToolbox GPU encoder).
+  - On **other platforms**: uses `libx264` software encoder with `veryfast` preset.
+  - Output: `run.mp4` (`yuv420p`, `+faststart`).
 - `false`
   - No video
   - Still writes `captions.vtt` + `run.json` for step timing/proofs
+
+## Cursor overlay & laser pointer
+
+The cursor overlay is injected via `CURSOR_OVERLAY_SCRIPT` (in `actor.ts`) into every recorded page:
+
+- **Cursor**: single `<div>` + `<svg>` per actor, reused across moves (no DOM churn).
+- **Laser trail**: full-viewport `<canvas>` with a single batched path per RAF frame. Points closer than 3px apart are deduplicated. Trail fades over 250ms with a single stroke + `shadowBlur` glow (no double-stroke). Canvas is created on `laserOn` and removed on `laserOff`.
+- **Click effects**: CSS-animated ripple ring (removed after 700ms) + hold-dot pulse.
 
 ## Narration
 

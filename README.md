@@ -45,7 +45,7 @@ npx b2v run my-scenario.ts --mode human --headed
 ### Requirements
 
 - **Node.js** >= 22
-- **ffmpeg** in `PATH` (for video composition / audio mixing)
+- **ffmpeg** in `PATH` (for video composition / audio mixing). On macOS, ffmpeg must be built with VideoToolbox support for GPU-accelerated encoding (Homebrew `ffmpeg` includes it by default).
 
 ### Starter examples
 

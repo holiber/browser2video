@@ -25,7 +25,7 @@ import type {
 import { Actor, generateWebVTT, HIDE_CURSOR_INIT_SCRIPT, FAST_MODE_INIT_SCRIPT, CURSOR_OVERLAY_SCRIPT, pickMs, DEFAULT_DELAYS } from "./actor.ts";
 import { TerminalActor } from "./terminal-actor.ts";
 import { ReplayLog } from "./replay-log.ts";
-import { composeVideos } from "./video-compositor.ts";
+import { composeVideos, h264EncoderArgs } from "./video-compositor.ts";
 import {
   type AudioDirectorAPI,
   type AudioEvent,
@@ -157,8 +157,10 @@ const TERMINAL_PAGE_HTML = `<!DOCTYPE html>
 // ---------------------------------------------------------------------------
 
 /**
- * Records the CDP page screencast to a raw webm file via ffmpeg.
- * Used for Electron/CDP pages where Playwright's recordVideo is unavailable.
+ * Records the CDP page screencast to a raw MKV file via ffmpeg.
+ * Uses `-c:v copy` (lossless JPEG passthrough) during recording so there
+ * is virtually zero CPU overhead — frames cannot be lost due to slow
+ * encoding.  The compositor re-encodes to H.264 MP4 afterwards.
  */
 class CdpScreencastRecorder {
   private ffmpegProc: ChildProcess | null = null;
@@ -169,6 +171,11 @@ class CdpScreencastRecorder {
   private ffmpeg: string;
   private width: number;
   private height: number;
+  private frameQueue: Buffer[] = [];
+  private draining = false;
+  private frameCount = 0;
+  private droppedFrames = 0;
+  private static MAX_QUEUE = 120;
 
   constructor(page: Page, outputPath: string, ffmpeg: string, width: number, height: number) {
     this.page = page;
@@ -179,41 +186,38 @@ class CdpScreencastRecorder {
   }
 
   async start(): Promise<void> {
-    let frameCount = 0;
-
-    // Start ffmpeg to receive JPEG frames on stdin and output raw webm
     this.ffmpegProc = spawn(this.ffmpeg, [
       "-y",
       "-f", "image2pipe",
-      "-vcodec", "mjpeg",       // explicit input codec for JPEG frames
-      "-framerate", "25",
+      "-vcodec", "mjpeg",
+      "-framerate", "30",
       "-i", "pipe:0",
-      "-c:v", "libvpx",
-      "-b:v", "2M",
-      "-pix_fmt", "yuv420p",
-      "-auto-alt-ref", "0",
+      "-c:v", "copy",
+      "-f", "matroska",
       this.outputPath,
     ], { stdio: ["pipe", "pipe", "pipe"] });
-    // Drain stderr but capture last line for errors
+
     let lastStderr = "";
     this.ffmpegProc.stderr?.on("data", (d: Buffer) => { lastStderr = d.toString().trim(); });
     this.ffmpegProc.on("error", (e) => console.error(`[cdp-recorder] ffmpeg error:`, e.message));
     this.ffmpegProc.on("close", (code) => {
-      if (code !== 0 && frameCount > 0) {
+      if (code !== 0 && this.frameCount > 0) {
         console.error(`[cdp-recorder] ffmpeg exited with code ${code}: ${lastStderr}`);
       }
     });
 
-    // Start CDP screencast
     this.cdpSession = await this.page.context().newCDPSession(this.page);
     this.cdpSession.on("Page.screencastFrame", (params: any) => {
       if (this.stopped) return;
-      // Ack the frame so CDP sends the next one
       this.cdpSession.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => { });
-      // Write JPEG data to ffmpeg stdin
       const buf = Buffer.from(params.data, "base64");
-      try { this.ffmpegProc?.stdin?.write(buf); } catch { }
-      frameCount++;
+      this.frameCount++;
+      if (this.frameQueue.length >= CdpScreencastRecorder.MAX_QUEUE) {
+        this.droppedFrames++;
+        return;
+      }
+      this.frameQueue.push(buf);
+      this.drain();
     });
     await this.cdpSession.send("Page.startScreencast", {
       format: "jpeg",
@@ -222,9 +226,25 @@ class CdpScreencastRecorder {
       maxHeight: this.height,
       everyNthFrame: 1,
     });
+  }
 
-    // Save frame count for logging on stop
-    (this as any)._frameCount = () => frameCount;
+  private drain(): void {
+    if (this.draining || !this.ffmpegProc?.stdin) return;
+    this.draining = true;
+    while (this.frameQueue.length > 0) {
+      const buf = this.frameQueue[0];
+      let ok: boolean;
+      try { ok = this.ffmpegProc.stdin.write(buf) ?? true; } catch { ok = false; }
+      if (!ok) {
+        this.ffmpegProc.stdin.once("drain", () => {
+          this.draining = false;
+          this.drain();
+        });
+        return;
+      }
+      this.frameQueue.shift();
+    }
+    this.draining = false;
   }
 
   async stop(): Promise<void> {
@@ -234,14 +254,21 @@ class CdpScreencastRecorder {
       await this.cdpSession?.send("Page.stopScreencast").catch(() => { });
       await this.cdpSession?.detach().catch(() => { });
     } catch { }
-    const fc = (this as any)._frameCount?.() ?? 0;
-    console.error(`[cdp-recorder] Stopped: ${fc} frames captured → ${this.outputPath}`);
-    // Close ffmpeg stdin to signal end-of-input and wait for it to finish
+    const info = `${this.frameCount} frames captured` +
+      (this.droppedFrames > 0 ? `, ${this.droppedFrames} dropped (queue overflow)` : "");
+    console.error(`[cdp-recorder] Stopped: ${info} → ${this.outputPath}`);
     return new Promise((resolve) => {
       if (!this.ffmpegProc) { resolve(); return; }
       this.ffmpegProc.on("close", () => resolve());
-      try { this.ffmpegProc.stdin?.end(); } catch { }
-      // Timeout: kill ffmpeg if it doesn't finish in 10s
+      // Flush remaining queued frames before closing stdin
+      const flushAndClose = () => {
+        while (this.frameQueue.length > 0) {
+          const buf = this.frameQueue.shift()!;
+          try { this.ffmpegProc?.stdin?.write(buf); } catch { break; }
+        }
+        try { this.ffmpegProc?.stdin?.end(); } catch { }
+      };
+      flushAndClose();
       setTimeout(() => {
         try { this.ffmpegProc?.kill("SIGKILL"); } catch { }
         resolve();
@@ -643,7 +670,7 @@ export class Session {
 
       // Start CDP screencast recording for Electron pages
       if (this.record) {
-        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.mkv`);
       }
     } else {
       const ctxOpts: {
@@ -1750,7 +1777,7 @@ export class Session {
               execFileSync(this.ffmpeg, [
                 "-y", "-i", rawPaths[0],
                 "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                ...h264EncoderArgs(),
                 "-pix_fmt", "yuv420p", "-movflags", "+faststart",
                 videoPath,
               ], { stdio: "pipe" });

@@ -291,7 +291,15 @@ export const CURSOR_OVERLAY_SCRIPT = `
       el.style.transform = 'translate(' + (x - 2) + 'px,' + (y - 2) + 'px)';
     }
     var trail = window.__b2v_laserTrails[id];
-    if (trail) trail.points.push({ x: x, y: y, t: performance.now() });
+    if (trail) {
+      var pts = trail.points;
+      if (pts.length > 0) {
+        var lp = pts[pts.length - 1];
+        var dx = x - lp.x; var dy = y - lp.y;
+        if (dx * dx + dy * dy < (trail._minDistSq || 9)) return;
+      }
+      pts.push({ x: x, y: y, t: performance.now() });
+    }
   };
 
   // Pre-register a custom color for an actor ID (call before first moveCursor)
@@ -362,7 +370,8 @@ export const CURSOR_OVERLAY_SCRIPT = `
     var ctx = canvas.getContext('2d');
     var trail = { points: [], canvas: canvas, ctx: ctx, raf: 0 };
     window.__b2v_laserTrails[id] = trail;
-    var TRAIL_MS = 400;
+    var TRAIL_MS = 250;
+    var MIN_DIST_SQ = 9;
     function draw() {
       var now = performance.now();
       var w = canvas.width; var h = canvas.height;
@@ -375,35 +384,29 @@ export const CURSOR_OVERLAY_SCRIPT = `
       while (trail.points.length > 0 && now - trail.points[0].t > TRAIL_MS) trail.points.shift();
       var pts = trail.points;
       if (pts.length >= 2) {
-        for (var i = 1; i < pts.length; i++) {
-          var prev = pts[i - 1];
-          var cur = pts[i];
-          var ageStart = (now - prev.t) / TRAIL_MS;
-          var ageEnd = (now - cur.t) / TRAIL_MS;
-          var alpha = 0.85 * (1 - (ageStart + ageEnd) / 2);
-          var lw = 6 * (1 - (ageStart + ageEnd) / 2 * 0.5);
-          if (alpha <= 0 || lw <= 0) continue;
+        var last = pts[pts.length - 1];
+        var avgAge = (now - pts[0].t + now - last.t) / 2 / TRAIL_MS;
+        var alpha = 0.8 * (1 - avgAge);
+        if (alpha > 0) {
           ctx.beginPath();
-          ctx.moveTo(prev.x, prev.y);
-          ctx.lineTo(cur.x, cur.y);
+          ctx.moveTo(pts[0].x, pts[0].y);
+          for (var i = 1; i < pts.length; i++) {
+            ctx.lineTo(pts[i].x, pts[i].y);
+          }
           ctx.strokeStyle = 'rgba(239, 68, 68, ' + alpha + ')';
-          ctx.lineWidth = lw;
+          ctx.lineWidth = 4;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
+          ctx.shadowColor = 'rgba(239, 68, 68, 0.4)';
+          ctx.shadowBlur = 8;
           ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(prev.x, prev.y);
-          ctx.lineTo(cur.x, cur.y);
-          ctx.strokeStyle = 'rgba(239, 68, 68, ' + (alpha * 0.25) + ')';
-          ctx.lineWidth = lw + 6;
-          ctx.lineCap = 'round';
-          ctx.lineJoin = 'round';
-          ctx.stroke();
+          ctx.shadowBlur = 0;
         }
       }
       trail.raf = requestAnimationFrame(draw);
     }
     trail.raf = requestAnimationFrame(draw);
+    trail._minDistSq = MIN_DIST_SQ;
   };
 
   window.__b2v_laserOff = function(actorId) {
