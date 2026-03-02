@@ -44,11 +44,10 @@ Delay values are configurable per-session via `SessionOptions.delays`.
 Recording is configured via `SessionOptions.record`:
 
 - `true` (default in human mode)
-  - **Playwright path** (headless/owned browser): uses `recordVideo` context option to capture raw WebM per pane.
-  - **CDP path** (Electron/Studio Player): uses `CdpScreencastRecorder` — CDP `Page.startScreencast` sends JPEG frames into ffmpeg with `-c:v copy` (lossless MJPEG passthrough to MKV). This means near-zero CPU during recording so frames are never dropped due to encoding backpressure. The MKV is re-encoded to H.264 MP4 during the composition step. A frame queue with backpressure handling ensures the ffmpeg pipe never blocks the CDP ack loop.
-  - Composes multi-pane video using ffmpeg (`hstack`/`xstack`).
-  - On **macOS**: composition/re-encode uses hardware-accelerated `h264_videotoolbox` (Apple VideoToolbox GPU encoder).
-  - On **other platforms**: uses `libx264` software encoder with `veryfast` preset.
+  - All paths use `CdpScreencastRecorder` — CDP `Page.startScreencast` sends JPEG frames at the compositor's native rate (~30fps). Frames are queued with backpressure handling so the CDP ack loop is never blocked.
+  - On **macOS**: real-time encoding uses hardware-accelerated `h264_videotoolbox` (Apple VideoToolbox GPU encoder).
+  - On **other platforms**: uses `libx264` software encoder with `ultrafast` preset.
+  - Composes multi-pane video using ffmpeg (`hstack`/`xstack`), upsampled to constant 60fps CFR.
   - Output: `run.mp4` (`yuv420p`, `+faststart`).
 - `false`
   - No video

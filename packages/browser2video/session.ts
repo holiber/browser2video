@@ -157,10 +157,11 @@ const TERMINAL_PAGE_HTML = `<!DOCTYPE html>
 // ---------------------------------------------------------------------------
 
 /**
- * Records the CDP page screencast to a raw MKV file via ffmpeg.
- * Uses `-c:v copy` (lossless JPEG passthrough) during recording so there
- * is virtually zero CPU overhead — frames cannot be lost due to slow
- * encoding.  The compositor re-encodes to H.264 MP4 afterwards.
+ * Records the CDP page screencast to an H.264 MP4 file via ffmpeg at 30fps.
+ * CDP `Page.startScreencast` sends JPEG frames at the compositor's native
+ * rate.  On macOS, uses hardware-accelerated h264_videotoolbox for encoding.
+ * Frames are queued with backpressure handling so the CDP ack loop is never
+ * blocked, preventing frame loss.
  */
 class CdpScreencastRecorder {
   private ffmpegProc: ChildProcess | null = null;
@@ -186,19 +187,25 @@ class CdpScreencastRecorder {
   }
 
   async start(): Promise<void> {
+    const encoderArgs = process.platform === "darwin"
+      ? ["-c:v", "h264_videotoolbox", "-b:v", "4M"]
+      : ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23"];
+
     this.ffmpegProc = spawn(this.ffmpeg, [
       "-y",
       "-f", "image2pipe",
       "-vcodec", "mjpeg",
       "-framerate", "30",
       "-i", "pipe:0",
-      "-c:v", "copy",
-      "-f", "matroska",
+      ...encoderArgs,
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart",
       this.outputPath,
     ], { stdio: ["pipe", "pipe", "pipe"] });
 
     let lastStderr = "";
     this.ffmpegProc.stderr?.on("data", (d: Buffer) => { lastStderr = d.toString().trim(); });
+    this.ffmpegProc.stdin?.on("error", () => { });
     this.ffmpegProc.on("error", (e) => console.error(`[cdp-recorder] ffmpeg error:`, e.message));
     this.ffmpegProc.on("close", (code) => {
       if (code !== 0 && this.frameCount > 0) {
@@ -232,7 +239,7 @@ class CdpScreencastRecorder {
     if (this.draining || !this.ffmpegProc?.stdin) return;
     this.draining = true;
     while (this.frameQueue.length > 0) {
-      const buf = this.frameQueue[0];
+      const buf = this.frameQueue.shift()!;
       let ok: boolean;
       try { ok = this.ffmpegProc.stdin.write(buf) ?? true; } catch { ok = false; }
       if (!ok) {
@@ -242,7 +249,6 @@ class CdpScreencastRecorder {
         });
         return;
       }
-      this.frameQueue.shift();
     }
     this.draining = false;
   }
@@ -668,27 +674,15 @@ export class Session {
         await page.addInitScript(FAST_MODE_INIT_SCRIPT);
       }
 
-      // Start CDP screencast recording for Electron pages
       if (this.record) {
-        rawVideoPath = path.join(this.artifactDir, `${id}.raw.mkv`);
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.mp4`);
       }
     } else {
-      const ctxOpts: {
-        viewport: { width: number; height: number };
-        recordVideo?: { dir: string; size: { width: number; height: number } };
-      } = {
-        viewport: { width: vpW, height: vpH },
-      };
-
       if (this.record) {
-        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
-        ctxOpts.recordVideo = {
-          dir: path.dirname(rawVideoPath),
-          size: { width: vpW, height: vpH },
-        };
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.mp4`);
       }
 
-      context = await this.browser.newContext(ctxOpts);
+      context = await this.browser.newContext({ viewport: { width: vpW, height: vpH } });
       page = await context.newPage();
 
       // Set dark background on the blank page immediately to avoid white flash in recordings
@@ -748,8 +742,7 @@ export class Session {
     this.panes.set(id, pane);
     this.paneOrder.push(id);
 
-    // Start CDP screencast recorder for Electron pages (Playwright's recordVideo is unavailable)
-    if (this.record && rawVideoPath && this._cdpEndpoint) {
+    if (this.record && rawVideoPath) {
       const recorder = new CdpScreencastRecorder(page, rawVideoPath, this.ffmpeg, vpW, vpH);
       await recorder.start();
       pane.cdpRecorder = recorder;
@@ -806,22 +799,11 @@ export class Session {
         await page.setViewportSize({ width: vpW, height: vpH });
       } catch { /* best-effort */ }
     } else {
-      const ctxOpts: {
-        viewport: { width: number; height: number };
-        recordVideo?: { dir: string; size: { width: number; height: number } };
-      } = {
-        viewport: { width: vpW, height: vpH },
-      };
-
       if (this.record) {
-        rawVideoPath = path.join(this.artifactDir, `${id}.raw.webm`);
-        ctxOpts.recordVideo = {
-          dir: path.dirname(rawVideoPath),
-          size: { width: vpW, height: vpH },
-        };
+        rawVideoPath = path.join(this.artifactDir, `${id}.raw.mp4`);
       }
 
-      context = await this.browser.newContext(ctxOpts);
+      context = await this.browser.newContext({ viewport: { width: vpW, height: vpH } });
       page = await context.newPage();
     }
 
@@ -892,6 +874,12 @@ export class Session {
     };
     this.panes.set(id, pane);
     this.paneOrder.push(id);
+
+    if (this.record && rawVideoPath) {
+      const recorder = new CdpScreencastRecorder(page, rawVideoPath, this.ffmpeg, vpW, vpH);
+      await recorder.start();
+      pane.cdpRecorder = recorder;
+    }
 
     return { terminal: termHandle, page };
   }
@@ -1704,17 +1692,11 @@ export class Session {
       }
     }
 
-    // Close pages to flush screencast recordings (skip for CDP-connected
-    // sessions — the shared Electron page must stay alive between scenarios).
-    if (this.record && this._ownsBrowser) {
+    // Close pages (skip for CDP-connected sessions — the shared Electron
+    // page must stay alive between scenarios).
+    if (this._ownsBrowser) {
       for (const pane of this.panes.values()) {
-        try {
-          await pane.page.close();
-          const video = pane.page.video();
-          if (video && pane.rawVideoPath) await video.saveAs(pane.rawVideoPath);
-        } catch (e) {
-          console.error(`  Error saving video for ${pane.label}:`, (e as Error).message);
-        }
+        try { await pane.page.close(); } catch { /* ignore */ }
       }
     }
 
